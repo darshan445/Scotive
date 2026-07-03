@@ -7,6 +7,7 @@ import LoginPage from "@/pages/Login";
 import RegisterPage from "@/pages/Register";
 import ForgotPasswordPage from "@/pages/ForgotPassword";
 import ResetPasswordPage from "@/pages/ResetPassword";
+import LandingPage from "@/pages/Landing";
 import DashboardPage from "@/pages/Dashboard";
 import ClientsPage from "@/pages/Clients";
 import ClientDetailPage from "@/pages/ClientDetail";
@@ -19,7 +20,7 @@ function App() {
             <BrowserRouter>
                 <AuthProvider>
                     <Routes>
-                        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                        <Route path="/" element={<GuestRoute><LandingPage /></GuestRoute>} />
                         <Route path="/login" element={<GuestRoute><LoginPage /></GuestRoute>} />
                         <Route path="/register" element={<GuestRoute><RegisterPage /></GuestRoute>} />
                         <Route path="/forgot-password" element={<GuestRoute><ForgotPasswordPage /></GuestRoute>} />
