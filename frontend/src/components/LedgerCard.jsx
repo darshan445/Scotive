@@ -4,6 +4,16 @@ import { ChevronRight, MoreHorizontal, PlusCircle, Quote, Send } from "lucide-re
 import { api, extractError } from "@/lib/api";
 import { toast } from "sonner";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { ChaseDialog } from "@/components/ChaseDialog";
 
 const STATUS_STYLES = {
@@ -79,9 +89,27 @@ function TimelineRow({ invoiceId }) {
     );
 }
 
+const CONFIRM_COPY = {
+    mark_paid: {
+        title: "Mark this invoice as paid?",
+        body: "This closes the balance and moves the row to your paid history. You can undo this for a few seconds after.",
+        confirmLabel: "Mark paid",
+        toast: "Marked paid",
+        destructive: false,
+    },
+    write_off: {
+        title: "Write off this invoice?",
+        body: "The client will no longer be chased and the amount stops counting toward what you're owed. You can undo this for a few seconds after.",
+        confirmLabel: "Write off",
+        toast: "Written off",
+        destructive: true,
+    },
+};
+
 export function LedgerCard({ ledger, onChanged }) {
     const [expanded, setExpanded] = useState(null);
     const [chaseInvoice, setChaseInvoice] = useState(null);
+    const [confirm, setConfirm] = useState(null); // { invoice, action }
     if (!ledger) return null;
     const { invoices = [], total_open = 0, client_count = 0 } = ledger;
 
@@ -91,6 +119,33 @@ export function LedgerCard({ ledger, onChanged }) {
             toast.success("Updated");
             onChanged?.();
         } catch (e) { toast.error(extractError(e)); }
+    }
+
+    async function runDestructive(invoice, action) {
+        const copy = CONFIRM_COPY[action];
+        try {
+            await api.post(`/invoices/${invoice._id}/action`, { action });
+            toast.success(copy.toast, {
+                duration: 5000,
+                action: {
+                    label: "Undo",
+                    onClick: async () => {
+                        try {
+                            await api.post(`/invoices/${invoice._id}/action`, { action: "undo" });
+                            toast.success("Reverted");
+                            onChanged?.();
+                        } catch (e) {
+                            toast.error(extractError(e));
+                        }
+                    },
+                },
+            });
+            onChanged?.();
+        } catch (e) {
+            toast.error(extractError(e));
+        } finally {
+            setConfirm(null);
+        }
     }
     return (
         <div className="space-y-6" data-testid="ledger-card">
@@ -173,12 +228,12 @@ export function LedgerCard({ ledger, onChanged }) {
                                                     </DropdownMenuTrigger>
                                                     <DropdownMenuContent align="end">
                                                         <DropdownMenuItem onClick={() => setChaseInvoice(inv)} data-testid="row-draft-chase"><Send className="w-3.5 h-3.5 mr-2" />Draft chase</DropdownMenuItem>
-                                                        <DropdownMenuItem onClick={() => act(inv._id, "mark_paid")} data-testid="row-mark-paid">Mark paid</DropdownMenuItem>
+                                                        <DropdownMenuItem onClick={() => setConfirm({ invoice: inv, action: "mark_paid" })} data-testid="row-mark-paid">Mark paid</DropdownMenuItem>
                                                         <DropdownMenuItem onClick={() => act(inv._id, "dispute")} data-testid="row-dispute">Mark disputed</DropdownMenuItem>
                                                         <DropdownMenuItem onClick={() => act(inv._id, inv.chasing_paused ? "resume" : "pause")} data-testid="row-pause">
                                                             {inv.chasing_paused ? "Resume chasing" : "Pause chasing"}
                                                         </DropdownMenuItem>
-                                                        <DropdownMenuItem onClick={() => act(inv._id, "write_off")} className="text-red-700" data-testid="row-write-off">Write off</DropdownMenuItem>
+                                                        <DropdownMenuItem onClick={() => setConfirm({ invoice: inv, action: "write_off" })} className="text-red-700" data-testid="row-write-off">Write off</DropdownMenuItem>
                                                     </DropdownMenuContent>
                                                 </DropdownMenu>
                                             </td>
@@ -199,6 +254,46 @@ export function LedgerCard({ ledger, onChanged }) {
                 </div>
             )}
             <ChaseDialog invoice={chaseInvoice} open={!!chaseInvoice} onOpenChange={(o) => !o && setChaseInvoice(null)} onSent={() => { setChaseInvoice(null); onChanged?.(); }} />
+            <AlertDialog open={!!confirm} onOpenChange={(o) => !o && setConfirm(null)}>
+                <AlertDialogContent data-testid="confirm-action-dialog">
+                    {confirm ? (
+                        <>
+                            <AlertDialogHeader>
+                                <AlertDialogTitle>{CONFIRM_COPY[confirm.action].title}</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                    <span className="block">{CONFIRM_COPY[confirm.action].body}</span>
+                                    <span className="mt-3 block rounded-md border border-border bg-muted/40 px-3 py-2 text-foreground/90 text-sm">
+                                        <span className="font-medium">
+                                            {confirm.invoice.counterparty_name || confirm.invoice.counterparty_email}
+                                        </span>
+                                        <span className="text-muted-foreground"> · </span>
+                                        <span className="font-mono">
+                                            {formatMoney(
+                                                confirm.action === "mark_paid"
+                                                    ? (confirm.invoice.balance_remaining ?? confirm.invoice.amount)
+                                                    : confirm.invoice.amount,
+                                                confirm.invoice.currency || "USD",
+                                            )}
+                                        </span>
+                                        {confirm.invoice.invoice_ref ? (
+                                            <span className="text-muted-foreground"> · {confirm.invoice.invoice_ref}</span>
+                                        ) : null}
+                                    </span>
+                                </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                                <AlertDialogCancel data-testid="confirm-cancel">Cancel</AlertDialogCancel>
+                                <AlertDialogAction
+                                    onClick={() => runDestructive(confirm.invoice, confirm.action)}
+                                    className={CONFIRM_COPY[confirm.action].destructive ? "bg-red-600 hover:bg-red-700 focus:ring-red-600" : ""}
+                                    data-testid="confirm-action">
+                                    {CONFIRM_COPY[confirm.action].confirmLabel}
+                                </AlertDialogAction>
+                            </AlertDialogFooter>
+                        </>
+                    ) : null}
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 }
