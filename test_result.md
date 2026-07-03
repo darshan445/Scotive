@@ -101,3 +101,118 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+
+user_problem_statement: |
+  User reported: expanding a `paid` invoice row on the ledger shows
+  "Something went wrong. Please try again." while `overdue` rows expand fine.
+  The client detail page for the same invoices renders correctly.
+
+backend:
+  - task: "GET /api/invoices/:id/timeline JSON-serializes ObjectId in invoice_events.meta"
+    implemented: true
+    working: true
+    file: "/app/backend/scan_router.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Root cause: `receipt_matched` (and `receipt_matched_manual`) events
+          are inserted into `invoice_events` with a `meta` dict that carries
+          `receipt_id` as a raw BSON `ObjectId`. The timeline endpoint used to
+          return `meta` as-is, which crashed FastAPI's default JSON encoder
+          → HTTP 500 → frontend showed generic "Something went wrong."
+          Overdue invoices have no `receipt_matched` history so their timeline
+          fetch worked.
+          Fix: added a recursive `_json_safe(value)` helper in scan_router.py
+          that walks nested dicts/lists and converts ObjectId→str and
+          datetime→isoformat. Applied to:
+            - meta on each `invoice_events` entry returned in the timeline
+            - `receipt_id` added on each receipt event
+          Reproduced against the affected user's actual paid Vultr invoice
+          (id `6a474ca1b87066da797a6a15`); after the fix the payload
+          serializes to clean JSON. Awaiting testing_agent confirmation via
+          real HTTP round-trip.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ VERIFIED: All three test scenarios passed via real HTTP calls to GET /api/invoices/:id/timeline.
+          
+          Test 1 (Critical - ObjectId crash case): Created paid invoice with receipt_matched 
+          event containing BSON ObjectId in meta.receipt_id. Endpoint returned HTTP 200 with 
+          properly serialized JSON. Verified meta.receipt_id is a string (not dict/BSON object).
+          
+          Test 2 (Regression check): Created overdue invoice with no receipt_matched events. 
+          Endpoint returned HTTP 200 with origin event. No regression detected.
+          
+          Test 3 (Edge case): Created paid invoice with ObjectId in other meta keys 
+          (chase_draft_id). Endpoint returned HTTP 200 with all ObjectIds properly serialized 
+          to strings.
+          
+          The _json_safe() helper in scan_router.py (lines 87-103) correctly handles recursive 
+          conversion of ObjectId→str and datetime→isoformat throughout nested dicts/lists.
+          
+          Test execution: Authenticated as admin@scotive.com, seeded test data with real BSON 
+          ObjectIds in invoice_events.meta, verified HTTP responses, cleaned up all test data.
+          
+          Bug fix confirmed working. The reporter's paid invoices (Vultr, Thakor) should now 
+          expand correctly in the ledger UI without "Something went wrong" errors.
+
+test_credentials:
+  - Admin (empty ledger, exists but not the reporter):
+      email: admin@scotive.com
+      password: Admin@Scotive1
+  - Reporter's account (has the paid Vultr invoice with the bug):
+      email: darsh@getscotive.com
+      password_known: false   # main-agent does NOT know this user's password.
+      user_id: 6a474bdeb87066da797a6a10
+      paid_invoice_id: 6a474ca1b87066da797a6a15  # Vultr, was failing
+      other_paid_invoice_id: 6a474ca1b87066da797a6a1f  # Thakor, also failing
+
+test_plan:
+  current_focus:
+    - "GET /api/invoices/:id/timeline JSON-serializes ObjectId in invoice_events.meta"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "stuck_first"
+
+agent_communication:
+  - agent: "main"
+    message: |
+      Please test the `GET /api/invoices/:id/timeline` endpoint for the two
+      specific invoice ids listed under `test_credentials.Reporter's account`:
+        - 6a474ca1b87066da797a6a15 (Vultr, paid)
+        - 6a474ca1b87066da797a6a1f (Thakor, paid)
+      Since I don't have the reporter's login password, please authenticate
+      as `admin@scotive.com` / `Admin@Scotive1` and CURL the endpoint —
+      it will 404 for that admin (not their invoice), which is fine. What we
+      actually need is a repro on a paid invoice belonging to the authed
+      user, so please:
+        1. As admin, seed a paid invoice with a `receipt_matched` event whose
+           `meta.receipt_id` is a real BSON ObjectId, then hit the timeline
+           endpoint. Before the fix this returned 500 due to ObjectId not
+           being JSON-serializable. After the fix it must return 200 with a
+           JSON body containing `events[*].meta.receipt_id` as a string.
+        2. Confirm the response contains at least one event with
+           `kind == "receipt_matched"` and that its `meta.receipt_id` is a
+           string (not a dict/object).
+        3. Also seed & test an `overdue` invoice with NO receipt_matched
+           events to confirm we didn't break the working case (should still
+           return 200).
+      Please clean up any seeded rows on completion. Do NOT test the
+      reporter's real data — read-only inspection is fine but no mutations.
+  - agent: "testing"
+    message: |
+      ✅ Bug fix verified and working correctly.
+      
+      Executed comprehensive end-to-end HTTP tests covering all three scenarios:
+      1. ✅ Paid invoice with receipt_matched event (meta.receipt_id as BSON ObjectId) - HTTP 200, properly serialized
+      2. ✅ Overdue invoice with no receipt_matched events - HTTP 200, no regression
+      3. ✅ Edge case with ObjectId in other meta keys - HTTP 200, all ObjectIds serialized
+      
+      All test data seeded with real BSON ObjectIds and cleaned up after testing.
+      The _json_safe() helper correctly handles recursive ObjectId→str conversion.
+      
+      The reporter's paid invoices should now expand correctly in the ledger UI.

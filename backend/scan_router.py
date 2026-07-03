@@ -73,11 +73,34 @@ def _serialize(doc: dict) -> dict:
             out[k] = str(v)
         elif isinstance(v, datetime):
             out[k] = v.isoformat()
+        elif isinstance(v, dict):
+            out[k] = _json_safe(v)
+        elif isinstance(v, list):
+            out[k] = [_json_safe(item) if isinstance(item, dict) else (str(item) if isinstance(item, ObjectId) else item) for item in v]
         else:
             out[k] = v
     if "_id" in out and not isinstance(out["_id"], str):
         out["_id"] = str(out["_id"])
     return out
+
+
+def _json_safe(value):
+    """Recursively convert ObjectId / datetime instances anywhere in a nested
+    dict or list so FastAPI's default JSON encoder never chokes.
+
+    Used for embedded `meta` fields on invoice_events (e.g. `receipt_id` is an
+    ObjectId), which previously bubbled up as a 500 when the timeline endpoint
+    tried to return a `receipt_matched` event.
+    """
+    if isinstance(value, ObjectId):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    return value
 
 
 def _parse_date(v):
@@ -383,13 +406,16 @@ def build_router(db, get_current_user):
                 "thread_id": rc.get("source_thread_id"),
                 "amount": rc.get("applied_amount") or rc.get("amount"),
                 "payer_name": rc.get("payer_name"),
+                "receipt_id": str(rc.get("_id")) if rc.get("_id") else None,
             })
-        # Recorded invoice_events (mark_paid, receipt_matched, etc.)
+        # Recorded invoice_events (mark_paid, receipt_matched, etc.). `meta`
+        # can contain nested ObjectIds (e.g. matched receipt_id) which must be
+        # normalized before FastAPI's default encoder trips on them.
         async for ev in db.invoice_events.find({"user_id": user["_id"], "invoice_id": inv["_id"]}):
             events.append({
                 "kind": ev.get("action"),
                 "date": ev.get("at"),
-                "meta": ev.get("meta") or {},
+                "meta": _json_safe(ev.get("meta") or {}),
             })
         events.sort(key=lambda e: str(e.get("date") or ""))
         return {"invoice": _serialize(inv), "events": events}
