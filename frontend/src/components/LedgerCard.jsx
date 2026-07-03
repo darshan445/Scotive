@@ -1,4 +1,7 @@
-import { PlusCircle } from "lucide-react";
+import { useEffect, Fragment, useState } from "react";
+import { Link } from "react-router-dom";
+import { ChevronRight, PlusCircle, Quote } from "lucide-react";
+import { api, extractError } from "@/lib/api";
 
 const STATUS_STYLES = {
     invoiced: "bg-gray-100 text-gray-700 border-gray-200",
@@ -14,45 +17,73 @@ const STATUS_STYLES = {
 
 function StatusPill({ status }) {
     const cls = STATUS_STYLES[status] || STATUS_STYLES.invoiced;
-    const label = (status || "invoiced").replace(/_/g, " ");
     return (
-        <span
-            className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border ${cls} capitalize`}
-            data-testid="invoice-status-pill"
-        >
-            {label}
+        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border ${cls} capitalize`} data-testid="invoice-status-pill">
+            {(status || "invoiced").replace(/_/g, " ")}
         </span>
     );
 }
 
-function formatMoney(n, currency = "USD") {
+export function formatMoney(n, currency = "USD") {
     if (n == null) return "—";
     try {
         return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(Number(n));
-    } catch {
-        return `$${Number(n).toFixed(2)}`;
-    }
+    } catch { return `$${Number(n).toFixed(2)}`; }
 }
 
-function formatDate(iso) {
+export function formatDate(iso) {
     if (!iso) return "—";
-    try {
-        return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-    } catch {
-        return iso;
-    }
+    try { return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }); } catch { return iso; }
+}
+
+function TimelineRow({ invoiceId }) {
+    const [data, setData] = useState(null);
+    const [err, setErr] = useState("");
+    useEffect(() => {
+        let alive = true;
+        api.get(`/invoices/${invoiceId}/timeline`)
+            .then(({ data }) => { if (alive) setData(data); })
+            .catch((e) => { if (alive) setErr(extractError(e)); });
+        return () => { alive = false; };
+    }, [invoiceId]);
+    if (err) return <div className="text-sm text-red-700">{err}</div>;
+    if (!data) return <div className="text-sm text-muted-foreground">Loading timeline…</div>;
+    return (
+        <div className="space-y-3" data-testid="invoice-timeline">
+            {data.events.map((ev, i) => (
+                <div key={i} className="flex gap-3">
+                    <div className="w-2 h-2 rounded-full bg-foreground mt-1.5 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                        <div className="flex flex-wrap items-baseline gap-2">
+                            <span className="text-sm font-medium capitalize">{(ev.kind || "event").replace(/_/g, " ")}</span>
+                            <span className="text-[11px] font-mono text-muted-foreground">{formatDate(ev.date)}</span>
+                        </div>
+                        {ev.quote ? (
+                            <div className="mt-1 rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-foreground italic flex gap-2">
+                                <Quote className="w-3.5 h-3.5 mt-1 text-muted-foreground flex-shrink-0" />
+                                <span>&ldquo;{ev.quote}&rdquo;</span>
+                            </div>
+                        ) : null}
+                        {ev.subject ? (
+                            <div className="mt-1 text-[11px] font-mono text-muted-foreground truncate">
+                                {ev.subject} · from {ev.from}
+                            </div>
+                        ) : null}
+                    </div>
+                </div>
+            ))}
+        </div>
+    );
 }
 
 export function LedgerCard({ ledger }) {
+    const [expanded, setExpanded] = useState(null);
     if (!ledger) return null;
     const { invoices = [], total_open = 0, client_count = 0 } = ledger;
-
     return (
         <div className="space-y-6" data-testid="ledger-card">
             <div className="rounded-2xl border border-border bg-card p-6 md:p-8">
-                <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">
-                    You&apos;re owed
-                </div>
+                <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">You&apos;re owed</div>
                 <div className="mt-1 flex items-baseline gap-4 flex-wrap">
                     <span className="font-heading font-black text-4xl md:text-5xl tracking-tight tabular-nums" data-testid="ledger-total">
                         {formatMoney(total_open)}
@@ -66,12 +97,8 @@ export function LedgerCard({ ledger }) {
             {invoices.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-border bg-card/40 p-10 text-center" data-testid="ledger-empty">
                     <h3 className="font-heading font-semibold text-lg">No unpaid invoices found in the last 12 months.</h3>
-                    <p className="mt-2 text-sm text-muted-foreground max-w-md mx-auto">
-                        Widen the scan window or add a payment manually once we ship that action.
-                    </p>
-                    <button className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-md border border-border bg-card text-sm font-medium hover:border-foreground/40" data-testid="track-manual-button" disabled>
-                        <PlusCircle className="w-4 h-4" />
-                        Track a payment manually
+                    <button className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-md border border-border bg-card text-sm font-medium" data-testid="track-manual-button" disabled>
+                        <PlusCircle className="w-4 h-4" /> Track a payment manually
                     </button>
                 </div>
             ) : (
@@ -79,6 +106,7 @@ export function LedgerCard({ ledger }) {
                     <table className="w-full">
                         <thead>
                             <tr className="border-b border-border bg-muted/40 text-left">
+                                <th className="px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider w-6" />
                                 <th className="px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Client</th>
                                 <th className="px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Invoice</th>
                                 <th className="px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider text-right">Amount</th>
@@ -87,37 +115,51 @@ export function LedgerCard({ ledger }) {
                             </tr>
                         </thead>
                         <tbody>
-                            {invoices.map((inv) => (
-                                <tr key={inv._id} className="border-b border-border/60 hover:bg-muted/30 transition-colors" data-testid="ledger-row">
-                                    <td className="px-4 py-3 align-top">
-                                        <div className="text-sm font-medium truncate max-w-[220px]">
-                                            {inv.counterparty_name || inv.counterparty_email || "Unknown"}
-                                        </div>
-                                        {inv.counterparty_name && inv.counterparty_email ? (
-                                            <div className="text-[11px] font-mono text-muted-foreground truncate max-w-[220px]">{inv.counterparty_email}</div>
+                            {invoices.map((inv) => {
+                                const isOpen = expanded === inv._id;
+                                return (
+                                    <Fragment key={inv._id}>
+                                        <tr
+                                            className="border-b border-border/60 hover:bg-muted/30 transition-colors cursor-pointer"
+                                            onClick={() => setExpanded(isOpen ? null : inv._id)}
+                                            data-testid="ledger-row">
+                                            <td className="px-3 py-3 align-top">
+                                                <ChevronRight className={`w-4 h-4 text-muted-foreground transition-transform ${isOpen ? "rotate-90" : ""}`} />
+                                            </td>
+                                            <td className="px-4 py-3 align-top">
+                                                <Link to={`/clients/${encodeURIComponent(inv.counterparty_email || "")}`}
+                                                      onClick={(e) => e.stopPropagation()}
+                                                      className="text-sm font-medium hover:underline"
+                                                      data-testid="ledger-client-link">
+                                                    {inv.counterparty_name || inv.counterparty_email || "Unknown"}
+                                                </Link>
+                                                {inv.counterparty_name && inv.counterparty_email ? (
+                                                    <div className="text-[11px] font-mono text-muted-foreground truncate max-w-[220px]">{inv.counterparty_email}</div>
+                                                ) : null}
+                                            </td>
+                                            <td className="px-4 py-3 align-top">
+                                                <div className="font-mono text-xs text-foreground">{inv.invoice_ref || "—"}</div>
+                                                {inv.source_subject ? <div className="text-[11px] text-muted-foreground truncate max-w-[240px]">{inv.source_subject}</div> : null}
+                                            </td>
+                                            <td className="px-4 py-3 align-top text-right font-mono tabular-nums text-sm">
+                                                {formatMoney(inv.amount, inv.currency || "USD")}
+                                            </td>
+                                            <td className="px-4 py-3 align-top"><StatusPill status={inv.status} /></td>
+                                            <td className="px-4 py-3 align-top text-sm text-muted-foreground">
+                                                {inv.promise_date ? <span>Promised {formatDate(inv.promise_date)}</span> : <span>{formatDate(inv.due_date)}</span>}
+                                            </td>
+                                        </tr>
+                                        {isOpen ? (
+                                            <tr className="bg-muted/20">
+                                                <td />
+                                                <td colSpan={5} className="px-4 py-4">
+                                                    <TimelineRow invoiceId={inv._id} />
+                                                </td>
+                                            </tr>
                                         ) : null}
-                                    </td>
-                                    <td className="px-4 py-3 align-top">
-                                        <div className="font-mono text-xs text-foreground">{inv.invoice_ref || "—"}</div>
-                                        {inv.source_subject ? (
-                                            <div className="text-[11px] text-muted-foreground truncate max-w-[240px]">{inv.source_subject}</div>
-                                        ) : null}
-                                    </td>
-                                    <td className="px-4 py-3 align-top text-right font-mono tabular-nums text-sm">
-                                        {formatMoney(inv.amount, inv.currency || "USD")}
-                                    </td>
-                                    <td className="px-4 py-3 align-top">
-                                        <StatusPill status={inv.status} />
-                                    </td>
-                                    <td className="px-4 py-3 align-top text-sm text-muted-foreground">
-                                        {inv.promise_date ? (
-                                            <span>Promised {formatDate(inv.promise_date)}</span>
-                                        ) : (
-                                            <span>{formatDate(inv.due_date)}</span>
-                                        )}
-                                    </td>
-                                </tr>
-                            ))}
+                                    </Fragment>
+                                );
+                            })}
                         </tbody>
                     </table>
                 </div>

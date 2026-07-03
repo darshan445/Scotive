@@ -251,25 +251,23 @@ async def run_historical_scan(db, user_id, job_id, months: int = 12):
     await _update_job(db, job_id, {"phase": "building", "counts": counts})
 
     # PHASE 5: build invoices from money-related results
+    CONFIDENCE_THRESHOLD = 0.75
     now_iso = datetime.now(timezone.utc).isoformat()
     invoices_created = 0
+    review_created = 0
     for msg, ext in results:
         if not ext.get("is_money_related"):
             continue
         kind = ext.get("kind") or "none"
-        # Consider invoice_sent + payment_promise as ledger-worthy open items.
-        # receipts/partial_payments are informational for now (Feature 6 hooks them).
         if kind not in ("invoice_sent", "payment_promise", "partial_payment"):
             continue
         amount = ext.get("amount")
         if amount in (None, 0):
             continue
         counterparty_email = (ext.get("counterparty_email") or _extract_email_addr(msg.get("from", ""))).lower()
-        # Skip if the "counterparty" is actually the user themselves
         conn = await db.gmail_connections.find_one({"user_id": user_id})
         my_email = (conn or {}).get("email", "").lower()
         if counterparty_email == my_email:
-            # invoice_sent: the counterparty is in the To: header
             to_addr = _extract_email_addr(msg.get("to", ""))
             counterparty_email = to_addr.lower()
 
@@ -279,7 +277,8 @@ async def run_historical_scan(db, user_id, job_id, months: int = 12):
         elif kind == "partial_payment":
             status = "partially_paid"
 
-        invoice_doc = {
+        confidence = float(ext.get("confidence") or 0)
+        base_doc = {
             "user_id": user_id,
             "counterparty_email": counterparty_email,
             "counterparty_name": ext.get("counterparty_name"),
@@ -293,17 +292,27 @@ async def run_historical_scan(db, user_id, job_id, months: int = 12):
             "source_message_id": msg["id"],
             "source_thread_id": msg.get("thread_id"),
             "source_subject": msg.get("subject"),
+            "source_from": msg.get("from"),
+            "source_date": msg.get("date"),
             "evidence_sentence": ext.get("evidence_sentence"),
-            "confidence": ext.get("confidence"),
+            "confidence": confidence,
             "created_at": now_iso,
         }
-        # De-dupe by source_message_id
+
+        if confidence < CONFIDENCE_THRESHOLD:
+            existing_r = await db.review_items.find_one({"user_id": user_id, "source_message_id": msg["id"]})
+            if not existing_r:
+                await db.review_items.insert_one({**base_doc, "review_status": "pending"})
+                review_created += 1
+            continue
+
         existing = await db.invoices.find_one({"user_id": user_id, "source_message_id": msg["id"]})
         if not existing:
-            await db.invoices.insert_one(invoice_doc)
+            await db.invoices.insert_one(base_doc)
             invoices_created += 1
 
     counts["invoices_created"] = invoices_created
+    counts["review_items"] = review_created
     await _update_job(db, job_id, {
         "status": "complete",
         "phase": "complete",

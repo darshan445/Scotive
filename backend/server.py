@@ -446,6 +446,10 @@ async def on_startup():
     await db.scan_jobs.create_index([("user_id", 1), ("started_at", -1)])
     await db.invoices.create_index([("user_id", 1), ("created_at", -1)])
     await db.invoices.create_index([("user_id", 1), ("source_message_id", 1)], unique=True)
+    await db.invoices.create_index([("user_id", 1), ("counterparty_email", 1)])
+    await db.review_items.create_index([("user_id", 1), ("source_message_id", 1)], unique=True)
+    await db.review_items.create_index([("user_id", 1), ("review_status", 1)])
+    await db.suppressed_senders.create_index([("user_id", 1), ("email", 1)], unique=True)
     await seed_admin()
 
 
