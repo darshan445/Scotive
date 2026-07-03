@@ -4,6 +4,7 @@ import { ChevronRight, MoreHorizontal, PlusCircle, Quote } from "lucide-react";
 import { api, extractError } from "@/lib/api";
 import { toast } from "sonner";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { ChaseDialog } from "@/components/ChaseDialog";
 
 const STATUS_STYLES = {
     invoiced: "bg-gray-100 text-gray-700 border-gray-200",
