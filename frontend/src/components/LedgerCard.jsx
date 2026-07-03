@@ -15,6 +15,7 @@ import {
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { ChaseDialog } from "@/components/ChaseDialog";
+import { ManualInvoiceDialog } from "@/components/ManualInvoiceDialog";
 
 const STATUS_STYLES = {
     invoiced: "bg-gray-100 text-gray-700 border-gray-200",
@@ -110,6 +111,7 @@ export function LedgerCard({ ledger, onChanged }) {
     const [expanded, setExpanded] = useState(null);
     const [chaseInvoice, setChaseInvoice] = useState(null);
     const [confirm, setConfirm] = useState(null); // { invoice, action }
+    const [manualOpen, setManualOpen] = useState(false);
     if (!ledger) return null;
     const { invoices = [], total_open = 0, client_count = 0 } = ledger;
 
@@ -150,21 +152,34 @@ export function LedgerCard({ ledger, onChanged }) {
     return (
         <div className="space-y-6" data-testid="ledger-card">
             <div className="rounded-2xl border border-border bg-card p-6 md:p-8">
-                <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">You&apos;re owed</div>
-                <div className="mt-1 flex items-baseline gap-4 flex-wrap">
-                    <span className="font-heading font-black text-4xl md:text-5xl tracking-tight tabular-nums" data-testid="ledger-total">
-                        {formatMoney(total_open)}
-                    </span>
-                    <span className="text-muted-foreground text-sm" data-testid="ledger-client-count">
-                        across {client_count} client{client_count === 1 ? "" : "s"}
-                    </span>
+                <div className="flex items-start justify-between gap-4 flex-wrap">
+                    <div>
+                        <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">You&apos;re owed</div>
+                        <div className="mt-1 flex items-baseline gap-4 flex-wrap">
+                            <span className="font-heading font-black text-4xl md:text-5xl tracking-tight tabular-nums" data-testid="ledger-total">
+                                {formatMoney(total_open)}
+                            </span>
+                            <span className="text-muted-foreground text-sm" data-testid="ledger-client-count">
+                                across {client_count} client{client_count === 1 ? "" : "s"}
+                            </span>
+                        </div>
+                    </div>
+                    <button
+                        onClick={() => setManualOpen(true)}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-3 py-1.5 text-sm font-medium hover:bg-muted transition-colors"
+                        data-testid="track-manual-button-header">
+                        <PlusCircle className="w-4 h-4" /> Track manually
+                    </button>
                 </div>
             </div>
 
             {invoices.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-border bg-card/40 p-10 text-center" data-testid="ledger-empty">
                     <h3 className="font-heading font-semibold text-lg">No unpaid invoices found in the last 12 months.</h3>
-                    <button className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-md border border-border bg-card text-sm font-medium" data-testid="track-manual-button" disabled>
+                    <button
+                        onClick={() => setManualOpen(true)}
+                        className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-md border border-border bg-card text-sm font-medium hover:bg-muted transition-colors"
+                        data-testid="track-manual-button">
                         <PlusCircle className="w-4 h-4" /> Track a payment manually
                     </button>
                 </div>
@@ -254,6 +269,11 @@ export function LedgerCard({ ledger, onChanged }) {
                 </div>
             )}
             <ChaseDialog invoice={chaseInvoice} open={!!chaseInvoice} onOpenChange={(o) => !o && setChaseInvoice(null)} onSent={() => { setChaseInvoice(null); onChanged?.(); }} />
+            <ManualInvoiceDialog
+                open={manualOpen}
+                onOpenChange={setManualOpen}
+                onCreated={() => onChanged?.()}
+            />
             <AlertDialog open={!!confirm} onOpenChange={(o) => !o && setConfirm(null)}>
                 <AlertDialogContent data-testid="confirm-action-dialog">
                     {confirm ? (

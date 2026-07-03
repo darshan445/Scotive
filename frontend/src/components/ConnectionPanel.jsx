@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, Loader2, Mail, Plug, RefreshCw } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Loader2, Mail, Plug } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { ConnectGmailButton } from "@/components/ConnectGmailButton";
@@ -110,9 +110,6 @@ export function ConnectionPanel({ status }) {
                     </div>
                 </div>
                 <div className="flex items-center gap-2">
-                    <Button size="sm" variant="outline" onClick={() => window.location.reload()} data-testid="refresh-gmail-button">
-                        <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Refresh
-                    </Button>
                     <Button size="sm" variant="ghost" onClick={handleDisconnect} disabled={busy} data-testid="disconnect-gmail-button">
                         Disconnect
                     </Button>

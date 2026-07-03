@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from scan_pipeline import run_historical_scan, reconcile_receipts, run_incremental_sync
 from escalation_scheduler import run_escalation_tick, generate_draft as _gen_escalation_draft
@@ -61,6 +61,17 @@ class ReceiptMatchInput(BaseModel):
 class ChaseDraftPatch(BaseModel):
     subject: str | None = None
     body: str | None = None
+
+
+class ManualInvoiceInput(BaseModel):
+    counterparty_email: str = Field(min_length=3, max_length=254)
+    counterparty_name: str | None = Field(default=None, max_length=200)
+    amount: float = Field(gt=0)
+    currency: str = Field(default="USD", max_length=8)
+    invoice_ref: str | None = Field(default=None, max_length=100)
+    due_date: str | None = Field(default=None, max_length=32)   # YYYY-MM-DD
+    promise_date: str | None = Field(default=None, max_length=32)
+    note: str | None = Field(default=None, max_length=500)
 
 
 def _serialize(doc: dict) -> dict:
@@ -792,6 +803,62 @@ def build_router(db, get_current_user):
                 "to": inv.get("counterparty_email"), "invoice_id": payload.invoice_id}
 
     # ---- Escalation ladder scheduler (Feature 9b) ------------------------
+    @router.post("/invoices/manual")
+    async def create_manual_invoice(payload: ManualInvoiceInput, user: dict = Depends(get_current_user)):
+        """Add an invoice by hand — for things the scan missed or off-Gmail contracts."""
+        cp_email = payload.counterparty_email.strip().lower()
+        if "@" not in cp_email:
+            raise HTTPException(status_code=400, detail="Client email must include an @.")
+        # Guardrail: can't invoice yourself
+        conn = await db.gmail_connections.find_one({"user_id": user["_id"]})
+        my_email = ((conn or {}).get("email") or "").lower()
+        if my_email and cp_email == my_email:
+            raise HTTPException(status_code=400, detail="You can't invoice your own connected Gmail address.")
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        today = datetime.now(timezone.utc).date()
+        status = "invoiced"
+        # If the due date is already past today, start it as overdue so it
+        # surfaces in the Today card immediately.
+        if payload.due_date:
+            try:
+                d = datetime.strptime(payload.due_date[:10], "%Y-%m-%d").date()
+                if d < today:
+                    status = "overdue"
+            except Exception:
+                pass
+        if payload.promise_date:
+            status = "promised"
+
+        doc = {
+            "user_id": user["_id"],
+            "counterparty_email": cp_email,
+            "counterparty_name": payload.counterparty_name or None,
+            "amount": float(payload.amount),
+            "balance_remaining": float(payload.amount),
+            "paid_amount": 0.0,
+            "currency": (payload.currency or "USD").upper(),
+            "invoice_ref": payload.invoice_ref or None,
+            "due_date": payload.due_date or None,
+            "promise_date": payload.promise_date or None,
+            "status": status,
+            "kind": "invoice_sent",
+            "source": "manual",              # tag so we know this didn't come from Gmail
+            "manual_note": payload.note or None,
+            "evidence_sentence": payload.note or "Manually added",
+            "confidence": 1.0,
+            "created_at": now_iso,
+        }
+        res = await db.invoices.insert_one(doc)
+        doc["_id"] = res.inserted_id
+        await db.invoice_events.insert_one({
+            "user_id": user["_id"], "invoice_id": res.inserted_id,
+            "action": "manual_add", "at": now_iso,
+            "meta": {"amount": float(payload.amount), "currency": doc["currency"],
+                     "counterparty_email": cp_email},
+        })
+        return {"ok": True, "invoice": _serialize(doc)}
+
     @router.post("/escalation/run")
     async def escalation_run(user: dict = Depends(get_current_user)):
         counts = await run_escalation_tick(db, user["_id"])

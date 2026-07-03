@@ -1,17 +1,22 @@
 """
-Backend test for payment direction guardrails.
-Tests _is_vendor, _extract_and_write, and _sender_domain functions directly.
+Backend test for POST /api/invoices/manual endpoint.
+Tests all 8 scenarios specified in the test plan.
 """
 import asyncio
 import os
 import sys
-from datetime import datetime, timezone
+import json
+from datetime import datetime, timezone, timedelta
 
 # Add backend to path
 sys.path.insert(0, '/app/backend')
 
+import httpx
 from motor.motor_asyncio import AsyncIOMotorClient
-from scan_pipeline import _is_vendor, _extract_and_write, _sender_domain
+from bson import ObjectId
+
+# Base URL - using localhost as specified in review request
+BASE_URL = "http://localhost:8001"
 
 # MongoDB connection
 MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
@@ -23,15 +28,40 @@ ADMIN_PASSWORD = "Admin@Scotive1"
 
 # Test results tracking
 test_results = {
-    "vendor_function_tests": [],
-    "scenario_a": None,
-    "scenario_b": None,
-    "scenario_c": None,
-    "scenario_d": None,
+    "test_1_happy_path": None,
+    "test_2_past_due": None,
+    "test_3_promise_date": None,
+    "test_4_self_invoice": None,
+    "test_5_bad_email": None,
+    "test_6_amount_zero": None,
+    "test_7_ledger_reflects": None,
+    "test_8_timeline": None,
 }
 
 
-async def setup_admin_connection(db, admin_uid):
+async def login_admin(client: httpx.AsyncClient):
+    """Login as admin and return access token."""
+    print(f"\n=== Logging in as {ADMIN_EMAIL} ===")
+    
+    response = await client.post(
+        f"{BASE_URL}/api/auth/login",
+        json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}
+    )
+    
+    if response.status_code != 200:
+        raise Exception(f"Login failed: {response.status_code} - {response.text}")
+    
+    data = response.json()
+    access_token = data.get("access_token")
+    
+    if not access_token:
+        raise Exception(f"No access_token in login response: {data}")
+    
+    print(f"✓ Login successful")
+    return access_token
+
+
+async def seed_gmail_connection(db, admin_uid):
     """Seed gmail_connection for admin user."""
     existing = await db.gmail_connections.find_one({"user_id": admin_uid})
     if not existing:
@@ -56,353 +86,455 @@ async def get_admin_user_id(db):
 
 
 async def cleanup_test_data(db, admin_uid):
-    """Remove all test data with source_message_id starting with 'guard-'."""
-    collections = ["invoices", "receipts", "review_items"]
-    total_deleted = 0
-    for coll_name in collections:
-        result = await db[coll_name].delete_many({
-            "user_id": admin_uid,
-            "source_message_id": {"$regex": "^guard-"}
-        })
-        if result.deleted_count > 0:
-            print(f"  Cleaned {result.deleted_count} docs from {coll_name}")
-            total_deleted += result.deleted_count
-    return total_deleted
+    """Remove all test data created during testing."""
+    print("\n=== Cleanup ===")
+    
+    # Delete manual invoices with testclient email
+    invoice_result = await db.invoices.delete_many({
+        "user_id": admin_uid,
+        "source": "manual",
+        "counterparty_email": {"$regex": "testclient"}
+    })
+    print(f"  Deleted {invoice_result.deleted_count} manual invoices")
+    
+    # Delete invoice_events for manual_add action
+    events_result = await db.invoice_events.delete_many({
+        "user_id": admin_uid,
+        "action": "manual_add"
+    })
+    print(f"  Deleted {events_result.deleted_count} manual_add events")
+    
+    # Remove seeded gmail_connection (optional - keep it for future tests)
+    # await db.gmail_connections.delete_one({"user_id": admin_uid, "email": ADMIN_EMAIL})
+    
+    return invoice_result.deleted_count + events_result.deleted_count
 
 
-def test_is_vendor():
-    """Test the _is_vendor function with various domains."""
-    print("\n=== Testing _is_vendor() function ===")
+async def test_1_happy_path(client: httpx.AsyncClient, db, admin_uid, token):
+    """Test 1: Happy path - valid invoice with future due date."""
+    print("\n=== Test 1: Happy path - valid invoice with future due date ===")
     
-    test_cases = [
-        ("cloudflare.com", True, "cloudflare.com is in VENDOR_DOMAINS"),
-        ("notify.cloudflare.com", True, "subdomain of cloudflare.com"),
-        ("anthropic.com", True, "anthropic.com is in VENDOR_DOMAINS"),
-        ("vultr.com", True, "vultr.com is in VENDOR_DOMAINS"),
-        ("stripe.com", False, "stripe.com is a processor, not in VENDOR_DOMAINS"),
-        ("acme.com", False, "acme.com is not a vendor"),
-        ("", False, "empty string should return False"),
-    ]
+    payload = {
+        "counterparty_email": "billing@testclient.com",
+        "counterparty_name": "Test Client",
+        "amount": 1250.50,
+        "currency": "USD",
+        "invoice_ref": "TST-1",
+        "due_date": "2027-01-15",
+        "note": "test"
+    }
     
-    all_passed = True
-    for domain, expected, description in test_cases:
-        result = _is_vendor(domain)
-        passed = result == expected
+    response = await client.post(
+        f"{BASE_URL}/api/invoices/manual",
+        json=payload,
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    
+    print(f"  Status code: {response.status_code}")
+    
+    if response.status_code != 200:
+        print(f"  ✗ FAILED: Expected 200, got {response.status_code}")
+        print(f"  Response: {response.text}")
+        test_results["test_1_happy_path"] = {
+            "passed": False,
+            "status_code": response.status_code,
+            "error": response.text
+        }
+        return False
+    
+    data = response.json()
+    print(f"  Response: {json.dumps(data, indent=2)}")
+    
+    # Verify response structure
+    invoice = data.get("invoice", {})
+    invoice_id = invoice.get("_id")
+    
+    checks = {
+        "has_invoice_id": invoice_id is not None,
+        "status_is_invoiced": invoice.get("status") == "invoiced",
+        "source_is_manual": invoice.get("source") == "manual",
+        "balance_remaining_correct": invoice.get("balance_remaining") == 1250.50,
+        "paid_amount_zero": invoice.get("paid_amount") == 0.0,
+    }
+    
+    all_passed = all(checks.values())
+    
+    for check, passed in checks.items():
         status = "✓" if passed else "✗"
-        print(f"  {status} _is_vendor('{domain}') = {result} (expected {expected}) - {description}")
-        test_results["vendor_function_tests"].append({
-            "domain": domain,
-            "expected": expected,
-            "actual": result,
-            "passed": passed,
-            "description": description
-        })
-        if not passed:
-            all_passed = False
+        print(f"  {status} {check}")
+    
+    # Store invoice_id for test 8
+    if invoice_id:
+        test_results["test_1_invoice_id"] = invoice_id
+    
+    status = "✓ PASSED" if all_passed else "✗ FAILED"
+    print(f"  {status}")
+    
+    test_results["test_1_happy_path"] = {
+        "passed": all_passed,
+        "status_code": response.status_code,
+        "invoice_id": invoice_id,
+        "checks": checks
+    }
     
     return all_passed
 
 
-async def test_scenario_a(db, admin_uid, now_iso):
-    """Scenario A: Vendor invoice should go to review_items, NOT invoices."""
-    print("\n=== Scenario A: Vendor invoice (Cloudflare) ===")
+async def test_2_past_due(client: httpx.AsyncClient, db, admin_uid, token):
+    """Test 2: Past-due date - status should be 'overdue'."""
+    print("\n=== Test 2: Past-due date - status should be 'overdue' ===")
     
-    msg = {
-        "id": "guard-1",
-        "from": "noreply@notify.cloudflare.com",
-        "to": ADMIN_EMAIL,
-        "subject": "Payment failed",
-        "thread_id": "t1",
-        "date": "2026-06-28"
-    }
+    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
     
-    ext = {
-        "is_money_related": True,
-        "kind": "invoice_sent",
-        "amount": 12.34,
+    payload = {
+        "counterparty_email": "billing@testclient.com",
+        "counterparty_name": "Test Client",
+        "amount": 1250.50,
         "currency": "USD",
-        "counterparty_email": "noreply@notify.cloudflare.com",
-        "counterparty_name": "Cloudflare",
-        "invoice_ref": "IN-69681681",
-        "due_date": "2026-06-28",
-        "confidence": 0.9,
-        "evidence_sentence": "Outstanding balance: $12.34"
+        "invoice_ref": "TST-2",
+        "due_date": yesterday,
+        "note": "test overdue"
     }
     
-    # Call _extract_and_write
-    result = await _extract_and_write(db, admin_uid, msg, ext, ADMIN_EMAIL, now_iso)
-    print(f"  Return value: {result}")
-    
-    # Check database state
-    invoice_count = await db.invoices.count_documents({
-        "user_id": admin_uid,
-        "source_message_id": "guard-1"
-    })
-    
-    review_count = await db.review_items.count_documents({
-        "user_id": admin_uid,
-        "source_message_id": "guard-1"
-    })
-    
-    review_doc = await db.review_items.find_one({
-        "user_id": admin_uid,
-        "source_message_id": "guard-1"
-    })
-    
-    review_reason = review_doc.get("review_reason") if review_doc else None
-    
-    print(f"  Invoices collection: {invoice_count} docs")
-    print(f"  Review_items collection: {review_count} docs")
-    print(f"  Review reason: {review_reason}")
-    
-    # Verify expectations
-    expected_return = (0, 0, 1)
-    passed = (
-        result == expected_return and
-        invoice_count == 0 and
-        review_count == 1 and
-        review_reason == "vendor_domain"
+    response = await client.post(
+        f"{BASE_URL}/api/invoices/manual",
+        json=payload,
+        headers={"Authorization": f"Bearer {token}"}
     )
     
-    status = "✓ PASSED" if passed else "✗ FAILED"
-    print(f"  {status}")
+    print(f"  Status code: {response.status_code}")
     
-    test_results["scenario_a"] = {
+    if response.status_code != 200:
+        print(f"  ✗ FAILED: Expected 200, got {response.status_code}")
+        print(f"  Response: {response.text}")
+        test_results["test_2_past_due"] = {
+            "passed": False,
+            "status_code": response.status_code,
+            "error": response.text
+        }
+        return False
+    
+    data = response.json()
+    invoice = data.get("invoice", {})
+    status = invoice.get("status")
+    
+    print(f"  Invoice status: {status}")
+    
+    passed = status == "overdue"
+    result_status = "✓ PASSED" if passed else "✗ FAILED"
+    print(f"  {result_status}")
+    
+    test_results["test_2_past_due"] = {
         "passed": passed,
-        "return_value": result,
-        "expected_return": expected_return,
-        "invoice_count": invoice_count,
-        "review_count": review_count,
-        "review_reason": review_reason
+        "status_code": response.status_code,
+        "invoice_status": status
     }
     
     return passed
 
 
-async def test_scenario_b(db, admin_uid, now_iso):
-    """Scenario B: Stripe receipt (not a vendor) should be inserted as receipt."""
-    print("\n=== Scenario B: Stripe receipt (processor, not vendor) ===")
+async def test_3_promise_date(client: httpx.AsyncClient, db, admin_uid, token):
+    """Test 3: Promise date set - status should be 'promised'."""
+    print("\n=== Test 3: Promise date set - status should be 'promised' ===")
     
-    msg = {
-        "id": "guard-2",
-        "from": "receipts@stripe.com",
-        "to": ADMIN_EMAIL,
-        "subject": "Anthropic charge",
-        "thread_id": "t2",
-        "date": "2026-06-22"
+    future_date = (datetime.now(timezone.utc) + timedelta(days=7)).strftime("%Y-%m-%d")
+    
+    payload = {
+        "counterparty_email": "billing@testclient.com",
+        "counterparty_name": "Test Client",
+        "amount": 1250.50,
+        "currency": "USD",
+        "invoice_ref": "TST-3",
+        "promise_date": future_date,
+        "note": "test promise"
     }
     
-    ext = {
-        "is_money_related": True,
-        "kind": "receipt",
-        "amount": 23.60,
-        "counterparty_name": "Anthropic, PBC",
-        "confidence": 0.9
-    }
-    
-    # Call _extract_and_write
-    result = await _extract_and_write(db, admin_uid, msg, ext, ADMIN_EMAIL, now_iso)
-    print(f"  Return value: {result}")
-    
-    # Check database state
-    receipt_count = await db.receipts.count_documents({
-        "user_id": admin_uid,
-        "source_message_id": "guard-2"
-    })
-    
-    invoice_count = await db.invoices.count_documents({
-        "user_id": admin_uid,
-        "source_message_id": "guard-2"
-    })
-    
-    review_count = await db.review_items.count_documents({
-        "user_id": admin_uid,
-        "source_message_id": "guard-2"
-    })
-    
-    print(f"  Receipts collection: {receipt_count} docs")
-    print(f"  Invoices collection: {invoice_count} docs")
-    print(f"  Review_items collection: {review_count} docs")
-    
-    # Verify expectations
-    expected_return = (0, 1, 0)
-    passed = (
-        result == expected_return and
-        receipt_count == 1 and
-        invoice_count == 0 and
-        review_count == 0
+    response = await client.post(
+        f"{BASE_URL}/api/invoices/manual",
+        json=payload,
+        headers={"Authorization": f"Bearer {token}"}
     )
     
-    status = "✓ PASSED" if passed else "✗ FAILED"
-    print(f"  {status}")
+    print(f"  Status code: {response.status_code}")
     
-    test_results["scenario_b"] = {
+    if response.status_code != 200:
+        print(f"  ✗ FAILED: Expected 200, got {response.status_code}")
+        print(f"  Response: {response.text}")
+        test_results["test_3_promise_date"] = {
+            "passed": False,
+            "status_code": response.status_code,
+            "error": response.text
+        }
+        return False
+    
+    data = response.json()
+    invoice = data.get("invoice", {})
+    status = invoice.get("status")
+    
+    print(f"  Invoice status: {status}")
+    
+    passed = status == "promised"
+    result_status = "✓ PASSED" if passed else "✗ FAILED"
+    print(f"  {result_status}")
+    
+    test_results["test_3_promise_date"] = {
         "passed": passed,
-        "return_value": result,
-        "expected_return": expected_return,
-        "receipt_count": receipt_count,
-        "invoice_count": invoice_count,
-        "review_count": review_count
+        "status_code": response.status_code,
+        "invoice_status": status
     }
     
     return passed
 
 
-async def test_scenario_c(db, admin_uid, now_iso):
-    """Scenario C: Self-invoice should be dropped entirely."""
-    print("\n=== Scenario C: Self-invoice (should be dropped) ===")
+async def test_4_self_invoice(client: httpx.AsyncClient, db, admin_uid, token):
+    """Test 4: Self-invoice rejection - should return 400."""
+    print("\n=== Test 4: Self-invoice rejection - should return 400 ===")
     
-    msg = {
-        "id": "guard-3",
-        "from": ADMIN_EMAIL,
-        "to": ADMIN_EMAIL,
-        "subject": "note to self",
-        "thread_id": "t3",
-        "date": "2026-07-01"
-    }
-    
-    ext = {
-        "is_money_related": True,
-        "kind": "invoice_sent",
-        "amount": 189.0,
-        "currency": "USD",
+    payload = {
         "counterparty_email": ADMIN_EMAIL,
-        "counterparty_name": "Me",
-        "invoice_ref": "self",
-        "confidence": 0.9
+        "counterparty_name": "Self",
+        "amount": 1250.50,
+        "currency": "USD",
+        "invoice_ref": "TST-4",
+        "note": "self invoice"
     }
     
-    # Call _extract_and_write
-    result = await _extract_and_write(db, admin_uid, msg, ext, ADMIN_EMAIL, now_iso)
-    print(f"  Return value: {result}")
-    
-    # Check database state
-    invoice_count = await db.invoices.count_documents({
-        "user_id": admin_uid,
-        "source_message_id": "guard-3"
-    })
-    
-    receipt_count = await db.receipts.count_documents({
-        "user_id": admin_uid,
-        "source_message_id": "guard-3"
-    })
-    
-    review_count = await db.review_items.count_documents({
-        "user_id": admin_uid,
-        "source_message_id": "guard-3"
-    })
-    
-    print(f"  Invoices collection: {invoice_count} docs")
-    print(f"  Receipts collection: {receipt_count} docs")
-    print(f"  Review_items collection: {review_count} docs")
-    
-    # Verify expectations
-    expected_return = (0, 0, 0)
-    passed = (
-        result == expected_return and
-        invoice_count == 0 and
-        receipt_count == 0 and
-        review_count == 0
+    response = await client.post(
+        f"{BASE_URL}/api/invoices/manual",
+        json=payload,
+        headers={"Authorization": f"Bearer {token}"}
     )
     
-    status = "✓ PASSED" if passed else "✗ FAILED"
-    print(f"  {status}")
+    print(f"  Status code: {response.status_code}")
     
-    test_results["scenario_c"] = {
+    if response.status_code == 400:
+        data = response.json()
+        detail = data.get("detail", "")
+        print(f"  Error detail: {detail}")
+        
+        passed = "invoice your own connected" in detail.lower()
+        result_status = "✓ PASSED" if passed else "✗ FAILED"
+        print(f"  {result_status}")
+        
+        test_results["test_4_self_invoice"] = {
+            "passed": passed,
+            "status_code": response.status_code,
+            "detail": detail
+        }
+        
+        return passed
+    else:
+        print(f"  ✗ FAILED: Expected 400, got {response.status_code}")
+        test_results["test_4_self_invoice"] = {
+            "passed": False,
+            "status_code": response.status_code,
+            "error": "Expected 400 status code"
+        }
+        return False
+
+
+async def test_5_bad_email(client: httpx.AsyncClient, db, admin_uid, token):
+    """Test 5: Bad email (no @) - should return 400."""
+    print("\n=== Test 5: Bad email (no @) - should return 400 ===")
+    
+    payload = {
+        "counterparty_email": "notanemail",
+        "counterparty_name": "Test Client",
+        "amount": 1250.50,
+        "currency": "USD",
+        "invoice_ref": "TST-5",
+        "note": "bad email"
+    }
+    
+    response = await client.post(
+        f"{BASE_URL}/api/invoices/manual",
+        json=payload,
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    
+    print(f"  Status code: {response.status_code}")
+    
+    if response.status_code == 400:
+        data = response.json()
+        detail = data.get("detail", "")
+        print(f"  Error detail: {detail}")
+        
+        passed = "must include an @" in detail.lower()
+        result_status = "✓ PASSED" if passed else "✗ FAILED"
+        print(f"  {result_status}")
+        
+        test_results["test_5_bad_email"] = {
+            "passed": passed,
+            "status_code": response.status_code,
+            "detail": detail
+        }
+        
+        return passed
+    else:
+        print(f"  ✗ FAILED: Expected 400, got {response.status_code}")
+        test_results["test_5_bad_email"] = {
+            "passed": False,
+            "status_code": response.status_code,
+            "error": "Expected 400 status code"
+        }
+        return False
+
+
+async def test_6_amount_zero(client: httpx.AsyncClient, db, admin_uid, token):
+    """Test 6: Amount <= 0 - should return 422 (Pydantic validation)."""
+    print("\n=== Test 6: Amount <= 0 - should return 422 ===")
+    
+    payload = {
+        "counterparty_email": "billing@testclient.com",
+        "counterparty_name": "Test Client",
+        "amount": 0,
+        "currency": "USD",
+        "invoice_ref": "TST-6",
+        "note": "zero amount"
+    }
+    
+    response = await client.post(
+        f"{BASE_URL}/api/invoices/manual",
+        json=payload,
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    
+    print(f"  Status code: {response.status_code}")
+    
+    if response.status_code == 422:
+        data = response.json()
+        print(f"  Validation error: {json.dumps(data, indent=2)}")
+        
+        passed = True
+        result_status = "✓ PASSED"
+        print(f"  {result_status}")
+        
+        test_results["test_6_amount_zero"] = {
+            "passed": passed,
+            "status_code": response.status_code,
+            "detail": data
+        }
+        
+        return passed
+    else:
+        print(f"  ✗ FAILED: Expected 422, got {response.status_code}")
+        test_results["test_6_amount_zero"] = {
+            "passed": False,
+            "status_code": response.status_code,
+            "error": "Expected 422 status code"
+        }
+        return False
+
+
+async def test_7_ledger_reflects(client: httpx.AsyncClient, db, admin_uid):
+    """Test 7: Ledger reflects manual invoices."""
+    print("\n=== Test 7: Ledger reflects manual invoices ===")
+    
+    response = await client.get(f"{BASE_URL}/api/ledger")
+    
+    print(f"  Status code: {response.status_code}")
+    
+    if response.status_code != 200:
+        print(f"  ✗ FAILED: Expected 200, got {response.status_code}")
+        test_results["test_7_ledger_reflects"] = {
+            "passed": False,
+            "status_code": response.status_code,
+            "error": response.text
+        }
+        return False
+    
+    data = response.json()
+    invoices = data.get("invoices", [])
+    total_open = data.get("total_open", 0)
+    
+    # Count manual invoices with testclient email
+    manual_invoices = [inv for inv in invoices if inv.get("source") == "manual" and "testclient" in inv.get("counterparty_email", "")]
+    
+    print(f"  Total invoices: {len(invoices)}")
+    print(f"  Manual test invoices: {len(manual_invoices)}")
+    print(f"  Total open: ${total_open}")
+    
+    # We should have at least 3 manual invoices from tests 1, 2, 3
+    passed = len(manual_invoices) >= 3
+    
+    result_status = "✓ PASSED" if passed else "✗ FAILED"
+    print(f"  {result_status}")
+    
+    test_results["test_7_ledger_reflects"] = {
         "passed": passed,
-        "return_value": result,
-        "expected_return": expected_return,
-        "invoice_count": invoice_count,
-        "receipt_count": receipt_count,
-        "review_count": review_count
+        "status_code": response.status_code,
+        "manual_invoice_count": len(manual_invoices),
+        "total_open": total_open
     }
     
     return passed
 
 
-async def test_scenario_d(db, admin_uid, now_iso):
-    """Scenario D: Real client invoice should go to invoices normally."""
-    print("\n=== Scenario D: Real client invoice (Northbeam) ===")
+async def test_8_timeline(client: httpx.AsyncClient, db, admin_uid):
+    """Test 8: Timeline lookup on manual invoice shows manual_add event."""
+    print("\n=== Test 8: Timeline lookup on manual invoice ===")
     
-    msg = {
-        "id": "guard-4",
-        "from": ADMIN_EMAIL,
-        "to": "ap@northbeam.com",
-        "subject": "Invoice NB-102",
-        "thread_id": "t4",
-        "date": "2026-06-15"
-    }
+    # Use invoice_id from test 1
+    invoice_id = test_results.get("test_1_invoice_id")
     
-    ext = {
-        "is_money_related": True,
-        "kind": "invoice_sent",
-        "amount": 6200.0,
-        "currency": "USD",
-        "counterparty_email": "ap@northbeam.com",
-        "counterparty_name": "Northbeam Studio",
-        "invoice_ref": "NB-102",
-        "due_date": "2026-06-30",
-        "confidence": 0.9,
-        "evidence_sentence": "Please remit $6,200 by June 30."
-    }
+    if not invoice_id:
+        print("  ✗ FAILED: No invoice_id from test 1")
+        test_results["test_8_timeline"] = {
+            "passed": False,
+            "error": "No invoice_id from test 1"
+        }
+        return False
     
-    # Call _extract_and_write
-    result = await _extract_and_write(db, admin_uid, msg, ext, ADMIN_EMAIL, now_iso)
-    print(f"  Return value: {result}")
+    response = await client.get(f"{BASE_URL}/api/invoices/{invoice_id}/timeline")
     
-    # Check database state
-    invoice_count = await db.invoices.count_documents({
-        "user_id": admin_uid,
-        "source_message_id": "guard-4"
-    })
+    print(f"  Status code: {response.status_code}")
     
-    invoice_doc = await db.invoices.find_one({
-        "user_id": admin_uid,
-        "source_message_id": "guard-4"
-    })
+    if response.status_code != 200:
+        print(f"  ✗ FAILED: Expected 200, got {response.status_code}")
+        print(f"  Response: {response.text}")
+        test_results["test_8_timeline"] = {
+            "passed": False,
+            "status_code": response.status_code,
+            "error": response.text
+        }
+        return False
     
-    status_val = invoice_doc.get("status") if invoice_doc else None
-    balance_val = invoice_doc.get("balance_remaining") if invoice_doc else None
+    data = response.json()
+    events = data.get("events", [])
     
-    receipt_count = await db.receipts.count_documents({
-        "user_id": admin_uid,
-        "source_message_id": "guard-4"
-    })
+    print(f"  Total events: {len(events)}")
     
-    review_count = await db.review_items.count_documents({
-        "user_id": admin_uid,
-        "source_message_id": "guard-4"
-    })
+    # Find manual_add event
+    manual_add_events = [e for e in events if e.get("kind") == "manual_add"]
     
-    print(f"  Invoices collection: {invoice_count} docs")
-    print(f"  Invoice status: {status_val}")
-    print(f"  Invoice balance_remaining: {balance_val}")
-    print(f"  Receipts collection: {receipt_count} docs")
-    print(f"  Review_items collection: {review_count} docs")
+    if not manual_add_events:
+        print("  ✗ FAILED: No manual_add event found")
+        test_results["test_8_timeline"] = {
+            "passed": False,
+            "status_code": response.status_code,
+            "error": "No manual_add event found",
+            "events": events
+        }
+        return False
     
-    # Verify expectations
-    expected_return = (1, 0, 0)
-    passed = (
-        result == expected_return and
-        invoice_count == 1 and
-        status_val == "invoiced" and
-        balance_val == 6200.0 and
-        receipt_count == 0 and
-        review_count == 0
-    )
+    manual_event = manual_add_events[0]
+    meta = manual_event.get("meta", {})
+    amount = meta.get("amount")
     
-    status = "✓ PASSED" if passed else "✗ FAILED"
-    print(f"  {status}")
+    print(f"  Manual add event found:")
+    print(f"    Amount: {amount}")
+    print(f"    Meta: {json.dumps(meta, indent=4)}")
     
-    test_results["scenario_d"] = {
+    # Verify amount matches
+    passed = amount == 1250.50
+    
+    result_status = "✓ PASSED" if passed else "✗ FAILED"
+    print(f"  {result_status}")
+    
+    test_results["test_8_timeline"] = {
         "passed": passed,
-        "return_value": result,
-        "expected_return": expected_return,
-        "invoice_count": invoice_count,
-        "invoice_status": status_val,
-        "invoice_balance": balance_val,
-        "receipt_count": receipt_count,
-        "review_count": review_count
+        "status_code": response.status_code,
+        "manual_event": manual_event
     }
     
     return passed
@@ -411,12 +543,12 @@ async def test_scenario_d(db, admin_uid, now_iso):
 async def main():
     """Main test runner."""
     print("=" * 70)
-    print("PAYMENT DIRECTION GUARDRAILS TEST")
+    print("POST /api/invoices/manual ENDPOINT TEST")
     print("=" * 70)
     
     # Connect to MongoDB
-    client = AsyncIOMotorClient(MONGO_URL)
-    db = client[DB_NAME]
+    mongo_client = AsyncIOMotorClient(MONGO_URL)
+    db = mongo_client[DB_NAME]
     
     try:
         # Get admin user ID
@@ -424,53 +556,48 @@ async def main():
         admin_uid = await get_admin_user_id(db)
         print(f"✓ Found admin user: {ADMIN_EMAIL} (ID: {admin_uid})")
         
-        # Setup gmail connection
-        await setup_admin_connection(db, admin_uid)
+        # Seed gmail connection
+        await seed_gmail_connection(db, admin_uid)
         
-        # Clean up any existing test data
-        print("\nCleaning up any existing test data...")
-        deleted = await cleanup_test_data(db, admin_uid)
-        if deleted > 0:
-            print(f"✓ Cleaned up {deleted} existing test docs")
-        else:
-            print("✓ No existing test data found")
+        # Create HTTP client
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            # Login
+            cookies = await login_admin(client)
+            
+            # Run all tests
+            test_1_passed = await test_1_happy_path(client, db, admin_uid)
+            test_2_passed = await test_2_past_due(client, db, admin_uid)
+            test_3_passed = await test_3_promise_date(client, db, admin_uid)
+            test_4_passed = await test_4_self_invoice(client, db, admin_uid)
+            test_5_passed = await test_5_bad_email(client, db, admin_uid)
+            test_6_passed = await test_6_amount_zero(client, db, admin_uid)
+            test_7_passed = await test_7_ledger_reflects(client, db, admin_uid)
+            test_8_passed = await test_8_timeline(client, db, admin_uid)
         
-        # Test _is_vendor function
-        vendor_tests_passed = test_is_vendor()
-        
-        # Run scenarios
-        now_iso = datetime.now(timezone.utc).isoformat()
-        
-        scenario_a_passed = await test_scenario_a(db, admin_uid, now_iso)
-        scenario_b_passed = await test_scenario_b(db, admin_uid, now_iso)
-        scenario_c_passed = await test_scenario_c(db, admin_uid, now_iso)
-        scenario_d_passed = await test_scenario_d(db, admin_uid, now_iso)
-        
-        # Cleanup test data
-        print("\n=== Cleanup ===")
-        deleted = await cleanup_test_data(db, admin_uid)
-        print(f"✓ Cleaned up {deleted} test docs")
+        # Cleanup
+        await cleanup_test_data(db, admin_uid)
         
         # Summary
         print("\n" + "=" * 70)
         print("TEST SUMMARY")
         print("=" * 70)
         
-        all_vendor_tests_passed = all(t["passed"] for t in test_results["vendor_function_tests"])
-        print(f"_is_vendor() tests: {'✓ ALL PASSED' if all_vendor_tests_passed else '✗ SOME FAILED'}")
-        
-        scenarios = [
-            ("Scenario A (Vendor invoice → review_items)", scenario_a_passed),
-            ("Scenario B (Stripe receipt → receipts)", scenario_b_passed),
-            ("Scenario C (Self-invoice → dropped)", scenario_c_passed),
-            ("Scenario D (Real client → invoices)", scenario_d_passed),
+        tests = [
+            ("Test 1: Happy path (future due date)", test_1_passed),
+            ("Test 2: Past-due date (status=overdue)", test_2_passed),
+            ("Test 3: Promise date (status=promised)", test_3_passed),
+            ("Test 4: Self-invoice rejection (400)", test_4_passed),
+            ("Test 5: Bad email (400)", test_5_passed),
+            ("Test 6: Amount <= 0 (422)", test_6_passed),
+            ("Test 7: Ledger reflects manual invoices", test_7_passed),
+            ("Test 8: Timeline shows manual_add event", test_8_passed),
         ]
         
-        for name, passed in scenarios:
+        for name, passed in tests:
             status = "✓ PASSED" if passed else "✗ FAILED"
             print(f"{name}: {status}")
         
-        all_passed = all_vendor_tests_passed and all([p for _, p in scenarios])
+        all_passed = all([p for _, p in tests])
         
         print("\n" + "=" * 70)
         if all_passed:
@@ -487,7 +614,7 @@ async def main():
         traceback.print_exc()
         return 1
     finally:
-        client.close()
+        mongo_client.close()
 
 
 if __name__ == "__main__":

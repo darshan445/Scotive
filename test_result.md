@@ -412,3 +412,87 @@ agent_communication:
       Legitimate client invoices and processor receipts flow correctly. All guardrails 
       functioning as designed.
 
+
+  - task: "POST /api/invoices/manual — track a payment manually"
+    implemented: true
+    working: "NA"
+    file: "/app/backend/scan_router.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          User reported that the "Track a payment manually" button in the
+          ledger empty state was inert (button was hard-`disabled` in JSX with
+          no handler). Backend had no endpoint either.
+
+          Implemented `POST /api/invoices/manual` with `ManualInvoiceInput`
+          Pydantic model. Fields: counterparty_email (required, must contain @),
+          counterparty_name, amount (>0), currency (default USD), invoice_ref,
+          due_date (YYYY-MM-DD), promise_date, note. Sets `source: "manual"`
+          on the doc, confidence=1.0, kind="invoice_sent". Status derivation:
+            - if due_date is set and < today → status="overdue"
+            - if promise_date is set → status="promised"
+            - else → status="invoiced"
+          Guardrail: rejects with 400 if counterparty_email equals user's own
+          Gmail address ("You can't invoice your own connected Gmail address.")
+          Also inserts an `invoice_events` doc with action="manual_add" so it
+          appears in the timeline.
+
+          Frontend: new `ManualInvoiceDialog` component, wired into LedgerCard's
+          empty-state button AND a new "Track manually" button in the ledger
+          header (visible when the ledger is populated too). Also removed the
+          non-functional "Refresh" button next to Disconnect in the connection
+          panel (redundant with the SyncStatusBar's "Sync now" that already
+          exists above the ledger).
+
+agent_communication:
+  - agent: "main"
+    message: |
+      Please verify the new `POST /api/invoices/manual` endpoint end-to-end
+      via real HTTP.
+
+      Setup:
+        - Log in as `admin@scotive.com` / `Admin@Scotive1` (cookie jar).
+        - Seed a fake gmail_connection for admin (email
+          "admin@scotive.com", status "connected") so the self-invoice guard
+          has data to check against.
+
+      Test cases:
+
+      1. Happy path — valid invoice with future due date → HTTP 200,
+         `invoice._id` present, `invoice.status == "invoiced"`,
+         `invoice.source == "manual"`, `invoice.balance_remaining == amount`,
+         `invoice.paid_amount == 0`.
+         Payload: `{counterparty_email: "billing@testclient.com",
+         counterparty_name: "Test Client", amount: 1250.50, currency: "USD",
+         invoice_ref: "TST-1", due_date: "2027-01-15", note: "test"}`
+
+      2. Past-due date → status derived as "overdue".
+         Payload same as above but `due_date` set to yesterday (compute in
+         local time). Verify `invoice.status == "overdue"`.
+
+      3. Promise date set → status derived as "promised".
+
+      4. Self-invoice rejection — `counterparty_email: "admin@scotive.com"`
+         → HTTP 400 with detail mentioning "invoice your own connected".
+
+      5. Bad email (no @) → HTTP 400 (`Client email must include an @.`).
+
+      6. Amount <= 0 → HTTP 422 (Pydantic validation).
+
+      7. Ledger reflects the manual invoice: `GET /api/ledger` must include
+         the docs created above, and the "You're owed" total must include
+         all non-past manual amounts.
+
+      8. Timeline lookup on a manual invoice: `GET /api/invoices/:id/timeline`
+         → returns 200 with events including one `kind: "manual_add"` event
+         whose `meta.amount` matches what was posted.
+
+      Cleanup every doc you created (`db.invoices.delete_many({source:
+      "manual", counterparty_email: /testclient/})`, and the seeded
+      gmail_connection). Update /app/test_result.md status_history for the
+      task above with the results.
+
