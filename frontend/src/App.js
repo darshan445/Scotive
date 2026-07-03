@@ -11,6 +11,7 @@ import DashboardPage from "@/pages/Dashboard";
 import ClientsPage from "@/pages/Clients";
 import ClientDetailPage from "@/pages/ClientDetail";
 import ReviewQueuePage from "@/pages/ReviewQueue";
+import SettingsPage from "@/pages/Settings";
 
 function App() {
     return (
@@ -27,6 +28,7 @@ function App() {
                         <Route path="/clients" element={<ProtectedRoute><ClientsPage /></ProtectedRoute>} />
                         <Route path="/clients/:email" element={<ProtectedRoute><ClientDetailPage /></ProtectedRoute>} />
                         <Route path="/review" element={<ProtectedRoute><ReviewQueuePage /></ProtectedRoute>} />
+                        <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
                         <Route path="*" element={<Navigate to="/dashboard" replace />} />
                     </Routes>
                     <Toaster position="top-right" />

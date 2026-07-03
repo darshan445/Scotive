@@ -176,7 +176,15 @@ def build_router(db, get_current_user):
         if existing:
             return {"job_id": str(existing["_id"]), "status": existing.get("status")}
 
-        months = (payload.months if payload else 12) or 12
+        # If caller didn't supply months, fall back to user_settings.scan_window_months, else 12
+        default_months = 12
+        try:
+            s = await db.user_settings.find_one({"user_id": user["_id"]})
+            if s and isinstance(s.get("scan_window_months"), int):
+                default_months = s["scan_window_months"]
+        except Exception:
+            pass
+        months = (payload.months if payload else default_months) or default_months
         doc = {
             "user_id": user["_id"],
             "status": "queued",
@@ -559,7 +567,8 @@ def build_router(db, get_current_user):
     async def run_lifecycle(user: dict = Depends(get_current_user)):
         """Recompute date-driven transitions: overdue + promise_broken."""
         today = datetime.now(timezone.utc).date()
-        grace_days = 1
+        settings_doc = await db.user_settings.find_one({"user_id": user["_id"]}) or {}
+        grace_days = int(settings_doc.get("grace_days", 1))
         overdue_updates = 0
         broken_updates = 0
         # Invoiced -> Overdue

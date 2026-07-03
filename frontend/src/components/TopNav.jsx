@@ -36,6 +36,7 @@ export function TopNav() {
                                 </span>
                             ) : null}
                         </NavLink>
+                        <NavLink to="/settings" className={({ isActive }) => `${linkBase} ${isActive ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted"}`} data-testid="nav-settings">Settings</NavLink>
                     </nav>
                 </div>
                 <div className="flex items-center gap-4">

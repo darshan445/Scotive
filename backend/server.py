@@ -20,6 +20,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 from gmail_oauth import build_router as build_gmail_router
 from scan_router import build_router as build_scan_router
+from settings_router import build_router as build_settings_router
 
 
 # ---------------------------------------------------------------------------
@@ -408,6 +409,7 @@ async def reset_password(payload: ResetPasswordInput):
 api_router.include_router(auth_router)
 api_router.include_router(build_gmail_router(db, get_current_user))
 api_router.include_router(build_scan_router(db, get_current_user))
+api_router.include_router(build_settings_router(db, get_current_user))
 app.include_router(api_router)
 
 
@@ -453,6 +455,7 @@ async def on_startup():
     await db.receipts.create_index([("user_id", 1), ("source_message_id", 1)], unique=True)
     await db.receipts.create_index([("user_id", 1), ("match_status", 1)])
     await db.invoice_events.create_index([("user_id", 1), ("invoice_id", 1), ("at", -1)])
+    await db.user_settings.create_index("user_id", unique=True)
     await seed_admin()
 
 
