@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from scan_pipeline import run_historical_scan, reconcile_receipts, run_incremental_sync
+from escalation_scheduler import run_escalation_tick, generate_draft as _gen_escalation_draft
 
 logger = logging.getLogger("scotive.scan_router")
 
@@ -54,6 +55,11 @@ class QuickComposeInput(BaseModel):
 
 class ReceiptMatchInput(BaseModel):
     invoice_id: str
+
+
+class ChaseDraftPatch(BaseModel):
+    subject: str | None = None
+    body: str | None = None
 
 
 def _serialize(doc: dict) -> dict:
@@ -757,5 +763,132 @@ def build_router(db, get_current_user):
             draft = json.loads(content)
         return {"subject": draft.get("subject",""), "body": draft.get("body",""),
                 "to": inv.get("counterparty_email"), "invoice_id": payload.invoice_id}
+
+    # ---- Escalation ladder scheduler (Feature 9b) ------------------------
+    @router.post("/escalation/run")
+    async def escalation_run(user: dict = Depends(get_current_user)):
+        counts = await run_escalation_tick(db, user["_id"])
+        return {"ok": True, **counts}
+
+    @router.get("/chase-drafts")
+    async def list_chase_drafts(status: str = "queued", user: dict = Depends(get_current_user)):
+        query = {"user_id": user["_id"]}
+        if status and status != "all":
+            query["status"] = status
+        cursor = db.chase_drafts.find(query).sort("generated_at", -1)
+        rows = []
+        async for doc in cursor:
+            rows.append(_serialize(doc))
+        return {"drafts": rows, "count": len(rows)}
+
+    @router.patch("/chase-drafts/{draft_id}")
+    async def patch_chase_draft(draft_id: str, payload: ChaseDraftPatch, user: dict = Depends(get_current_user)):
+        patch = payload.model_dump(exclude_none=True)
+        if not patch:
+            raise HTTPException(status_code=400, detail="No changes provided.")
+        patch["updated_at"] = datetime.now(timezone.utc).isoformat()
+        try:
+            res = await db.chase_drafts.update_one(
+                {"_id": ObjectId(draft_id), "user_id": user["_id"], "status": "queued"},
+                {"$set": patch},
+            )
+        except Exception:
+            raise HTTPException(status_code=404, detail="Draft not found")
+        if res.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Draft not found or not queued")
+        return {"ok": True}
+
+    @router.post("/chase-drafts/{draft_id}/dismiss")
+    async def dismiss_chase_draft(draft_id: str, user: dict = Depends(get_current_user)):
+        try:
+            res = await db.chase_drafts.update_one(
+                {"_id": ObjectId(draft_id), "user_id": user["_id"], "status": "queued"},
+                {"$set": {"status": "dismissed", "dismissed_at": datetime.now(timezone.utc).isoformat()}},
+            )
+        except Exception:
+            raise HTTPException(status_code=404, detail="Draft not found")
+        if res.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Draft not found or already actioned")
+        return {"ok": True}
+
+    @router.post("/chase-drafts/{draft_id}/regenerate")
+    async def regenerate_chase_draft(draft_id: str, user: dict = Depends(get_current_user)):
+        try:
+            draft = await db.chase_drafts.find_one({"_id": ObjectId(draft_id), "user_id": user["_id"]})
+        except Exception:
+            raise HTTPException(status_code=404, detail="Draft not found")
+        if not draft:
+            raise HTTPException(status_code=404, detail="Draft not found")
+        inv = await db.invoices.find_one({"_id": draft.get("invoice_id"), "user_id": user["_id"]})
+        if not inv:
+            raise HTTPException(status_code=404, detail="Invoice missing")
+        settings = await db.user_settings.find_one({"user_id": user["_id"]}) or {}
+        late_fee_text = settings.get("late_fee_text") if settings.get("late_fee_enabled") else None
+        new_draft = await _gen_escalation_draft(inv, draft.get("tone") or "friendly",
+                                                draft.get("step_label") or "step",
+                                                late_fee_text)
+        if not new_draft:
+            raise HTTPException(status_code=502, detail="AI draft failed")
+        await db.chase_drafts.update_one(
+            {"_id": draft["_id"]},
+            {"$set": {"subject": new_draft.get("subject", ""),
+                      "body": new_draft.get("body", ""),
+                      "updated_at": datetime.now(timezone.utc).isoformat()}},
+        )
+        return {"ok": True, "subject": new_draft.get("subject", ""), "body": new_draft.get("body", "")}
+
+    @router.post("/chase-drafts/{draft_id}/send")
+    async def send_chase_draft(draft_id: str, user: dict = Depends(get_current_user)):
+        """Send a queued draft via the user's Gmail. Marks the draft as sent."""
+        from gmail_client import get_access_token
+        import base64
+        try:
+            draft = await db.chase_drafts.find_one({"_id": ObjectId(draft_id), "user_id": user["_id"]})
+        except Exception:
+            raise HTTPException(status_code=404, detail="Draft not found")
+        if not draft:
+            raise HTTPException(status_code=404, detail="Draft not found")
+        if draft.get("status") != "queued":
+            raise HTTPException(status_code=400, detail="Draft is not queued for send.")
+        conn = await db.gmail_connections.find_one({"user_id": user["_id"]})
+        if not conn or not conn.get("can_send"):
+            raise HTTPException(status_code=400, detail="Gmail send scope missing. Reconnect Gmail.")
+        access = await get_access_token(db, user["_id"])
+        to_addr = draft.get("to")
+        from_addr = conn.get("email")
+        raw = (
+            f"From: {from_addr}\r\n"
+            f"To: {to_addr}\r\n"
+            f"Subject: {draft.get('subject','')}\r\n"
+            f"Content-Type: text/plain; charset=UTF-8\r\n\r\n"
+            f"{draft.get('body','')}"
+        )
+        encoded = base64.urlsafe_b64encode(raw.encode("utf-8")).decode("utf-8").rstrip("=")
+        body = {"raw": encoded}
+        if draft.get("thread_id"):
+            body["threadId"] = draft["thread_id"]
+        import httpx as _httpx
+        async with _httpx.AsyncClient(timeout=20.0) as c:
+            r = await c.post(
+                "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+                headers={"Authorization": f"Bearer {access}", "Content-Type": "application/json"},
+                json=body,
+            )
+            if r.status_code >= 400:
+                raise HTTPException(status_code=502, detail=f"Gmail send failed: {r.text[:200]}")
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await db.chase_drafts.update_one(
+            {"_id": draft["_id"]}, {"$set": {"status": "sent", "sent_at": now_iso}}
+        )
+        await db.chase_sends.insert_one({
+            "user_id": user["_id"], "invoice_id": draft.get("invoice_id"),
+            "to": to_addr, "subject": draft.get("subject", ""), "body": draft.get("body", ""),
+            "sent_at": now_iso, "chase_draft_id": draft["_id"],
+        })
+        await db.invoices.update_one(
+            {"_id": draft.get("invoice_id"), "user_id": user["_id"]},
+            {"$set": {"last_chase_at": now_iso}, "$inc": {"chase_count": 1}},
+        )
+        return {"ok": True, "sent_at": now_iso}
 
     return router

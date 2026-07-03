@@ -23,6 +23,7 @@ from gmail_oauth import build_router as build_gmail_router
 from scan_router import build_router as build_scan_router
 from settings_router import build_router as build_settings_router
 from scan_pipeline import sync_all_users
+from escalation_scheduler import escalate_all_users
 
 
 # ---------------------------------------------------------------------------
@@ -33,6 +34,7 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ["DB_NAME"]]
 
 _sync_task: Optional[asyncio.Task] = None
+_escalation_task: Optional[asyncio.Task] = None
 
 
 # ---------------------------------------------------------------------------
@@ -461,14 +463,20 @@ async def on_startup():
     await db.invoice_events.create_index([("user_id", 1), ("invoice_id", 1), ("at", -1)])
     await db.user_settings.create_index("user_id", unique=True)
     await db.gmail_sync_state.create_index("user_id", unique=True)
+    await db.chase_drafts.create_index([("user_id", 1), ("invoice_id", 1), ("step_key", 1)])
+    await db.chase_drafts.create_index([("user_id", 1), ("status", 1), ("generated_at", -1)])
     await seed_admin()
 
     # Kick off continuous sync loop (F9a). Interval is configurable via env.
-    global _sync_task
+    global _sync_task, _escalation_task
     interval = int(os.environ.get("SYNC_INTERVAL_SECONDS", "300"))
+    esc_interval = int(os.environ.get("ESCALATION_INTERVAL_SECONDS", "3600"))
     if os.environ.get("DISABLE_SYNC_LOOP") != "1":
         _sync_task = asyncio.create_task(_sync_loop(interval))
         logger.info("Continuous sync loop scheduled every %ss", interval)
+    if os.environ.get("DISABLE_ESCALATION_LOOP") != "1":
+        _escalation_task = asyncio.create_task(_escalation_loop(esc_interval))
+        logger.info("Escalation loop scheduled every %ss", esc_interval)
 
 
 async def _sync_loop(interval_seconds: int):
@@ -490,6 +498,23 @@ async def _sync_loop(interval_seconds: int):
                 )
         except Exception as e:
             logger.exception("Sync loop iteration failed: %s", e)
+        await _asyncio.sleep(interval_seconds)
+
+
+async def _escalation_loop(interval_seconds: int):
+    """Periodically materialize chase drafts based on user_settings.escalation_offsets."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(60)
+    while True:
+        try:
+            totals = await escalate_all_users(db)
+            if totals.get("users"):
+                logger.info(
+                    "Escalation tick: users=%s drafts+%s",
+                    totals["users"], totals["drafts_generated"],
+                )
+        except Exception as e:
+            logger.exception("Escalation loop iteration failed: %s", e)
         await _asyncio.sleep(interval_seconds)
 
 
@@ -515,7 +540,9 @@ async def seed_admin():
 
 @app.on_event("shutdown")
 async def on_shutdown():
-    global _sync_task
+    global _sync_task, _escalation_task
     if _sync_task and not _sync_task.done():
         _sync_task.cancel()
+    if _escalation_task and not _escalation_task.done():
+        _escalation_task.cancel()
     client.close()

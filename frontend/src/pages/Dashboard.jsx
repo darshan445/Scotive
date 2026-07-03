@@ -8,6 +8,7 @@ import { LedgerCard } from "@/components/LedgerCard";
 import { PaymentsCard } from "@/components/PaymentsCard";
 import { TodayCard } from "@/components/TodayCard";
 import { SyncStatusBar } from "@/components/SyncStatusBar";
+import { ChaseQueueCard } from "@/components/ChaseQueueCard";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 import { useGmailCallbackToast } from "@/hooks/useGmailCallbackToast";
 import { useLedger, useScan } from "@/hooks/useScan";
@@ -89,6 +90,13 @@ export default function DashboardPage() {
                         ) : null}
 
                         {ledgerReady ? <TodayCard /> : null}
+                        {ledgerReady ? (
+                            <ChaseQueueCard
+                                onSent={() => {
+                                    refreshLedger();
+                                }}
+                            />
+                        ) : null}
                         {ledgerReady ? (
                             <PaymentsCard
                                 receipts={receipts}
