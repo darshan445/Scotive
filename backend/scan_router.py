@@ -9,7 +9,7 @@ from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from scan_pipeline import run_historical_scan, reconcile_receipts
+from scan_pipeline import run_historical_scan, reconcile_receipts, run_incremental_sync
 
 logger = logging.getLogger("scotive.scan_router")
 
@@ -218,6 +218,25 @@ def build_router(db, get_current_user):
             "finished_at": job.get("finished_at"),
             "error": job.get("error"),
         }
+
+    @router.post("/scan/sync")
+    async def scan_sync(user: dict = Depends(get_current_user)):
+        """Manually trigger one incremental sync tick for the current user."""
+        try:
+            counts = await run_incremental_sync(db, user["_id"])
+        except Exception as e:
+            logger.exception("Manual sync failed: %s", e)
+            raise HTTPException(status_code=500, detail="Sync failed. Check backend logs.")
+        state = await db.gmail_sync_state.find_one({"user_id": user["_id"]})
+        last_synced_at = (state or {}).get("last_synced_at")
+        return {"ok": True, "counts": counts, "last_synced_at": last_synced_at}
+
+    @router.get("/scan/sync-state")
+    async def scan_sync_state(user: dict = Depends(get_current_user)):
+        state = await db.gmail_sync_state.find_one({"user_id": user["_id"]}) or {}
+        state.pop("_id", None)
+        state.pop("user_id", None)
+        return state
 
     @router.get("/ledger")
     async def get_ledger(user: dict = Depends(get_current_user)):

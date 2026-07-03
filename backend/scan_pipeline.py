@@ -376,6 +376,244 @@ async def run_historical_scan(db, user_id, job_id, months: int = 12):
 
 
 # ---------------------------------------------------------------------------
+# Continuous incremental sync (F9a)
+# ---------------------------------------------------------------------------
+INCREMENTAL_LOOKBACK_DAYS = 3   # first-run cushion
+INCREMENTAL_OVERLAP_HOURS = 24  # re-check the last day on every sync
+INCREMENTAL_MAX_MESSAGES = 40   # per-tick cap so a single user can't hog the loop
+
+
+async def _extract_and_write(db, user_id, msg, ext, my_email, now_iso, CONFIDENCE_THRESHOLD=0.75):
+    """Persist a single AI extraction outcome. Returns (invoice_created, receipt_created, review_created)."""
+    if not ext.get("is_money_related"):
+        return (0, 0, 0)
+    kind = ext.get("kind") or "none"
+
+    if kind == "receipt":
+        amount = ext.get("amount")
+        if amount in (None, 0):
+            return (0, 0, 0)
+        existing = await db.receipts.find_one({"user_id": user_id, "source_message_id": msg["id"]})
+        if existing:
+            return (0, 0, 0)
+        await db.receipts.insert_one({
+            "user_id": user_id,
+            "amount": float(amount),
+            "currency": ext.get("currency") or "USD",
+            "payer_name": ext.get("counterparty_name"),
+            "processor_from": msg.get("from"),
+            "source_message_id": msg["id"],
+            "source_thread_id": msg.get("thread_id"),
+            "source_subject": msg.get("subject"),
+            "source_date": msg.get("date"),
+            "evidence_sentence": ext.get("evidence_sentence"),
+            "confidence": float(ext.get("confidence") or 0),
+            "match_status": "unmatched",
+            "matched_invoice_id": None,
+            "candidate_invoice_ids": [],
+            "created_at": now_iso,
+        })
+        return (0, 1, 0)
+
+    if kind not in ("invoice_sent", "payment_promise", "partial_payment"):
+        return (0, 0, 0)
+    amount = ext.get("amount")
+    if amount in (None, 0):
+        return (0, 0, 0)
+
+    counterparty_email = (ext.get("counterparty_email") or _extract_email_addr(msg.get("from", ""))).lower()
+    if counterparty_email == (my_email or "").lower():
+        counterparty_email = _extract_email_addr(msg.get("to", "")).lower()
+
+    status = "invoiced"
+    if kind == "payment_promise":
+        status = "promised"
+    elif kind == "partial_payment":
+        status = "partially_paid"
+
+    confidence = float(ext.get("confidence") or 0)
+    base_doc = {
+        "user_id": user_id,
+        "counterparty_email": counterparty_email,
+        "counterparty_name": ext.get("counterparty_name"),
+        "amount": float(amount),
+        "balance_remaining": float(amount),
+        "paid_amount": 0.0,
+        "currency": ext.get("currency") or "USD",
+        "invoice_ref": ext.get("invoice_ref"),
+        "due_date": ext.get("due_date"),
+        "promise_date": ext.get("promise_date"),
+        "status": status,
+        "kind": kind,
+        "source_message_id": msg["id"],
+        "source_thread_id": msg.get("thread_id"),
+        "source_subject": msg.get("subject"),
+        "source_from": msg.get("from"),
+        "source_date": msg.get("date"),
+        "evidence_sentence": ext.get("evidence_sentence"),
+        "confidence": confidence,
+        "created_at": now_iso,
+    }
+
+    if confidence < CONFIDENCE_THRESHOLD:
+        existing_r = await db.review_items.find_one({"user_id": user_id, "source_message_id": msg["id"]})
+        if existing_r:
+            return (0, 0, 0)
+        await db.review_items.insert_one({**base_doc, "review_status": "pending"})
+        return (0, 0, 1)
+
+    existing = await db.invoices.find_one({"user_id": user_id, "source_message_id": msg["id"]})
+    if existing:
+        return (0, 0, 0)
+    await db.invoices.insert_one(base_doc)
+    return (1, 0, 0)
+
+
+async def _already_processed(db, user_id, message_id: str) -> bool:
+    """True if we've already stored this message in any bucket."""
+    for coll in ("invoices", "receipts", "review_items"):
+        if await db[coll].find_one({"user_id": user_id, "source_message_id": message_id}, {"_id": 1}):
+            return True
+    return False
+
+
+async def run_incremental_sync(db, user_id) -> dict:
+    """One tick of continuous sync. Idempotent, safe to call on a timer."""
+    counts = {"fetched": 0, "filtered_in": 0, "ai_extracted": 0,
+              "invoices_created": 0, "receipts_created": 0, "review_items": 0,
+              "receipts_matched": 0, "receipts_ambiguous": 0}
+    state = await db.gmail_sync_state.find_one({"user_id": user_id})
+    conn = await db.gmail_connections.find_one({"user_id": user_id})
+    if not conn or conn.get("status") != "connected":
+        return {**counts, "skipped": "no_connection"}
+
+    my_email = conn.get("email") or ""
+
+    try:
+        access = await get_access_token(db, user_id)
+    except GmailAuthError:
+        await db.gmail_sync_state.update_one(
+            {"user_id": user_id},
+            {"$set": {"user_id": user_id, "last_sync_status": "auth_error",
+                      "last_synced_at": datetime.now(timezone.utc).isoformat()}},
+            upsert=True,
+        )
+        return {**counts, "skipped": "auth_error"}
+
+    # Determine window: last_message_epoch - overlap, or lookback default on first run
+    now = datetime.now(timezone.utc)
+    last_epoch = (state or {}).get("last_message_epoch")
+    if last_epoch:
+        since_ts = int(last_epoch) - INCREMENTAL_OVERLAP_HOURS * 3600
+    else:
+        since_ts = int((now - timedelta(days=INCREMENTAL_LOOKBACK_DAYS)).timestamp())
+    query = f"after:{since_ts} -category:promotions -category:social -category:forums"
+
+    # Fetch IDs (only need one page, cap tightly)
+    try:
+        ids = await list_message_ids(access, query, max_pages=1)
+    except Exception as e:
+        logger.warning("Sync list failed: %s", e)
+        return {**counts, "error": "list_failed"}
+    counts["fetched"] = len(ids)
+
+    # Filter out ones we already processed
+    fresh_ids = []
+    for mid in ids:
+        if not await _already_processed(db, user_id, mid):
+            fresh_ids.append(mid)
+        if len(fresh_ids) >= INCREMENTAL_MAX_MESSAGES:
+            break
+
+    if not fresh_ids:
+        await db.gmail_sync_state.update_one(
+            {"user_id": user_id},
+            {"$set": {"user_id": user_id, "last_sync_status": "ok",
+                      "last_synced_at": now.isoformat(),
+                      "last_message_epoch": int(now.timestamp())}},
+            upsert=True,
+        )
+        return counts
+
+    # Cheap filter + AI + write
+    survivors: list[dict] = []
+    newest_epoch = last_epoch or since_ts
+    for mid in fresh_ids:
+        msg = await get_message(access, mid)
+        if not msg:
+            continue
+        # Track newest date so next tick starts after it
+        d = msg.get("date")
+        if d:
+            try:
+                from email.utils import parsedate_to_datetime
+                dt = parsedate_to_datetime(d)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                newest_epoch = max(newest_epoch, int(dt.timestamp()))
+            except Exception:
+                pass
+        if cheap_filter(msg):
+            survivors.append(msg)
+
+    counts["filtered_in"] = len(survivors)
+
+    if survivors:
+        sem = asyncio.Semaphore(AI_CONCURRENCY)
+
+        async def _one(m):
+            async with sem:
+                return (m, await extract_with_ai(m))
+
+        pairs = await asyncio.gather(*[_one(m) for m in survivors])
+        now_iso = datetime.now(timezone.utc).isoformat()
+        for m, ext in pairs:
+            if not ext:
+                continue
+            counts["ai_extracted"] += 1
+            inv, rec, rev = await _extract_and_write(db, user_id, m, ext, my_email, now_iso)
+            counts["invoices_created"] += inv
+            counts["receipts_created"] += rec
+            counts["review_items"] += rev
+
+    # Reconcile any new receipts against open invoices
+    try:
+        recon = await reconcile_receipts(db, user_id)
+        counts["receipts_matched"] = recon.get("matched", 0)
+        counts["receipts_ambiguous"] = recon.get("ambiguous", 0)
+    except Exception as e:
+        logger.warning("Sync reconcile failed: %s", e)
+
+    await db.gmail_sync_state.update_one(
+        {"user_id": user_id},
+        {"$set": {"user_id": user_id, "last_sync_status": "ok",
+                  "last_synced_at": now.isoformat(),
+                  "last_message_epoch": int(newest_epoch),
+                  "last_counts": counts}},
+        upsert=True,
+    )
+    return counts
+
+
+async def sync_all_users(db) -> dict:
+    """Iterate every connected user and run one incremental sync tick per user."""
+    totals = {"users": 0, "invoices_created": 0, "receipts_created": 0,
+              "receipts_matched": 0, "review_items": 0}
+    async for conn in db.gmail_connections.find({"status": "connected"}):
+        uid = conn.get("user_id")
+        if not uid:
+            continue
+        try:
+            c = await run_incremental_sync(db, uid)
+            totals["users"] += 1
+            for k in ("invoices_created", "receipts_created", "receipts_matched", "review_items"):
+                totals[k] += c.get(k, 0)
+        except Exception as e:
+            logger.exception("Sync failed for user %s: %s", uid, e)
+    return totals
+
+
+# ---------------------------------------------------------------------------
 # Receipt reconciliation
 # ---------------------------------------------------------------------------
 def _name_similarity(a: Optional[str], b: Optional[str]) -> float:

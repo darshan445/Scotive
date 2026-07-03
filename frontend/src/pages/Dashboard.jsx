@@ -7,6 +7,7 @@ import { ScanProgressCard } from "@/components/ScanProgressCard";
 import { LedgerCard } from "@/components/LedgerCard";
 import { PaymentsCard } from "@/components/PaymentsCard";
 import { TodayCard } from "@/components/TodayCard";
+import { SyncStatusBar } from "@/components/SyncStatusBar";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 import { useGmailCallbackToast } from "@/hooks/useGmailCallbackToast";
 import { useLedger, useScan } from "@/hooks/useScan";
@@ -73,6 +74,15 @@ export default function DashboardPage() {
                         </div>
 
                         <ConnectionPanel status={status} />
+
+                        {ledgerReady ? (
+                            <SyncStatusBar
+                                onSynced={() => {
+                                    refreshLedger();
+                                    refreshReceipts();
+                                }}
+                            />
+                        ) : null}
 
                         {scanState?.has_job && scanState.status !== "complete" ? (
                             <ScanProgressCard state={scanState} />

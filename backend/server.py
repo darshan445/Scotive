@@ -10,6 +10,7 @@ import secrets
 from datetime import datetime, timezone, timedelta
 from typing import Annotated, Any, Optional
 
+import asyncio
 import bcrypt
 import jwt
 from bson import ObjectId
@@ -21,6 +22,7 @@ from starlette.middleware.cors import CORSMiddleware
 from gmail_oauth import build_router as build_gmail_router
 from scan_router import build_router as build_scan_router
 from settings_router import build_router as build_settings_router
+from scan_pipeline import sync_all_users
 
 
 # ---------------------------------------------------------------------------
@@ -29,6 +31,8 @@ from settings_router import build_router as build_settings_router
 mongo_url = os.environ["MONGO_URL"]
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ["DB_NAME"]]
+
+_sync_task: Optional[asyncio.Task] = None
 
 
 # ---------------------------------------------------------------------------
@@ -456,7 +460,37 @@ async def on_startup():
     await db.receipts.create_index([("user_id", 1), ("match_status", 1)])
     await db.invoice_events.create_index([("user_id", 1), ("invoice_id", 1), ("at", -1)])
     await db.user_settings.create_index("user_id", unique=True)
+    await db.gmail_sync_state.create_index("user_id", unique=True)
     await seed_admin()
+
+    # Kick off continuous sync loop (F9a). Interval is configurable via env.
+    global _sync_task
+    interval = int(os.environ.get("SYNC_INTERVAL_SECONDS", "300"))
+    if os.environ.get("DISABLE_SYNC_LOOP") != "1":
+        _sync_task = asyncio.create_task(_sync_loop(interval))
+        logger.info("Continuous sync loop scheduled every %ss", interval)
+
+
+async def _sync_loop(interval_seconds: int):
+    """Periodically run incremental Gmail sync for every connected user.
+
+    Fires the first tick after a short grace period so the process is fully
+    initialized. Failures for a single user do not stop the loop.
+    """
+    import asyncio as _asyncio
+    await _asyncio.sleep(30)
+    while True:
+        try:
+            totals = await sync_all_users(db)
+            if totals.get("users"):
+                logger.info(
+                    "Sync tick: users=%s inv+%s rcpt+%s matched=%s review+%s",
+                    totals["users"], totals["invoices_created"], totals["receipts_created"],
+                    totals["receipts_matched"], totals["review_items"],
+                )
+        except Exception as e:
+            logger.exception("Sync loop iteration failed: %s", e)
+        await _asyncio.sleep(interval_seconds)
 
 
 async def seed_admin():
@@ -481,4 +515,7 @@ async def seed_admin():
 
 @app.on_event("shutdown")
 async def on_shutdown():
+    global _sync_task
+    if _sync_task and not _sync_task.done():
+        _sync_task.cancel()
     client.close()
