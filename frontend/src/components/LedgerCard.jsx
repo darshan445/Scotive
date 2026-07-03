@@ -80,6 +80,7 @@ function TimelineRow({ invoiceId }) {
 
 export function LedgerCard({ ledger, onChanged }) {
     const [expanded, setExpanded] = useState(null);
+    const [chaseInvoice, setChaseInvoice] = useState(null);
     if (!ledger) return null;
     const { invoices = [], total_open = 0, client_count = 0 } = ledger;
 
@@ -165,6 +166,7 @@ export function LedgerCard({ ledger, onChanged }) {
                                                         <MoreHorizontal className="w-4 h-4" />
                                                     </DropdownMenuTrigger>
                                                     <DropdownMenuContent align="end">
+                                                        <DropdownMenuItem onClick={() => setChaseInvoice(inv)} data-testid="row-draft-chase"><Send className="w-3.5 h-3.5 mr-2" />Draft chase</DropdownMenuItem>
                                                         <DropdownMenuItem onClick={() => act(inv._id, "mark_paid")} data-testid="row-mark-paid">Mark paid</DropdownMenuItem>
                                                         <DropdownMenuItem onClick={() => act(inv._id, "dispute")} data-testid="row-dispute">Mark disputed</DropdownMenuItem>
                                                         <DropdownMenuItem onClick={() => act(inv._id, inv.chasing_paused ? "resume" : "pause")} data-testid="row-pause">
@@ -190,6 +192,7 @@ export function LedgerCard({ ledger, onChanged }) {
                     </table>
                 </div>
             )}
+            <ChaseDialog invoice={chaseInvoice} open={!!chaseInvoice} onOpenChange={(o) => !o && setChaseInvoice(null)} onSent={() => { setChaseInvoice(null); onChanged?.(); }} />
         </div>
     );
 }

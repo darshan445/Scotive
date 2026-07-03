@@ -342,4 +342,125 @@ def build_router(db, get_current_user):
             "resolved": resolved,
         }
 
+    # ---- Chase drafts (Feature 7) ----------------------------------------
+    class ChaseDraftInput(BaseModel):
+        tone: str | None = None  # friendly | firm | final
+        note: str | None = None
+
+    class ChaseSendInput(BaseModel):
+        subject: str
+        body: str
+
+    def _tone_for(inv: dict) -> str:
+        s = inv.get("status")
+        if s == "promise_broken": return "firm"
+        if s == "overdue": return "firm"
+        return "friendly"
+
+    @router.post("/invoices/{invoice_id}/draft-chase")
+    async def draft_chase(invoice_id: str, payload: ChaseDraftInput, user: dict = Depends(get_current_user)):
+        from scan_pipeline import OPENROUTER_URL, OPENROUTER_MODEL
+        import httpx, os, json
+        try:
+            inv = await db.invoices.find_one({"_id": ObjectId(invoice_id), "user_id": user["_id"]})
+        except Exception:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        if not inv:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        tone = payload.tone or _tone_for(inv)
+        sys = (
+            "You draft short, professional payment follow-up emails for a small business owner. "
+            "Under 120 words. Plain professional tone. No 'hope this finds you well'. "
+            "Always include invoice ref (if any), amount, due date. On a broken promise, quote the client's own stated date verbatim. "
+            "Never sound templated or AI-written. Output STRICT JSON: {\"subject\": string, \"body\": string}."
+        )
+        user_msg = (
+            f"Client: {inv.get('counterparty_name') or inv.get('counterparty_email')}\n"
+            f"Invoice ref: {inv.get('invoice_ref') or 'n/a'}\n"
+            f"Amount: {inv.get('amount')} {inv.get('currency','USD')}\n"
+            f"Due date: {inv.get('due_date') or 'n/a'}\n"
+            f"Promise date: {inv.get('promise_date') or 'n/a'}\n"
+            f"Status: {inv.get('status')}\n"
+            f"Tone: {tone}\n"
+            f"Client's own words (if broken promise): {inv.get('evidence_sentence') or ''}\n"
+            f"User extra note: {payload.note or ''}"
+        )
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            raise HTTPException(status_code=500, detail="AI not configured")
+        async with httpx.AsyncClient(timeout=30.0) as c:
+            r = await c.post(OPENROUTER_URL, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                             json={"model": OPENROUTER_MODEL, "messages":[{"role":"system","content":sys},{"role":"user","content":user_msg}],
+                                   "temperature":0.4, "response_format":{"type":"json_object"}, "max_tokens":400})
+            if r.status_code != 200:
+                raise HTTPException(status_code=502, detail="AI draft failed")
+            content = r.json()["choices"][0]["message"]["content"]
+            draft = json.loads(content)
+        return {"subject": draft.get("subject",""), "body": draft.get("body",""), "tone": tone,
+                "to": inv.get("counterparty_email"), "thread_id": inv.get("source_thread_id"),
+                "invoice_id": str(inv["_id"])}
+
+    @router.post("/invoices/{invoice_id}/send-chase")
+    async def send_chase(invoice_id: str, payload: ChaseSendInput, user: dict = Depends(get_current_user)):
+        from gmail_client import get_access_token
+        import httpx, base64
+        try:
+            inv = await db.invoices.find_one({"_id": ObjectId(invoice_id), "user_id": user["_id"]})
+        except Exception:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        if not inv:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        conn = await db.gmail_connections.find_one({"user_id": user["_id"]})
+        if not conn or not conn.get("can_send"):
+            raise HTTPException(status_code=400, detail="Gmail send scope missing. Reconnect Gmail.")
+        access = await get_access_token(db, user["_id"])
+        to_addr = inv.get("counterparty_email")
+        from_addr = conn.get("email")
+        raw = f"From: {from_addr}\r\nTo: {to_addr}\r\nSubject: {payload.subject}\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n{payload.body}"
+        encoded = base64.urlsafe_b64encode(raw.encode("utf-8")).decode("utf-8").rstrip("=")
+        body = {"raw": encoded}
+        if inv.get("source_thread_id"):
+            body["threadId"] = inv["source_thread_id"]
+        async with httpx.AsyncClient(timeout=20.0) as c:
+            r = await c.post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+                             headers={"Authorization": f"Bearer {access}", "Content-Type":"application/json"}, json=body)
+            if r.status_code >= 400:
+                raise HTTPException(status_code=502, detail=f"Gmail send failed: {r.text[:200]}")
+        await db.chase_sends.insert_one({
+            "user_id": user["_id"], "invoice_id": inv["_id"], "to": to_addr, "subject": payload.subject,
+            "body": payload.body, "sent_at": datetime.now(timezone.utc).isoformat(),
+        })
+        await db.invoices.update_one({"_id": inv["_id"]}, {"$set": {"last_chase_at": datetime.now(timezone.utc).isoformat()}, "$inc": {"chase_count": 1}})
+        return {"ok": True}
+
+    class QuickComposeInput(BaseModel):
+        invoice_id: str
+        intent: str
+
+    @router.post("/quick-compose")
+    async def quick_compose(payload: QuickComposeInput, user: dict = Depends(get_current_user)):
+        from scan_pipeline import OPENROUTER_URL, OPENROUTER_MODEL
+        import httpx, os, json
+        try:
+            inv = await db.invoices.find_one({"_id": ObjectId(payload.invoice_id), "user_id": user["_id"]})
+        except Exception:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        if not inv:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        sys = ("Expand the user's rough intent into a polished professional email under 120 words. "
+               "Honor every point the user made. Add nothing substantive they didn't say. No fluff. "
+               "Output STRICT JSON: {\"subject\": string, \"body\": string}.")
+        user_msg = (f"Client: {inv.get('counterparty_name') or inv.get('counterparty_email')}\n"
+                    f"Invoice: {inv.get('invoice_ref') or 'n/a'} · {inv.get('amount')} {inv.get('currency','USD')}\n"
+                    f"User rough intent: {payload.intent}")
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        async with httpx.AsyncClient(timeout=30.0) as c:
+            r = await c.post(OPENROUTER_URL, headers={"Authorization": f"Bearer {api_key}", "Content-Type":"application/json"},
+                             json={"model": OPENROUTER_MODEL, "messages":[{"role":"system","content":sys},{"role":"user","content":user_msg}],
+                                   "temperature":0.4, "response_format":{"type":"json_object"}, "max_tokens":400})
+            content = r.json()["choices"][0]["message"]["content"]
+            draft = json.loads(content)
+        return {"subject": draft.get("subject",""), "body": draft.get("body",""),
+                "to": inv.get("counterparty_email"), "invoice_id": payload.invoice_id}
+
     return router
