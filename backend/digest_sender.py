@@ -324,8 +324,10 @@ async def send_digest_for_user(db, user_id, force: bool = False) -> dict:
 
 
 async def send_daily_digests(db) -> dict:
-    """Iterate every connected user whose digest is due (opt-in + current hour matches)."""
-    now_hour = datetime.now(timezone.utc).hour
+    """Iterate every connected user whose digest is due (opt-in + current hour matches
+    in the user's configured IANA timezone)."""
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+    now_utc = datetime.now(timezone.utc)
     totals = {"users_considered": 0, "sent": 0, "skipped": 0}
     async for conn in db.gmail_connections.find({"status": "connected"}):
         uid = conn.get("user_id")
@@ -336,8 +338,19 @@ async def send_daily_digests(db) -> dict:
         if settings.get("daily_digest_enabled") is False:
             totals["skipped"] += 1
             continue
-        target_hour = int(settings.get("daily_digest_hour_utc", 14))
-        if now_hour != target_hour:
+        # Target hour lives in the user's local timezone. Backward compat: fall
+        # back to the legacy `daily_digest_hour_utc` field so old rows keep working.
+        target_hour = settings.get("daily_digest_hour")
+        if target_hour is None:
+            target_hour = settings.get("daily_digest_hour_utc", 9)
+        target_hour = int(target_hour)
+        tz_name = settings.get("daily_digest_timezone", "UTC") or "UTC"
+        try:
+            tz = ZoneInfo(tz_name)
+        except (ZoneInfoNotFoundError, Exception):
+            tz = timezone.utc
+        local_hour = now_utc.astimezone(tz).hour
+        if local_hour != target_hour:
             totals["skipped"] += 1
             continue
         res = await send_digest_for_user(db, uid)

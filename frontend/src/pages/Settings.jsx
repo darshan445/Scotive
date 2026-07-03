@@ -9,6 +9,13 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select";
+import {
     AlertDialog,
     AlertDialogAction,
     AlertDialogCancel,
@@ -29,6 +36,7 @@ export default function SettingsPage() {
     const [saving, setSaving] = useState(false);
     const [err, setErr] = useState("");
     const [suppressed, setSuppressed] = useState([]);
+    const [timezones, setTimezones] = useState([]);
 
     // Delete-account dialog state
     const [confirmDelete, setConfirmDelete] = useState(false);
@@ -39,13 +47,15 @@ export default function SettingsPage() {
         let alive = true;
         async function load() {
             try {
-                const [s, sup] = await Promise.all([
+                const [s, sup, tz] = await Promise.all([
                     api.get("/settings"),
                     api.get("/suppressed-senders"),
+                    api.get("/settings/timezones"),
                 ]);
                 if (!alive) return;
                 setSettings(s.data);
                 setSuppressed(sup.data.senders || []);
+                setTimezones(tz.data.timezones || []);
             } catch (e) {
                 if (alive) setErr(extractError(e));
             }
@@ -144,6 +154,7 @@ export default function SettingsPage() {
                     settings={settings}
                     saving={saving}
                     onSave={persist}
+                    timezones={timezones}
                 />
 
                 <SuppressedSendersSection
@@ -382,13 +393,48 @@ function ScanWindowSection({ settings, saving, onSave }) {
 // ---------------------------------------------------------------------------
 // Daily digest
 // ---------------------------------------------------------------------------
-function DailyDigestSection({ settings, saving, onSave }) {
+function DailyDigestSection({ settings, saving, onSave, timezones }) {
+    const initialHour = settings.daily_digest_hour ?? settings.daily_digest_hour_utc ?? 9;
+    const initialTz = settings.daily_digest_timezone || "UTC";
     const [enabled, setEnabled] = useState(!!settings.daily_digest_enabled);
-    const [hour, setHour] = useState(settings.daily_digest_hour_utc ?? 14);
+    const [hour, setHour] = useState(initialHour);
+    const [tz, setTz] = useState(initialTz);
     const [sending, setSending] = useState(false);
     useEffect(() => { setEnabled(!!settings.daily_digest_enabled); }, [settings.daily_digest_enabled]);
-    useEffect(() => { setHour(settings.daily_digest_hour_utc ?? 14); }, [settings.daily_digest_hour_utc]);
-    const dirty = enabled !== !!settings.daily_digest_enabled || hour !== (settings.daily_digest_hour_utc ?? 14);
+    useEffect(() => { setHour(settings.daily_digest_hour ?? settings.daily_digest_hour_utc ?? 9); },
+        [settings.daily_digest_hour, settings.daily_digest_hour_utc]);
+    useEffect(() => { setTz(settings.daily_digest_timezone || "UTC"); }, [settings.daily_digest_timezone]);
+    const dirty =
+        enabled !== !!settings.daily_digest_enabled ||
+        hour !== initialHour ||
+        tz !== initialTz;
+
+    // Compute "next digest at" in the user's chosen timezone for reassurance.
+    let nextAtLabel = "";
+    try {
+        const now = new Date();
+        // Round display "now" to the top of the current hour in the target tz so
+        // "next send at Xam" doesn't include stray minutes.
+        const parts = new Intl.DateTimeFormat("en-US", {
+            timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: false,
+        }).formatToParts(now);
+        const currentHourInTz = parseInt(parts.find((p) => p.type === "hour")?.value || "0", 10);
+        const currentMinInTz = parseInt(parts.find((p) => p.type === "minute")?.value || "0", 10);
+        // If we're already past the target hour today, schedule for tomorrow.
+        let hoursUntil = hour - currentHourInTz;
+        if (hoursUntil < 0 || (hoursUntil === 0 && currentMinInTz > 0)) hoursUntil += 24;
+        const nextMs = now.getTime() + hoursUntil * 3600 * 1000 - currentMinInTz * 60 * 1000;
+        const next = new Date(nextMs);
+        const fmt = new Intl.DateTimeFormat("en-US", {
+            timeZone: tz,
+            weekday: "short",
+            hour: "numeric",
+            hour12: true,
+        });
+        nextAtLabel = `Next send: ${fmt.format(next)} (${tz.replace("_", " ")})`;
+    } catch {
+        nextAtLabel = "";
+    }
 
     async function sendNow() {
         setSending(true);
@@ -426,33 +472,55 @@ function DailyDigestSection({ settings, saving, onSave }) {
                 <Switch checked={enabled} onCheckedChange={setEnabled} data-testid="toggle-daily-digest" />
             </div>
             {enabled ? (
-                <div className="mt-5 space-y-2 max-w-sm">
-                    <Label htmlFor="digest-hour">Send hour (UTC)</Label>
-                    <div className="flex items-baseline gap-2">
-                        <Input
-                            id="digest-hour"
-                            type="number"
-                            min={0}
-                            max={23}
-                            value={hour}
-                            onChange={(e) => setHour(Math.max(0, Math.min(23, parseInt(e.target.value, 10) || 0)))}
-                            className="max-w-[110px]"
-                            data-testid="input-digest-hour"
-                        />
-                        <span className="text-sm text-muted-foreground">
-                            {`${String(hour).padStart(2, "0")}:00 UTC`}
-                        </span>
+                <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-5">
+                    <div className="space-y-2">
+                        <Label htmlFor="digest-hour">Send hour</Label>
+                        <Select value={String(hour)} onValueChange={(v) => setHour(parseInt(v, 10))}>
+                            <SelectTrigger data-testid="select-digest-hour">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {Array.from({ length: 24 }, (_, i) => i).map((h) => {
+                                    const suffix = h === 0 ? "12:00 AM" : h < 12 ? `${h}:00 AM` : h === 12 ? "12:00 PM" : `${h - 12}:00 PM`;
+                                    return (
+                                        <SelectItem key={h} value={String(h)} data-testid={`digest-hour-${h}`}>
+                                            {suffix} ({String(h).padStart(2, "0")}:00)
+                                        </SelectItem>
+                                    );
+                                })}
+                            </SelectContent>
+                        </Select>
                     </div>
-                    <p className="text-[11px] text-muted-foreground">
-                        Default 14:00 UTC (~9am US Eastern, ~7pm India). Local time zones aren't
-                        supported yet — pick the hour that lands early morning for you.
-                    </p>
+                    <div className="space-y-2">
+                        <Label htmlFor="digest-tz">Timezone</Label>
+                        <Select value={tz} onValueChange={setTz}>
+                            <SelectTrigger data-testid="select-digest-tz">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent className="max-h-72">
+                                {(timezones || []).map((z) => (
+                                    <SelectItem key={z.value} value={z.value} data-testid={`digest-tz-${z.value}`}>
+                                        {z.label}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </div>
+                    <div className="sm:col-span-2">
+                        <p className="text-[11px] text-muted-foreground" data-testid="digest-next-send">
+                            {nextAtLabel || "Local time zones honored — the digest arrives in your inbox at the chosen hour."}
+                        </p>
+                    </div>
                 </div>
             ) : null}
             <SectionFooter
                 dirty={dirty}
                 saving={saving}
-                onSave={() => onSave({ daily_digest_enabled: enabled, daily_digest_hour_utc: hour }, "Digest settings saved")}
+                onSave={() => onSave({
+                    daily_digest_enabled: enabled,
+                    daily_digest_hour: hour,
+                    daily_digest_timezone: tz,
+                }, "Digest settings saved")}
                 testid="save-digest"
             />
             <div className="mt-5 pt-4 border-t border-border flex items-center justify-end gap-3">

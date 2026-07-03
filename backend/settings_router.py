@@ -19,8 +19,18 @@ DEFAULT_SETTINGS: dict = {
     "late_fee_text": "",
     "scan_window_months": 12,
     "daily_digest_enabled": True,
-    "daily_digest_hour_utc": 14,  # 14:00 UTC ~= 9am ET; sane default
+    "daily_digest_hour": 9,           # local hour in daily_digest_timezone
+    "daily_digest_timezone": "UTC",   # IANA name
 }
+
+
+def _valid_iana_zone(name: str) -> bool:
+    try:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        ZoneInfo(name)
+        return True
+    except Exception:
+        return False
 
 
 class SettingsPatch(BaseModel):
@@ -30,7 +40,17 @@ class SettingsPatch(BaseModel):
     late_fee_text: Optional[str] = Field(default=None, max_length=280)
     scan_window_months: Optional[int] = Field(default=None, ge=1, le=36)
     daily_digest_enabled: Optional[bool] = None
-    daily_digest_hour_utc: Optional[int] = Field(default=None, ge=0, le=23)
+    daily_digest_hour: Optional[int] = Field(default=None, ge=0, le=23)
+    daily_digest_timezone: Optional[str] = Field(default=None, max_length=64)
+
+    @field_validator("daily_digest_timezone")
+    @classmethod
+    def _valid_tz(cls, v):
+        if v is None:
+            return v
+        if not _valid_iana_zone(v):
+            raise ValueError(f"Unknown IANA timezone: {v}")
+        return v
 
     @field_validator("escalation_offsets")
     @classmethod
@@ -55,10 +75,55 @@ async def get_settings_doc(db, user_id) -> dict:
         doc = {"user_id": user_id, **DEFAULT_SETTINGS,
                "created_at": datetime.now(timezone.utc).isoformat()}
         await db.user_settings.insert_one(doc)
+    # Backward compat: migrate legacy `daily_digest_hour_utc` → `daily_digest_hour`
+    if "daily_digest_hour" not in doc and "daily_digest_hour_utc" in doc:
+        doc["daily_digest_hour"] = doc.get("daily_digest_hour_utc") or 9
     # Fill in any missing keys with defaults (forward compat)
     merged = {**DEFAULT_SETTINGS, **{k: v for k, v in doc.items() if k in DEFAULT_SETTINGS}}
     merged["user_id"] = user_id
     return merged
+
+
+# Curated list surfaced to the UI. `Intl.supportedValuesOf('timeZone')` in the
+# browser can return 400+; we deliberately keep this focused on the US-service-
+# firm target market.
+COMMON_TIMEZONES = [
+    ("UTC", "UTC"),
+    ("America/New_York", "US Eastern (New York)"),
+    ("America/Chicago", "US Central (Chicago)"),
+    ("America/Denver", "US Mountain (Denver)"),
+    ("America/Phoenix", "US Arizona (no DST)"),
+    ("America/Los_Angeles", "US Pacific (Los Angeles)"),
+    ("America/Anchorage", "US Alaska"),
+    ("America/Honolulu", "US Hawaii"),
+    ("America/Toronto", "Canada Eastern (Toronto)"),
+    ("America/Vancouver", "Canada Pacific (Vancouver)"),
+    ("America/Mexico_City", "Mexico City"),
+    ("America/Sao_Paulo", "São Paulo"),
+    ("Europe/London", "UK (London)"),
+    ("Europe/Dublin", "Ireland (Dublin)"),
+    ("Europe/Paris", "Paris"),
+    ("Europe/Berlin", "Berlin"),
+    ("Europe/Amsterdam", "Amsterdam"),
+    ("Europe/Madrid", "Madrid"),
+    ("Europe/Rome", "Rome"),
+    ("Europe/Stockholm", "Stockholm"),
+    ("Europe/Warsaw", "Warsaw"),
+    ("Europe/Athens", "Athens"),
+    ("Europe/Istanbul", "Istanbul"),
+    ("Asia/Dubai", "Dubai"),
+    ("Asia/Kolkata", "India (Kolkata)"),
+    ("Asia/Karachi", "Pakistan (Karachi)"),
+    ("Asia/Bangkok", "Bangkok"),
+    ("Asia/Singapore", "Singapore"),
+    ("Asia/Hong_Kong", "Hong Kong"),
+    ("Asia/Shanghai", "Shanghai"),
+    ("Asia/Tokyo", "Tokyo"),
+    ("Asia/Seoul", "Seoul"),
+    ("Australia/Sydney", "Sydney"),
+    ("Australia/Melbourne", "Melbourne"),
+    ("Pacific/Auckland", "Auckland"),
+]
 
 
 def build_router(db, get_current_user):
@@ -82,6 +147,11 @@ def build_router(db, get_current_user):
         s = await get_settings_doc(db, user["_id"])
         s.pop("user_id", None)
         return s
+
+    @router.get("/settings/timezones")
+    async def list_timezones():
+        """Return the curated timezone list rendered in the settings UI."""
+        return {"timezones": [{"value": z, "label": l} for z, l in COMMON_TIMEZONES]}
 
     @router.get("/suppressed-senders")
     async def list_suppressed(user: dict = Depends(get_current_user)):
