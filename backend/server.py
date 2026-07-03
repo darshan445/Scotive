@@ -18,6 +18,8 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, BeforeValidator, ConfigDict, EmailStr, Field
 from starlette.middleware.cors import CORSMiddleware
 
+from gmail_oauth import build_router as build_gmail_router
+
 
 # ---------------------------------------------------------------------------
 # Mongo connection
@@ -403,6 +405,7 @@ async def reset_password(payload: ResetPasswordInput):
 
 # Wire routers
 api_router.include_router(auth_router)
+api_router.include_router(build_gmail_router(db, get_current_user))
 app.include_router(api_router)
 
 
@@ -436,6 +439,8 @@ async def on_startup():
     await db.login_attempts.create_index("identifier")
     await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
     await db.password_reset_tokens.create_index("token")
+    await db.gmail_connections.create_index("user_id", unique=True)
+    await db.oauth_states.create_index("state", unique=True)
     await seed_admin()
 
 
