@@ -18,4 +18,4 @@
 - **F9 Continuous sync + daily digest email + escalation ladder scheduler** (pre-due 3d / due-date / firm 3d after / final 10d after) + Gmail push/poll for new mail.
 
 ## Instructions to next agent
-User builds feature-by-feature and approves each. NO auto-testing (user tests themselves). Backend URL: `https://client-ledger-hub-3.preview.emergentagent.com`. Env keys already set: JWT_SECRET, GOOGLE_CLIENT_ID/SECRET, GMAIL_REDIRECT_URI, ENCRYPTION_KEY, OPENROUTER_API_KEY. Admin: admin@scotive.com / Admin@Scotive1.
+User builds feature-by-feature and approves each. NO auto-testing (user tests themselves). Backend URL: `https://partial-pay-1.preview.emergentagent.com`. Env keys already set: JWT_SECRET, GOOGLE_CLIENT_ID/SECRET, GMAIL_REDIRECT_URI, ENCRYPTION_KEY, OPENROUTER_API_KEY. Admin: admin@scotive.com / Admin@Scotive1.
