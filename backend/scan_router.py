@@ -73,6 +73,94 @@ def _serialize(doc: dict) -> dict:
     return out
 
 
+def _parse_date(v):
+    """Return a datetime.date or None."""
+    if not v:
+        return None
+    if isinstance(v, datetime):
+        return v.date()
+    if isinstance(v, str):
+        try:
+            return datetime.fromisoformat(v.replace("Z", "+00:00")).date()
+        except Exception:
+            try:
+                return datetime.strptime(v[:10], "%Y-%m-%d").date()
+            except Exception:
+                return None
+    return None
+
+
+def _compute_client_stats(invoices: list[dict]) -> dict | None:
+    """Compute payment behavior for a client from their serialized invoice list.
+
+    Returns a stats dict when the client has ≥2 completed payment cycles
+    (paid invoices), otherwise None so the frontend can skip the whole card.
+
+    Metrics:
+      - payment_cycles: count of paid invoices
+      - avg_days_late: mean of max(0, paid_date - due_date) across paid invoices
+        that had a due_date. Nil when none had a due date.
+      - promise_keep_rate: kept / (kept + broken)
+          kept   = paid invoice whose paid_date ≤ promise_date + 1d
+          broken = status == "promise_broken" OR (paid invoice with paid_date > promise_date + 1d)
+        Nil when no promises were ever recorded on this client's invoices.
+      - risk_hint: "on_time" | "slow" | "risky"
+    """
+    paid = [i for i in invoices if i.get("status") == "paid"]
+    cycles = len(paid)
+    if cycles < 2:
+        return None
+
+    # Avg days late (only among paid invoices with a due_date)
+    day_lates: list[int] = []
+    for inv in paid:
+        due = _parse_date(inv.get("due_date"))
+        paid_at = _parse_date(inv.get("paid_at")) or _parse_date(inv.get("status_updated_at"))
+        if due and paid_at:
+            day_lates.append(max(0, (paid_at - due).days))
+    avg_days_late = round(sum(day_lates) / len(day_lates), 1) if day_lates else None
+
+    # Promise keep rate — considers every invoice ever seen for this client
+    kept = 0
+    broken = 0
+    for inv in invoices:
+        promise = _parse_date(inv.get("promise_date"))
+        status = inv.get("status")
+        if status == "promise_broken":
+            broken += 1
+            continue
+        if not promise:
+            continue
+        if status == "paid":
+            paid_at = _parse_date(inv.get("paid_at"))
+            if paid_at:
+                if (paid_at - promise).days <= 1:
+                    kept += 1
+                else:
+                    broken += 1
+    denom = kept + broken
+    promise_keep_rate = round(kept / denom, 2) if denom else None
+
+    # Risk hint
+    late = avg_days_late if avg_days_late is not None else 0
+    keep = promise_keep_rate if promise_keep_rate is not None else 1.0
+    if late <= 2 and keep >= 0.8:
+        risk = "on_time"
+    elif late >= 14 or keep < 0.5:
+        risk = "risky"
+    else:
+        risk = "slow"
+
+    return {
+        "payment_cycles": cycles,
+        "avg_days_late": avg_days_late,
+        "promise_keep_rate": promise_keep_rate,
+        "promise_kept": kept,
+        "promise_total": denom,
+        "risk_hint": risk,
+    }
+
+
 def build_router(db, get_current_user):
     router = APIRouter(tags=["scan"])
 
@@ -331,12 +419,16 @@ def build_router(db, get_current_user):
                 total_open += float(doc.get("balance_remaining") or doc.get("amount") or 0)
         if not invoices:
             raise HTTPException(status_code=404, detail="Client not found")
+
+        stats = _compute_client_stats(invoices)
+
         return {
             "email": email,
             "name": primary_name,
             "identities": [{"email": e, "message_count": n} for e, n in sorted(identities.items(), key=lambda x: -x[1])],
             "invoices": invoices,
             "total_open": round(total_open, 2),
+            "stats": stats,  # None when payment_cycles < 2
         }
 
     # ---- Review queue -----------------------------------------------------
