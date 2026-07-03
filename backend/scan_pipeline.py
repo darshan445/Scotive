@@ -49,13 +49,44 @@ NOISE_SENDER_PATTERNS = [
 ]
 NOISE_RE = re.compile("|".join(NOISE_SENDER_PATTERNS), re.I)
 
-# Known money/processor senders — ALWAYS keep, even if user never replied
+# Known money/processor senders — ALWAYS keep, even if user never replied.
+# Excludes SaaS vendors that bill the user (those are `VENDOR_DOMAINS` below).
 PAYMENT_SENDER_DOMAINS = {
     "stripe.com", "paypal.com", "quickbooks.com", "intuit.com",
     "freshbooks.com", "waveapps.com", "zoho.com", "square.com",
     "chase.com", "bankofamerica.com", "wellsfargo.com", "wise.com",
-    "gocardless.com", "xero.com",
+    "gocardless.com", "xero.com", "mercury.com",
 }
+
+# Vendors/SaaS that bill THE USER for services the user consumes.
+# Emails FROM these domains are subscription/hosting bills, NOT invoices the
+# user sent to a client. We surface them in the review queue at best (never
+# straight into the ledger) so the user can consciously ignore or file them.
+VENDOR_DOMAINS = {
+    "cloudflare.com", "notify.cloudflare.com",
+    "vultr.com", "digitalocean.com", "linode.com",
+    "aws.amazon.com", "amazonaws.com", "amazon.com",
+    "googlecloud.com", "cloud.google.com", "workspace.google.com", "google.com",
+    "microsoft.com", "azure.com", "office.com",
+    "anthropic.com", "openai.com", "cohere.ai", "openrouter.ai",
+    "github.com", "gitlab.com", "bitbucket.org",
+    "vercel.com", "netlify.com", "heroku.com", "render.com", "fly.io",
+    "figma.com", "notion.so", "slack.com", "linear.app",
+    "atlassian.com", "adobe.com", "canva.com",
+    "shopify.com", "cursor.sh", "cursor.com",
+}
+
+
+def _is_vendor(sender_domain: str) -> bool:
+    if not sender_domain:
+        return False
+    if sender_domain in VENDOR_DOMAINS:
+        return True
+    # Match subdomains like billing.cloudflare.com
+    for v in VENDOR_DOMAINS:
+        if sender_domain.endswith("." + v):
+            return True
+    return False
 
 # Money-signal keywords in subject or body
 MONEY_KEYWORDS = [
@@ -127,22 +158,26 @@ Return STRICT JSON only, no prose. Schema:
 }
 
 Rules:
-- "invoice_sent" = the USER sent an invoice to a client.
-- "payment_promise" = client said they will pay by a date.
-- "partial_payment" = client sent part of an invoice; extract that partial amount, not the full invoice.
-- "receipt" = a processor (Stripe/PayPal/bank) OR the client confirming a payment came in. Set counterparty_name to the PAYER name (the client that paid), not the processor. amount = payment amount received.
-- "payment_claim" = client says they paid but no processor confirmation.
-- Set is_money_related=false and kind="none" for project chatter, newsletters, meeting requests, general work talk.
+- CRITICAL DIRECTION CHECK: We only track invoices the USER SENT to their clients (money owed TO the user). We do NOT track subscription bills, vendor invoices, or SaaS charges the user PAYS (money the user OWES to vendors).
+- "invoice_sent" = the USER sent an invoice to their own client for services/products the USER provides. The user's email appears as the sender/FROM (or the user's business is named as the biller). If the email is FROM a well-known vendor (Cloudflare, Vultr, AWS, Anthropic, OpenAI, GitHub, Google Workspace, Microsoft, Adobe, Slack, Notion, Linear, Figma, Vercel, Netlify, Heroku, DigitalOcean, hosting/SaaS/subscription providers of any kind) to the user, set is_money_related=false and kind="none" — the user is the CUSTOMER, not the vendor.
+- "payment_promise" = a CLIENT of the user said they will pay the user by a date. Never applies to vendor dunning notices ("we will retry your payment").
+- "partial_payment" = a client sent part of an invoice the user issued.
+- "receipt" = a payment processor confirms someone PAID THE USER. Set counterparty_name to the PAYER (the client who paid). If the "receipt" is from a vendor charging the user (e.g. "your Anthropic subscription of $23.60 was charged"), that is NOT a receipt of money received — set is_money_related=false and kind="none".
+- "payment_claim" = a client says they paid the user but no processor confirmation.
+- If the user's own email address appears as the counterparty (they'd be invoicing themselves), set is_money_related=false and kind="none".
+- Set is_money_related=false and kind="none" for: subscription renewal notices, "payment failed" from a vendor to the user, "your invoice is available" from a SaaS to the user, project chatter, newsletters, meeting requests, general work talk.
 - Do not invent amounts, dates, or names. Return null when unsure.
+- When direction is ambiguous, lower the confidence below 0.75 so the item lands in the review queue.
 """
 
 
-async def extract_with_ai(msg: dict) -> Optional[dict]:
+async def extract_with_ai(msg: dict, my_email: str = "") -> Optional[dict]:
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
         return None
 
     user_content = (
+        f"USER_EMAIL: {my_email or 'unknown'}\n"
         f"FROM: {msg.get('from','')}\n"
         f"TO: {msg.get('to','')}\n"
         f"SUBJECT: {msg.get('subject','')}\n"
@@ -208,6 +243,11 @@ async def run_historical_scan(db, user_id, job_id, months: int = 12):
         await _update_job(db, job_id, {"status": "error", "phase": "auth", "error": "Gmail auth failed. Please reconnect."})
         return
 
+    # Load user's Gmail address up-front so extraction + writer can enforce
+    # direction guardrails (never invoice yourself, never treat vendors as clients).
+    _conn = await db.gmail_connections.find_one({"user_id": user_id})
+    my_email = ((_conn or {}).get("email") or "").lower()
+
     counts = await _counts_dict()
 
     # PHASE 1: fetching IDs
@@ -250,7 +290,7 @@ async def run_historical_scan(db, user_id, job_id, months: int = 12):
 
     async def _one(m):
         async with sem:
-            ext = await extract_with_ai(m)
+            ext = await extract_with_ai(m, my_email=my_email)
             if ext:
                 results.append((m, ext))
                 nonlocal_counts["ai_extracted"] += 1
@@ -262,98 +302,17 @@ async def run_historical_scan(db, user_id, job_id, months: int = 12):
     counts["ai_extracted"] = nonlocal_counts["ai_extracted"]
     await _update_job(db, job_id, {"phase": "building", "counts": counts})
 
-    # PHASE 5: build invoices from money-related results
-    CONFIDENCE_THRESHOLD = 0.75
+    # PHASE 5: build invoices from money-related results (delegates to the
+    # shared _extract_and_write() helper so guardrails apply here too).
     now_iso = datetime.now(timezone.utc).isoformat()
     invoices_created = 0
     review_created = 0
     receipts_created = 0
     for msg, ext in results:
-        if not ext.get("is_money_related"):
-            continue
-        kind = ext.get("kind") or "none"
-
-        # --- Receipt branch: goes into db.receipts, not db.invoices --------
-        if kind == "receipt":
-            amount = ext.get("amount")
-            if amount in (None, 0):
-                continue
-            existing_r = await db.receipts.find_one({"user_id": user_id, "source_message_id": msg["id"]})
-            if existing_r:
-                continue
-            await db.receipts.insert_one({
-                "user_id": user_id,
-                "amount": float(amount),
-                "currency": ext.get("currency") or "USD",
-                "payer_name": ext.get("counterparty_name"),
-                "processor_from": msg.get("from"),
-                "source_message_id": msg["id"],
-                "source_thread_id": msg.get("thread_id"),
-                "source_subject": msg.get("subject"),
-                "source_date": msg.get("date"),
-                "evidence_sentence": ext.get("evidence_sentence"),
-                "confidence": float(ext.get("confidence") or 0),
-                "match_status": "unmatched",  # unmatched | matched | ambiguous | user_confirmed | rejected
-                "matched_invoice_id": None,
-                "candidate_invoice_ids": [],
-                "created_at": now_iso,
-            })
-            receipts_created += 1
-            continue
-
-        if kind not in ("invoice_sent", "payment_promise", "partial_payment"):
-            continue
-        amount = ext.get("amount")
-        if amount in (None, 0):
-            continue
-        counterparty_email = (ext.get("counterparty_email") or _extract_email_addr(msg.get("from", ""))).lower()
-        conn = await db.gmail_connections.find_one({"user_id": user_id})
-        my_email = (conn or {}).get("email", "").lower()
-        if counterparty_email == my_email:
-            to_addr = _extract_email_addr(msg.get("to", ""))
-            counterparty_email = to_addr.lower()
-
-        status = "invoiced"
-        if kind == "payment_promise":
-            status = "promised"
-        elif kind == "partial_payment":
-            status = "partially_paid"
-
-        confidence = float(ext.get("confidence") or 0)
-        base_doc = {
-            "user_id": user_id,
-            "counterparty_email": counterparty_email,
-            "counterparty_name": ext.get("counterparty_name"),
-            "amount": float(amount),
-            "balance_remaining": float(amount),
-            "paid_amount": 0.0,
-            "currency": ext.get("currency") or "USD",
-            "invoice_ref": ext.get("invoice_ref"),
-            "due_date": ext.get("due_date"),
-            "promise_date": ext.get("promise_date"),
-            "status": status,
-            "kind": kind,
-            "source_message_id": msg["id"],
-            "source_thread_id": msg.get("thread_id"),
-            "source_subject": msg.get("subject"),
-            "source_from": msg.get("from"),
-            "source_date": msg.get("date"),
-            "evidence_sentence": ext.get("evidence_sentence"),
-            "confidence": confidence,
-            "created_at": now_iso,
-        }
-
-        if confidence < CONFIDENCE_THRESHOLD:
-            existing_r = await db.review_items.find_one({"user_id": user_id, "source_message_id": msg["id"]})
-            if not existing_r:
-                await db.review_items.insert_one({**base_doc, "review_status": "pending"})
-                review_created += 1
-            continue
-
-        existing = await db.invoices.find_one({"user_id": user_id, "source_message_id": msg["id"]})
-        if not existing:
-            await db.invoices.insert_one(base_doc)
-            invoices_created += 1
+        inv_c, rec_c, rev_c = await _extract_and_write(db, user_id, msg, ext, my_email, now_iso)
+        invoices_created += inv_c
+        receipts_created += rec_c
+        review_created += rev_c
 
     counts["invoices_created"] = invoices_created
     counts["review_items"] = review_created
@@ -389,9 +348,51 @@ async def _extract_and_write(db, user_id, msg, ext, my_email, now_iso, CONFIDENC
         return (0, 0, 0)
     kind = ext.get("kind") or "none"
 
+    sender_email = _extract_email_addr(msg.get("from", ""))
+    sender_domain = _sender_domain(sender_email)
+    my_email_lc = (my_email or "").lower()
+    my_domain = _sender_domain(my_email_lc)
+
+    # Direction guardrail: if the email is FROM a well-known vendor domain,
+    # this is a bill the user PAYS — not an invoice the user issued and not a
+    # receipt of incoming money. Send it to the review queue so the user can
+    # dismiss/suppress, never straight into the ledger. Overrides whatever the
+    # LLM said.
+    if _is_vendor(sender_domain) and kind in ("invoice_sent", "payment_promise", "partial_payment", "receipt"):
+        amount = ext.get("amount")
+        if amount in (None, 0):
+            return (0, 0, 0)
+        existing_r = await db.review_items.find_one({"user_id": user_id, "source_message_id": msg["id"]})
+        if existing_r:
+            return (0, 0, 0)
+        await db.review_items.insert_one({
+            "user_id": user_id,
+            "counterparty_email": sender_email,
+            "counterparty_name": ext.get("counterparty_name"),
+            "amount": float(amount),
+            "currency": ext.get("currency") or "USD",
+            "kind": kind,
+            "status": "invoiced",
+            "source_message_id": msg["id"],
+            "source_thread_id": msg.get("thread_id"),
+            "source_subject": msg.get("subject"),
+            "source_from": msg.get("from"),
+            "source_date": msg.get("date"),
+            "evidence_sentence": ext.get("evidence_sentence"),
+            "confidence": float(ext.get("confidence") or 0),
+            "review_status": "pending",
+            "review_reason": "vendor_domain",
+            "created_at": now_iso,
+        })
+        return (0, 0, 1)
+
     if kind == "receipt":
         amount = ext.get("amount")
         if amount in (None, 0):
+            return (0, 0, 0)
+        # Reject "receipts" whose payer is the user themselves (self-receipt)
+        payer_name = (ext.get("counterparty_name") or "").lower()
+        if my_email_lc and (my_email_lc in payer_name or (my_domain and my_domain in payer_name)):
             return (0, 0, 0)
         existing = await db.receipts.find_one({"user_id": user_id, "source_message_id": msg["id"]})
         if existing:
@@ -421,9 +422,13 @@ async def _extract_and_write(db, user_id, msg, ext, my_email, now_iso, CONFIDENC
     if amount in (None, 0):
         return (0, 0, 0)
 
-    counterparty_email = (ext.get("counterparty_email") or _extract_email_addr(msg.get("from", ""))).lower()
-    if counterparty_email == (my_email or "").lower():
+    counterparty_email = (ext.get("counterparty_email") or sender_email).lower()
+    if counterparty_email == my_email_lc:
         counterparty_email = _extract_email_addr(msg.get("to", "")).lower()
+    # Direction guardrail: refuse to create an invoice against the user's own
+    # email or their own domain — you can't be your own client.
+    if counterparty_email == my_email_lc or (my_domain and _sender_domain(counterparty_email) == my_domain):
+        return (0, 0, 0)
 
     status = "invoiced"
     if kind == "payment_promise":
@@ -563,7 +568,7 @@ async def run_incremental_sync(db, user_id) -> dict:
 
         async def _one(m):
             async with sem:
-                return (m, await extract_with_ai(m))
+                return (m, await extract_with_ai(m, my_email=my_email))
 
         pairs = await asyncio.gather(*[_one(m) for m in survivors])
         now_iso = datetime.now(timezone.utc).isoformat()
