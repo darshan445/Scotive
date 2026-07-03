@@ -240,4 +240,106 @@ def build_router(db, get_current_user):
         await db.review_items.update_one({"_id": item["_id"]}, {"$set": {"review_status": "suppressed"}})
         return {"ok": True}
 
+    # ---- Lifecycle transitions -------------------------------------------
+    class InvoiceActionInput(BaseModel):
+        action: str  # mark_paid | write_off | dispute | resolve_dispute | pause | resume
+
+    @router.post("/invoices/{invoice_id}/action")
+    async def invoice_action(invoice_id: str, payload: InvoiceActionInput, user: dict = Depends(get_current_user)):
+        try:
+            inv = await db.invoices.find_one({"_id": ObjectId(invoice_id), "user_id": user["_id"]})
+        except Exception:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        if not inv:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        now = datetime.now(timezone.utc).isoformat()
+        action = payload.action
+        patch: dict = {"status_updated_at": now}
+        if action == "mark_paid":
+            patch["status"] = "paid"
+            patch["paid_at"] = now
+        elif action == "write_off":
+            patch["status"] = "written_off"
+        elif action == "dispute":
+            patch["status"] = "disputed"
+        elif action == "resolve_dispute":
+            patch["status"] = "invoiced"
+        elif action == "pause":
+            patch["chasing_paused"] = True
+        elif action == "resume":
+            patch["chasing_paused"] = False
+        else:
+            raise HTTPException(status_code=400, detail="Unknown action")
+        await db.invoices.update_one({"_id": inv["_id"]}, {"$set": patch})
+        await db.invoice_events.insert_one({
+            "user_id": user["_id"], "invoice_id": inv["_id"], "action": action, "at": now,
+        })
+        return {"ok": True}
+
+    @router.post("/lifecycle/run")
+    async def run_lifecycle(user: dict = Depends(get_current_user)):
+        """Recompute date-driven transitions: overdue + promise_broken."""
+        today = datetime.now(timezone.utc).date()
+        grace_days = 1
+        overdue_updates = 0
+        broken_updates = 0
+        # Invoiced -> Overdue
+        async for inv in db.invoices.find({"user_id": user["_id"], "status": "invoiced", "due_date": {"$ne": None}}):
+            try:
+                due = datetime.fromisoformat(inv["due_date"]).date()
+            except Exception:
+                continue
+            if (today - due).days > grace_days:
+                await db.invoices.update_one({"_id": inv["_id"]}, {"$set": {"status": "overdue"}})
+                overdue_updates += 1
+        # Promised -> Promise broken
+        async for inv in db.invoices.find({"user_id": user["_id"], "status": "promised", "promise_date": {"$ne": None}}):
+            try:
+                pd = datetime.fromisoformat(inv["promise_date"]).date()
+            except Exception:
+                continue
+            if (today - pd).days > grace_days:
+                await db.invoices.update_one({"_id": inv["_id"]}, {"$set": {"status": "promise_broken"}})
+                broken_updates += 1
+        return {"ok": True, "overdue": overdue_updates, "promise_broken": broken_updates}
+
+    # ---- Today digest ----------------------------------------------------
+    @router.get("/digest/today")
+    async def digest_today(user: dict = Depends(get_current_user)):
+        today = datetime.now(timezone.utc).date()
+        due_overdue = []
+        broken = []
+        needs_reply = []  # placeholder — populated when sync detects unanswered questions
+        resolved = []
+        async for inv in db.invoices.find({"user_id": user["_id"]}):
+            s = inv.get("status")
+            row = _serialize(inv)
+            if s in ("overdue",):
+                due_overdue.append(row)
+            elif s == "invoiced" and inv.get("due_date"):
+                try:
+                    due = datetime.fromisoformat(inv["due_date"]).date()
+                    if due <= today:
+                        due_overdue.append(row)
+                except Exception:
+                    pass
+            elif s == "promise_broken":
+                broken.append(row)
+            elif s == "disputed":
+                needs_reply.append(row)
+            elif s == "paid":
+                paid_at = inv.get("paid_at")
+                try:
+                    d = datetime.fromisoformat(paid_at).date() if paid_at else None
+                    if d and (today - d).days <= 1:
+                        resolved.append(row)
+                except Exception:
+                    pass
+        return {
+            "due_overdue": due_overdue,
+            "broken_promises": broken,
+            "needs_reply": needs_reply,
+            "resolved": resolved,
+        }
+
     return router

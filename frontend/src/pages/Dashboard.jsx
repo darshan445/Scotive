@@ -5,6 +5,7 @@ import { EmptyStateHero } from "@/components/EmptyStateHero";
 import { ConnectionPanel } from "@/components/ConnectionPanel";
 import { ScanProgressCard } from "@/components/ScanProgressCard";
 import { LedgerCard } from "@/components/LedgerCard";
+import { TodayCard } from "@/components/TodayCard";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 import { useGmailCallbackToast } from "@/hooks/useGmailCallbackToast";
 import { useLedger, useScan } from "@/hooks/useScan";
@@ -71,7 +72,8 @@ export default function DashboardPage() {
                             <ScanProgressCard state={scanState} />
                         ) : null}
 
-                        {ledgerReady ? <LedgerCard ledger={ledger} /> : null}
+                        {ledgerReady ? <TodayCard /> : null}
+                        {ledgerReady ? <LedgerCard ledger={ledger} onChanged={refreshLedger} /> : null}
 
                         {scanState?.has_job === false && status.connected ? (
                             <div className="rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground" data-testid="scan-idle">

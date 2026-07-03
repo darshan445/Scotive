@@ -1,7 +1,9 @@
 import { useEffect, Fragment, useState } from "react";
 import { Link } from "react-router-dom";
-import { ChevronRight, PlusCircle, Quote } from "lucide-react";
+import { ChevronRight, MoreHorizontal, PlusCircle, Quote } from "lucide-react";
 import { api, extractError } from "@/lib/api";
+import { toast } from "sonner";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
 const STATUS_STYLES = {
     invoiced: "bg-gray-100 text-gray-700 border-gray-200",
@@ -76,10 +78,18 @@ function TimelineRow({ invoiceId }) {
     );
 }
 
-export function LedgerCard({ ledger }) {
+export function LedgerCard({ ledger, onChanged }) {
     const [expanded, setExpanded] = useState(null);
     if (!ledger) return null;
     const { invoices = [], total_open = 0, client_count = 0 } = ledger;
+
+    async function act(id, action) {
+        try {
+            await api.post(`/invoices/${id}/action`, { action });
+            toast.success("Updated");
+            onChanged?.();
+        } catch (e) { toast.error(extractError(e)); }
+    }
     return (
         <div className="space-y-6" data-testid="ledger-card">
             <div className="rounded-2xl border border-border bg-card p-6 md:p-8">
@@ -112,6 +122,7 @@ export function LedgerCard({ ledger }) {
                                 <th className="px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider text-right">Amount</th>
                                 <th className="px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Status</th>
                                 <th className="px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Due / Promise</th>
+                                <th className="px-2 py-3 w-8" />
                             </tr>
                         </thead>
                         <tbody>
@@ -148,11 +159,26 @@ export function LedgerCard({ ledger }) {
                                             <td className="px-4 py-3 align-top text-sm text-muted-foreground">
                                                 {inv.promise_date ? <span>Promised {formatDate(inv.promise_date)}</span> : <span>{formatDate(inv.due_date)}</span>}
                                             </td>
+                                            <td className="px-2 py-3 align-top text-right" onClick={(e) => e.stopPropagation()}>
+                                                <DropdownMenu>
+                                                    <DropdownMenuTrigger className="inline-flex items-center justify-center w-7 h-7 rounded hover:bg-muted" data-testid="row-actions-trigger">
+                                                        <MoreHorizontal className="w-4 h-4" />
+                                                    </DropdownMenuTrigger>
+                                                    <DropdownMenuContent align="end">
+                                                        <DropdownMenuItem onClick={() => act(inv._id, "mark_paid")} data-testid="row-mark-paid">Mark paid</DropdownMenuItem>
+                                                        <DropdownMenuItem onClick={() => act(inv._id, "dispute")} data-testid="row-dispute">Mark disputed</DropdownMenuItem>
+                                                        <DropdownMenuItem onClick={() => act(inv._id, inv.chasing_paused ? "resume" : "pause")} data-testid="row-pause">
+                                                            {inv.chasing_paused ? "Resume chasing" : "Pause chasing"}
+                                                        </DropdownMenuItem>
+                                                        <DropdownMenuItem onClick={() => act(inv._id, "write_off")} className="text-red-700" data-testid="row-write-off">Write off</DropdownMenuItem>
+                                                    </DropdownMenuContent>
+                                                </DropdownMenu>
+                                            </td>
                                         </tr>
                                         {isOpen ? (
                                             <tr className="bg-muted/20">
                                                 <td />
-                                                <td colSpan={5} className="px-4 py-4">
+                                                <td colSpan={6} className="px-4 py-4">
                                                     <TimelineRow invoiceId={inv._id} />
                                                 </td>
                                             </tr>
