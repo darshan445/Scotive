@@ -5,16 +5,19 @@ import { EmptyStateHero } from "@/components/EmptyStateHero";
 import { ConnectionPanel } from "@/components/ConnectionPanel";
 import { ScanProgressCard } from "@/components/ScanProgressCard";
 import { LedgerCard } from "@/components/LedgerCard";
+import { PaymentsCard } from "@/components/PaymentsCard";
 import { TodayCard } from "@/components/TodayCard";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 import { useGmailCallbackToast } from "@/hooks/useGmailCallbackToast";
 import { useLedger, useScan } from "@/hooks/useScan";
+import { useReceipts } from "@/hooks/useReceipts";
 
 export default function DashboardPage() {
     const { status, refresh } = useGmailConnection();
     const { state: scanState, startScan, refresh: refreshScan } = useScan();
     const ledgerReady = scanState?.status === "complete";
     const { data: ledger, refresh: refreshLedger } = useLedger(ledgerReady);
+    const { data: receipts, refresh: refreshReceipts } = useReceipts(ledgerReady);
     const autoStartedRef = useRef(false);
 
     useGmailCallbackToast(async (result) => {
@@ -36,10 +39,13 @@ export default function DashboardPage() {
         }
     }, [status?.connected, scanState, startScan]);
 
-    // When scan completes, refresh ledger
+    // When scan completes, refresh ledger + receipts
     useEffect(() => {
-        if (scanState?.status === "complete") refreshLedger();
-    }, [scanState?.status, refreshLedger]);
+        if (scanState?.status === "complete") {
+            refreshLedger();
+            refreshReceipts();
+        }
+    }, [scanState?.status, refreshLedger, refreshReceipts]);
 
     return (
         <div className="min-h-screen bg-background text-foreground" data-testid="dashboard-root">
@@ -73,7 +79,25 @@ export default function DashboardPage() {
                         ) : null}
 
                         {ledgerReady ? <TodayCard /> : null}
-                        {ledgerReady ? <LedgerCard ledger={ledger} onChanged={refreshLedger} /> : null}
+                        {ledgerReady ? (
+                            <PaymentsCard
+                                receipts={receipts}
+                                ledger={ledger}
+                                onChanged={() => {
+                                    refreshLedger();
+                                    refreshReceipts();
+                                }}
+                            />
+                        ) : null}
+                        {ledgerReady ? (
+                            <LedgerCard
+                                ledger={ledger}
+                                onChanged={() => {
+                                    refreshLedger();
+                                    refreshReceipts();
+                                }}
+                            />
+                        ) : null}
 
                         {scanState?.has_job === false && status.connected ? (
                             <div className="rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground" data-testid="scan-idle">

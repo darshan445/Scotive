@@ -5,6 +5,7 @@ Phases: queued -> fetching -> filtering -> extracting -> building -> complete | 
 from __future__ import annotations
 
 import asyncio
+import difflib
 import json
 import logging
 import os
@@ -13,6 +14,15 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import httpx
+
+# Open-invoice statuses used by receipt reconciliation
+_OPEN_STATUSES = ("invoiced", "overdue", "promised", "partially_paid", "promise_broken")
+
+# Receipt reconciliation thresholds
+AMOUNT_TOLERANCE_PCT = 0.02  # ±2%
+AMOUNT_TOLERANCE_ABS = 1.00  # $1 absolute floor for small amounts
+NAME_SIMILARITY_MIN = 0.6
+PARTIAL_MIN_PCT = 0.10       # receipt must be ≥10% of invoice to count as partial (avoids noise)
 
 from gmail_client import GmailAuthError, get_access_token, get_message, list_message_ids
 
@@ -119,7 +129,9 @@ Return STRICT JSON only, no prose. Schema:
 Rules:
 - "invoice_sent" = the USER sent an invoice to a client.
 - "payment_promise" = client said they will pay by a date.
-- "receipt" = a processor (Stripe/PayPal/bank) confirming a payment came in.
+- "partial_payment" = client sent part of an invoice; extract that partial amount, not the full invoice.
+- "receipt" = a processor (Stripe/PayPal/bank) OR the client confirming a payment came in. Set counterparty_name to the PAYER name (the client that paid), not the processor. amount = payment amount received.
+- "payment_claim" = client says they paid but no processor confirmation.
 - Set is_money_related=false and kind="none" for project chatter, newsletters, meeting requests, general work talk.
 - Do not invent amounts, dates, or names. Return null when unsure.
 """
@@ -255,10 +267,40 @@ async def run_historical_scan(db, user_id, job_id, months: int = 12):
     now_iso = datetime.now(timezone.utc).isoformat()
     invoices_created = 0
     review_created = 0
+    receipts_created = 0
     for msg, ext in results:
         if not ext.get("is_money_related"):
             continue
         kind = ext.get("kind") or "none"
+
+        # --- Receipt branch: goes into db.receipts, not db.invoices --------
+        if kind == "receipt":
+            amount = ext.get("amount")
+            if amount in (None, 0):
+                continue
+            existing_r = await db.receipts.find_one({"user_id": user_id, "source_message_id": msg["id"]})
+            if existing_r:
+                continue
+            await db.receipts.insert_one({
+                "user_id": user_id,
+                "amount": float(amount),
+                "currency": ext.get("currency") or "USD",
+                "payer_name": ext.get("counterparty_name"),
+                "processor_from": msg.get("from"),
+                "source_message_id": msg["id"],
+                "source_thread_id": msg.get("thread_id"),
+                "source_subject": msg.get("subject"),
+                "source_date": msg.get("date"),
+                "evidence_sentence": ext.get("evidence_sentence"),
+                "confidence": float(ext.get("confidence") or 0),
+                "match_status": "unmatched",  # unmatched | matched | ambiguous | user_confirmed | rejected
+                "matched_invoice_id": None,
+                "candidate_invoice_ids": [],
+                "created_at": now_iso,
+            })
+            receipts_created += 1
+            continue
+
         if kind not in ("invoice_sent", "payment_promise", "partial_payment"):
             continue
         amount = ext.get("amount")
@@ -283,6 +325,8 @@ async def run_historical_scan(db, user_id, job_id, months: int = 12):
             "counterparty_email": counterparty_email,
             "counterparty_name": ext.get("counterparty_name"),
             "amount": float(amount),
+            "balance_remaining": float(amount),
+            "paid_amount": 0.0,
             "currency": ext.get("currency") or "USD",
             "invoice_ref": ext.get("invoice_ref"),
             "due_date": ext.get("due_date"),
@@ -313,9 +357,169 @@ async def run_historical_scan(db, user_id, job_id, months: int = 12):
 
     counts["invoices_created"] = invoices_created
     counts["review_items"] = review_created
+    counts["receipts_created"] = receipts_created
+
+    # PHASE 6: reconcile unmatched receipts against open invoices
+    try:
+        recon = await reconcile_receipts(db, user_id)
+        counts["receipts_matched"] = recon.get("matched", 0)
+        counts["receipts_ambiguous"] = recon.get("ambiguous", 0)
+    except Exception as e:  # pragma: no cover
+        logger.warning("Receipt reconcile failed: %s", e)
+
     await _update_job(db, job_id, {
         "status": "complete",
         "phase": "complete",
         "counts": counts,
         "finished_at": datetime.now(timezone.utc).isoformat(),
     })
+
+
+# ---------------------------------------------------------------------------
+# Receipt reconciliation
+# ---------------------------------------------------------------------------
+def _name_similarity(a: Optional[str], b: Optional[str]) -> float:
+    if not a or not b:
+        return 0.0
+    return difflib.SequenceMatcher(None, a.lower().strip(), b.lower().strip()).ratio()
+
+
+def _amount_close(receipt_amt: float, invoice_balance: float) -> tuple[bool, bool]:
+    """Return (is_close_to_full, is_valid_partial).
+
+    - is_close_to_full: receipt within tolerance of remaining balance → treat as full-payment closure
+    - is_valid_partial: receipt is smaller than balance by more than tolerance AND ≥ PARTIAL_MIN_PCT
+    """
+    if invoice_balance <= 0 or receipt_amt <= 0:
+        return (False, False)
+    tol = max(invoice_balance * AMOUNT_TOLERANCE_PCT, AMOUNT_TOLERANCE_ABS)
+    if abs(receipt_amt - invoice_balance) <= tol:
+        return (True, False)
+    if receipt_amt < invoice_balance - tol and receipt_amt >= invoice_balance * PARTIAL_MIN_PCT:
+        return (False, True)
+    # Receipt bigger than balance → not a clean match (overpayment / wrong invoice)
+    return (False, False)
+
+
+async def reconcile_receipts(db, user_id) -> dict:
+    """Match `unmatched` receipts against open invoices for this user.
+
+    Returns: {"matched": N, "ambiguous": M, "partial": P}
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+    matched = 0
+    ambiguous = 0
+    partial = 0
+
+    # Load all open invoices for this user once
+    open_invoices: list[dict] = []
+    async for inv in db.invoices.find({"user_id": user_id, "status": {"$in": list(_OPEN_STATUSES)}}):
+        # Ensure balance_remaining is populated for legacy rows
+        if "balance_remaining" not in inv or inv["balance_remaining"] is None:
+            inv["balance_remaining"] = float(inv.get("amount") or 0)
+        open_invoices.append(inv)
+
+    async for rc in db.receipts.find({"user_id": user_id, "match_status": "unmatched"}):
+        rc_amount = float(rc.get("amount") or 0)
+        payer = rc.get("payer_name")
+        candidates = []
+        for inv in open_invoices:
+            bal = float(inv.get("balance_remaining") or 0)
+            if bal <= 0:
+                continue
+            close_full, valid_partial = _amount_close(rc_amount, bal)
+            if not (close_full or valid_partial):
+                continue
+            name_sim = max(
+                _name_similarity(payer, inv.get("counterparty_name")),
+                _name_similarity(payer, inv.get("counterparty_email")),
+            )
+            amt_score = 1.0 if close_full else max(0.0, 1.0 - abs(rc_amount - bal) / bal)
+            score = 0.6 * amt_score + 0.4 * name_sim
+            candidates.append({
+                "invoice": inv,
+                "score": score,
+                "name_sim": name_sim,
+                "close_full": close_full,
+                "valid_partial": valid_partial,
+            })
+
+        # Filter: require minimum name similarity OR a very tight full match
+        candidates = [
+            c for c in candidates
+            if c["name_sim"] >= NAME_SIMILARITY_MIN or (c["close_full"] and c["score"] >= 0.7)
+        ]
+
+        if not candidates:
+            continue
+
+        candidates.sort(key=lambda c: c["score"], reverse=True)
+        top = candidates[0]
+        second = candidates[1] if len(candidates) > 1 else None
+
+        # If more than one candidate is within 0.05 of top → ambiguous
+        if second and (top["score"] - second["score"]) < 0.05:
+            await db.receipts.update_one(
+                {"_id": rc["_id"]},
+                {"$set": {
+                    "match_status": "ambiguous",
+                    "candidate_invoice_ids": [str(c["invoice"]["_id"]) for c in candidates[:3]],
+                    "updated_at": now_iso,
+                }},
+            )
+            ambiguous += 1
+            continue
+
+        inv = top["invoice"]
+        bal = float(inv.get("balance_remaining") or inv.get("amount") or 0)
+        applied = min(rc_amount, bal)
+        new_balance = round(bal - applied, 2)
+        new_paid = round(float(inv.get("paid_amount") or 0) + applied, 2)
+
+        if top["close_full"] or new_balance <= 0.005:
+            new_status = "paid"
+            paid_at = now_iso
+        else:
+            new_status = "partially_paid"
+            paid_at = inv.get("paid_at")
+            partial += 1
+
+        await db.invoices.update_one(
+            {"_id": inv["_id"]},
+            {"$set": {
+                "status": new_status,
+                "balance_remaining": max(new_balance, 0.0),
+                "paid_amount": new_paid,
+                "paid_at": paid_at,
+                "status_updated_at": now_iso,
+            }},
+        )
+        await db.receipts.update_one(
+            {"_id": rc["_id"]},
+            {"$set": {
+                "match_status": "matched",
+                "matched_invoice_id": inv["_id"],
+                "applied_amount": applied,
+                "match_score": top["score"],
+                "updated_at": now_iso,
+            }},
+        )
+        await db.invoice_events.insert_one({
+            "user_id": user_id,
+            "invoice_id": inv["_id"],
+            "action": "receipt_matched",
+            "at": now_iso,
+            "meta": {
+                "receipt_id": rc["_id"],
+                "amount": applied,
+                "balance_after": max(new_balance, 0.0),
+                "payer_name": payer,
+                "score": top["score"],
+            },
+        })
+        # Reflect the balance update locally so subsequent receipts see it
+        inv["balance_remaining"] = max(new_balance, 0.0)
+        inv["status"] = new_status
+        matched += 1
+
+    return {"matched": matched, "ambiguous": ambiguous, "partial": partial}

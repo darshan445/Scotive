@@ -450,6 +450,9 @@ async def on_startup():
     await db.review_items.create_index([("user_id", 1), ("source_message_id", 1)], unique=True)
     await db.review_items.create_index([("user_id", 1), ("review_status", 1)])
     await db.suppressed_senders.create_index([("user_id", 1), ("email", 1)], unique=True)
+    await db.receipts.create_index([("user_id", 1), ("source_message_id", 1)], unique=True)
+    await db.receipts.create_index([("user_id", 1), ("match_status", 1)])
+    await db.invoice_events.create_index([("user_id", 1), ("invoice_id", 1), ("at", -1)])
     await seed_admin()
 
 

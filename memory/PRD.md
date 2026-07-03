@@ -8,11 +8,11 @@
 - **F5 Clients + timelines + review queue**: same-domain identity linking, expandable evidence timelines with quoted sentences. Review queue for confidence < 0.75 with confirm/reject/suppress actions. Pages: `/clients`, `/clients/:email`, `/review`. Endpoints: `/api/invoices/:id/timeline`, `/api/clients`, `/api/clients/:email`, `/api/review-queue/*`.
 - **F6 Lifecycle + Today digest**: state machine (invoiced/overdue/promised/promise_broken/disputed/partially_paid/paid/written_off). Date-driven transitions via `/api/lifecycle/run`. Row actions dropdown. Today card with 4 sections. Endpoints: `/api/invoices/:id/action`, `/api/lifecycle/run`, `/api/digest/today`.
 - **F7 Chase drafts + send**: AI drafts (tone auto by status), regenerate w/ note, quick-compose from rough intent, real Gmail send threaded into original conversation, `chase_sends` log. Endpoints: `/api/invoices/:id/{draft-chase,send-chase}`, `/api/quick-compose`.
+- **F8a Receipt matching + partial payments** (Jul 2026): AI pipeline routes `kind:"receipt"` into new `receipts` collection. `reconcile_receipts()` matches on amount (±2% or $1 floor) + payer-name SequenceMatcher (≥0.6). Score = 0.6·amount + 0.4·name; auto-match if lead ≥0.05 else `ambiguous`. Invoices carry `balance_remaining`/`paid_amount`; partial → `partially_paid` w/ decremented balance, full → `paid`. Timeline surfaces receipt-match events. Frontend `PaymentsCard` on dashboard with ambiguous-disambiguator + recent payments feed. Endpoints: `GET /api/receipts`, `POST /api/receipts/reconcile`, `POST /api/receipts/:id/{match,reject}`. `invoice_events` now snapshot pre-state so `action:"undo"` can revert.
 
 ## Remaining
-- **F8 Receipt matching, partial payments, mark-paid/write-off polish, client stats, settings** — split into:
-  - **8a** Receipt matching + partial payments (cross-thread amount + payer-name similarity, balance reduction, remainder promise)
-  - **8b** Mark-paid / write-off confirm dialogs + undo toast
+- **F8** — split into:
+  - **8b** Mark-paid / write-off confirm dialogs + undo toast (undo backend done; frontend UX next)
   - **8c** Client payment stats (avg days late, promise-keep rate) after 2+ payment cycles
   - **8d** Settings page: grace periods, escalation timing, late-fee toggle, scan window, suppressed senders list, delete account
 - **F9 Continuous sync + daily digest email + escalation ladder scheduler** (pre-due 3d / due-date / firm 3d after / final 10d after) + Gmail push/poll for new mail.

@@ -1,6 +1,6 @@
 import { useEffect, Fragment, useState } from "react";
 import { Link } from "react-router-dom";
-import { ChevronRight, MoreHorizontal, PlusCircle, Quote } from "lucide-react";
+import { ChevronRight, MoreHorizontal, PlusCircle, Quote, Send } from "lucide-react";
 import { api, extractError } from "@/lib/api";
 import { toast } from "sonner";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -155,7 +155,12 @@ export function LedgerCard({ ledger, onChanged }) {
                                                 {inv.source_subject ? <div className="text-[11px] text-muted-foreground truncate max-w-[240px]">{inv.source_subject}</div> : null}
                                             </td>
                                             <td className="px-4 py-3 align-top text-right font-mono tabular-nums text-sm">
-                                                {formatMoney(inv.amount, inv.currency || "USD")}
+                                                <div>{formatMoney(inv.amount, inv.currency || "USD")}</div>
+                                                {inv.status === "partially_paid" && inv.balance_remaining != null && inv.balance_remaining < inv.amount ? (
+                                                    <div className="text-[11px] text-green-700 mt-0.5" data-testid="ledger-balance-remaining">
+                                                        {formatMoney(inv.balance_remaining, inv.currency || "USD")} left
+                                                    </div>
+                                                ) : null}
                                             </td>
                                             <td className="px-4 py-3 align-top"><StatusPill status={inv.status} /></td>
                                             <td className="px-4 py-3 align-top text-sm text-muted-foreground">

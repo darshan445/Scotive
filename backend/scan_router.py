@@ -9,7 +9,68 @@ from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from scan_pipeline import run_historical_scan
+from scan_pipeline import run_historical_scan, reconcile_receipts
+
+logger = logging.getLogger("scotive.scan_router")
+
+
+class StartScanInput(BaseModel):
+    months: int = 12
+
+
+class ReviewConfirmInput(BaseModel):
+    counterparty_email: str | None = None
+    counterparty_name: str | None = None
+    amount: float | None = None
+    currency: str | None = None
+    invoice_ref: str | None = None
+    due_date: str | None = None
+    promise_date: str | None = None
+    status: str | None = None
+    kind: str | None = None
+
+
+_OPEN_STATUSES = ("invoiced", "overdue", "promised", "partially_paid", "promise_broken")
+
+
+class InvoiceActionInput(BaseModel):
+    action: str  # mark_paid | write_off | dispute | resolve_dispute | pause | resume | undo
+
+
+class ChaseDraftInput(BaseModel):
+    tone: str | None = None
+    note: str | None = None
+
+
+class ChaseSendInput(BaseModel):
+    subject: str
+    body: str
+
+
+class QuickComposeInput(BaseModel):
+    invoice_id: str
+    intent: str
+
+
+class ReceiptMatchInput(BaseModel):
+    invoice_id: str
+
+
+def _serialize(doc: dict) -> dict:
+    """Convert a MongoDB doc into a JSON-safe dict. Turns _id/ObjectId into strings."""
+    if not doc:
+        return doc
+    out = {}
+    for k, v in doc.items():
+        if isinstance(v, ObjectId):
+            out[k] = str(v)
+        elif isinstance(v, datetime):
+            out[k] = v.isoformat()
+        else:
+            out[k] = v
+    if "_id" in out and not isinstance(out["_id"], str):
+        out["_id"] = str(out["_id"])
+    return out
 
 
 def build_router(db, get_current_user):
@@ -69,12 +130,88 @@ def build_router(db, get_current_user):
         total_open = 0.0
         clients: set[str] = set()
         async for doc in cursor:
+            # For legacy rows that don't carry balance_remaining, fall back to amount.
+            if doc.get("balance_remaining") is None:
+                doc["balance_remaining"] = float(doc.get("amount") or 0)
             rows.append(_serialize(doc))
-            if doc.get("status") in ("invoiced", "overdue", "promised", "partially_paid", "promise_broken"):
-                total_open += float(doc.get("amount") or 0)
+            if doc.get("status") in _OPEN_STATUSES:
+                total_open += float(doc.get("balance_remaining") or doc.get("amount") or 0)
                 if doc.get("counterparty_email"):
                     clients.add(doc["counterparty_email"])
         return {"invoices": rows, "total_open": round(total_open, 2), "client_count": len(clients)}
+
+    # ---- Receipts --------------------------------------------------------
+    @router.get("/receipts")
+    async def list_receipts(status: str | None = None, user: dict = Depends(get_current_user)):
+        query: dict = {"user_id": user["_id"]}
+        if status:
+            query["match_status"] = status
+        cursor = db.receipts.find(query).sort("source_date", -1)
+        rows = []
+        async for doc in cursor:
+            rows.append(_serialize(doc))
+        return {"receipts": rows, "count": len(rows)}
+
+    @router.post("/receipts/reconcile")
+    async def receipts_reconcile(user: dict = Depends(get_current_user)):
+        result = await reconcile_receipts(db, user["_id"])
+        return {"ok": True, **result}
+
+    @router.post("/receipts/{receipt_id}/match")
+    async def receipt_match(receipt_id: str, payload: ReceiptMatchInput, user: dict = Depends(get_current_user)):
+        try:
+            rc = await db.receipts.find_one({"_id": ObjectId(receipt_id), "user_id": user["_id"]})
+            inv = await db.invoices.find_one({"_id": ObjectId(payload.invoice_id), "user_id": user["_id"]})
+        except Exception:
+            raise HTTPException(status_code=404, detail="Not found")
+        if not rc or not inv:
+            raise HTTPException(status_code=404, detail="Not found")
+        if rc.get("match_status") == "matched":
+            raise HTTPException(status_code=400, detail="Receipt already matched")
+        now_iso = datetime.now(timezone.utc).isoformat()
+        bal = float(inv.get("balance_remaining") if inv.get("balance_remaining") is not None else inv.get("amount") or 0)
+        applied = min(float(rc.get("amount") or 0), bal)
+        new_balance = round(bal - applied, 2)
+        new_paid = round(float(inv.get("paid_amount") or 0) + applied, 2)
+        new_status = "paid" if new_balance <= 0.005 else "partially_paid"
+        await db.invoices.update_one(
+            {"_id": inv["_id"]},
+            {"$set": {
+                "status": new_status,
+                "balance_remaining": max(new_balance, 0.0),
+                "paid_amount": new_paid,
+                "paid_at": now_iso if new_status == "paid" else inv.get("paid_at"),
+                "status_updated_at": now_iso,
+            }},
+        )
+        await db.receipts.update_one(
+            {"_id": rc["_id"]},
+            {"$set": {
+                "match_status": "user_confirmed",
+                "matched_invoice_id": inv["_id"],
+                "applied_amount": applied,
+                "updated_at": now_iso,
+            }},
+        )
+        await db.invoice_events.insert_one({
+            "user_id": user["_id"],
+            "invoice_id": inv["_id"],
+            "action": "receipt_matched_manual",
+            "at": now_iso,
+            "meta": {"receipt_id": rc["_id"], "amount": applied, "balance_after": max(new_balance, 0.0)},
+        })
+        return {"ok": True, "status": new_status, "balance_remaining": max(new_balance, 0.0)}
+
+    @router.post("/receipts/{receipt_id}/reject")
+    async def receipt_reject(receipt_id: str, user: dict = Depends(get_current_user)):
+        try:
+            rc = await db.receipts.find_one({"_id": ObjectId(receipt_id), "user_id": user["_id"]})
+        except Exception:
+            raise HTTPException(status_code=404, detail="Not found")
+        if not rc:
+            raise HTTPException(status_code=404, detail="Not found")
+        await db.receipts.update_one({"_id": rc["_id"]}, {"$set": {"match_status": "rejected"}})
+        return {"ok": True}
 
     @router.get("/invoices/{invoice_id}/timeline")
     async def invoice_timeline(invoice_id: str, user: dict = Depends(get_current_user)):
@@ -112,6 +249,27 @@ def build_router(db, get_current_user):
                     "message_id": r.get("source_message_id"),
                     "thread_id": r.get("source_thread_id"),
                 })
+        # Receipt matches applied to this invoice
+        async for rc in db.receipts.find({"user_id": user["_id"], "matched_invoice_id": inv["_id"]}):
+            events.append({
+                "kind": "receipt",
+                "date": rc.get("source_date") or rc.get("created_at"),
+                "quote": rc.get("evidence_sentence"),
+                "subject": rc.get("source_subject"),
+                "from": rc.get("processor_from"),
+                "message_id": rc.get("source_message_id"),
+                "thread_id": rc.get("source_thread_id"),
+                "amount": rc.get("applied_amount") or rc.get("amount"),
+                "payer_name": rc.get("payer_name"),
+            })
+        # Recorded invoice_events (mark_paid, receipt_matched, etc.)
+        async for ev in db.invoice_events.find({"user_id": user["_id"], "invoice_id": inv["_id"]}):
+            events.append({
+                "kind": ev.get("action"),
+                "date": ev.get("at"),
+                "meta": ev.get("meta") or {},
+            })
+        events.sort(key=lambda e: str(e.get("date") or ""))
         return {"invoice": _serialize(inv), "events": events}
 
     # ---- Clients ---------------------------------------------------------
@@ -125,8 +283,8 @@ def build_router(db, get_current_user):
                 "invoice_count": {"$sum": 1},
                 "open_amount": {"$sum": {
                     "$cond": [
-                        {"$in": ["$status", ["invoiced", "overdue", "promised", "partially_paid", "promise_broken"]]},
-                        "$amount",
+                        {"$in": ["$status", list(_OPEN_STATUSES)]},
+                        {"$ifNull": ["$balance_remaining", "$amount"]},
                         0,
                     ]
                 }},
@@ -161,14 +319,16 @@ def build_router(db, get_current_user):
         total_open = 0.0
         primary_name = None
         async for doc in cursor:
+            if doc.get("balance_remaining") is None:
+                doc["balance_remaining"] = float(doc.get("amount") or 0)
             invoices.append(_serialize(doc))
             ident = doc.get("counterparty_email")
             if ident:
                 identities[ident] = identities.get(ident, 0) + 1
             if not primary_name and doc.get("counterparty_name"):
                 primary_name = doc["counterparty_name"]
-            if doc.get("status") in ("invoiced", "overdue", "promised", "partially_paid", "promise_broken"):
-                total_open += float(doc.get("amount") or 0)
+            if doc.get("status") in _OPEN_STATUSES:
+                total_open += float(doc.get("balance_remaining") or doc.get("amount") or 0)
         if not invoices:
             raise HTTPException(status_code=404, detail="Client not found")
         return {
@@ -241,9 +401,6 @@ def build_router(db, get_current_user):
         return {"ok": True}
 
     # ---- Lifecycle transitions -------------------------------------------
-    class InvoiceActionInput(BaseModel):
-        action: str  # mark_paid | write_off | dispute | resolve_dispute | pause | resume
-
     @router.post("/invoices/{invoice_id}/action")
     async def invoice_action(invoice_id: str, payload: InvoiceActionInput, user: dict = Depends(get_current_user)):
         try:
@@ -254,10 +411,39 @@ def build_router(db, get_current_user):
             raise HTTPException(status_code=404, detail="Invoice not found")
         now = datetime.now(timezone.utc).isoformat()
         action = payload.action
+
+        # UNDO: revert to the pre-action snapshot stored on the last invoice_event
+        if action == "undo":
+            last = await db.invoice_events.find_one(
+                {"user_id": user["_id"], "invoice_id": inv["_id"], "undo_snapshot": {"$exists": True}},
+                sort=[("at", -1)],
+            )
+            if not last:
+                raise HTTPException(status_code=400, detail="Nothing to undo")
+            snap = last.get("undo_snapshot") or {}
+            await db.invoices.update_one({"_id": inv["_id"]}, {"$set": snap})
+            await db.invoice_events.update_one({"_id": last["_id"]}, {"$set": {"undone_at": now}})
+            await db.invoice_events.insert_one({
+                "user_id": user["_id"], "invoice_id": inv["_id"], "action": "undo", "at": now,
+                "meta": {"reverted_action": last.get("action")},
+            })
+            return {"ok": True, "restored_status": snap.get("status")}
+
+        # Capture pre-state snapshot so we can undo destructive actions
+        undo_snapshot = {
+            "status": inv.get("status"),
+            "balance_remaining": inv.get("balance_remaining"),
+            "paid_amount": inv.get("paid_amount"),
+            "paid_at": inv.get("paid_at"),
+            "chasing_paused": inv.get("chasing_paused", False),
+        }
+
         patch: dict = {"status_updated_at": now}
         if action == "mark_paid":
             patch["status"] = "paid"
             patch["paid_at"] = now
+            patch["balance_remaining"] = 0.0
+            patch["paid_amount"] = float(inv.get("amount") or 0)
         elif action == "write_off":
             patch["status"] = "written_off"
         elif action == "dispute":
@@ -273,6 +459,7 @@ def build_router(db, get_current_user):
         await db.invoices.update_one({"_id": inv["_id"]}, {"$set": patch})
         await db.invoice_events.insert_one({
             "user_id": user["_id"], "invoice_id": inv["_id"], "action": action, "at": now,
+            "undo_snapshot": undo_snapshot,
         })
         return {"ok": True}
 
@@ -343,14 +530,6 @@ def build_router(db, get_current_user):
         }
 
     # ---- Chase drafts (Feature 7) ----------------------------------------
-    class ChaseDraftInput(BaseModel):
-        tone: str | None = None  # friendly | firm | final
-        note: str | None = None
-
-    class ChaseSendInput(BaseModel):
-        subject: str
-        body: str
-
     def _tone_for(inv: dict) -> str:
         s = inv.get("status")
         if s == "promise_broken": return "firm"
@@ -432,10 +611,6 @@ def build_router(db, get_current_user):
         })
         await db.invoices.update_one({"_id": inv["_id"]}, {"$set": {"last_chase_at": datetime.now(timezone.utc).isoformat()}, "$inc": {"chase_count": 1}})
         return {"ok": True}
-
-    class QuickComposeInput(BaseModel):
-        invoice_id: str
-        intent: str
 
     @router.post("/quick-compose")
     async def quick_compose(payload: QuickComposeInput, user: dict = Depends(get_current_user)):
