@@ -24,6 +24,7 @@ from scan_router import build_router as build_scan_router
 from settings_router import build_router as build_settings_router
 from scan_pipeline import sync_all_users
 from escalation_scheduler import escalate_all_users
+from digest_sender import send_daily_digests
 
 
 # ---------------------------------------------------------------------------
@@ -35,6 +36,7 @@ db = client[os.environ["DB_NAME"]]
 
 _sync_task: Optional[asyncio.Task] = None
 _escalation_task: Optional[asyncio.Task] = None
+_digest_task: Optional[asyncio.Task] = None
 
 
 # ---------------------------------------------------------------------------
@@ -465,18 +467,23 @@ async def on_startup():
     await db.gmail_sync_state.create_index("user_id", unique=True)
     await db.chase_drafts.create_index([("user_id", 1), ("invoice_id", 1), ("step_key", 1)])
     await db.chase_drafts.create_index([("user_id", 1), ("status", 1), ("generated_at", -1)])
+    await db.digest_sends.create_index([("user_id", 1), ("sent_at", -1)])
     await seed_admin()
 
     # Kick off continuous sync loop (F9a). Interval is configurable via env.
-    global _sync_task, _escalation_task
+    global _sync_task, _escalation_task, _digest_task
     interval = int(os.environ.get("SYNC_INTERVAL_SECONDS", "300"))
     esc_interval = int(os.environ.get("ESCALATION_INTERVAL_SECONDS", "3600"))
+    digest_interval = int(os.environ.get("DIGEST_CHECK_INTERVAL_SECONDS", "900"))
     if os.environ.get("DISABLE_SYNC_LOOP") != "1":
         _sync_task = asyncio.create_task(_sync_loop(interval))
         logger.info("Continuous sync loop scheduled every %ss", interval)
     if os.environ.get("DISABLE_ESCALATION_LOOP") != "1":
         _escalation_task = asyncio.create_task(_escalation_loop(esc_interval))
         logger.info("Escalation loop scheduled every %ss", esc_interval)
+    if os.environ.get("DISABLE_DIGEST_LOOP") != "1":
+        _digest_task = asyncio.create_task(_digest_loop(digest_interval))
+        logger.info("Daily digest loop scheduled every %ss", digest_interval)
 
 
 async def _sync_loop(interval_seconds: int):
@@ -518,6 +525,23 @@ async def _escalation_loop(interval_seconds: int):
         await _asyncio.sleep(interval_seconds)
 
 
+async def _digest_loop(interval_seconds: int):
+    """Every ~15 minutes, check whose digest hour has struck and send if due."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(90)
+    while True:
+        try:
+            totals = await send_daily_digests(db)
+            if totals.get("sent"):
+                logger.info(
+                    "Digest tick: users_considered=%s sent=%s skipped=%s",
+                    totals["users_considered"], totals["sent"], totals["skipped"],
+                )
+        except Exception as e:
+            logger.exception("Digest loop iteration failed: %s", e)
+        await _asyncio.sleep(interval_seconds)
+
+
 async def seed_admin():
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@scotive.com").lower()
     admin_password = os.environ.get("ADMIN_PASSWORD", "Admin@Scotive1")
@@ -540,9 +564,8 @@ async def seed_admin():
 
 @app.on_event("shutdown")
 async def on_shutdown():
-    global _sync_task, _escalation_task
-    if _sync_task and not _sync_task.done():
-        _sync_task.cancel()
-    if _escalation_task and not _escalation_task.done():
-        _escalation_task.cancel()
+    global _sync_task, _escalation_task, _digest_task
+    for t in (_sync_task, _escalation_task, _digest_task):
+        if t and not t.done():
+            t.cancel()
     client.close()

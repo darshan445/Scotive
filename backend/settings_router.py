@@ -18,6 +18,8 @@ DEFAULT_SETTINGS: dict = {
     "late_fee_enabled": False,
     "late_fee_text": "",
     "scan_window_months": 12,
+    "daily_digest_enabled": True,
+    "daily_digest_hour_utc": 14,  # 14:00 UTC ~= 9am ET; sane default
 }
 
 
@@ -27,6 +29,8 @@ class SettingsPatch(BaseModel):
     late_fee_enabled: Optional[bool] = None
     late_fee_text: Optional[str] = Field(default=None, max_length=280)
     scan_window_months: Optional[int] = Field(default=None, ge=1, le=36)
+    daily_digest_enabled: Optional[bool] = None
+    daily_digest_hour_utc: Optional[int] = Field(default=None, ge=0, le=23)
 
     @field_validator("escalation_offsets")
     @classmethod

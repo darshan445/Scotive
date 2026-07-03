@@ -140,6 +140,12 @@ export default function SettingsPage() {
 
                 <ScanWindowSection settings={settings} saving={saving} onSave={persist} />
 
+                <DailyDigestSection
+                    settings={settings}
+                    saving={saving}
+                    onSave={persist}
+                />
+
                 <SuppressedSendersSection
                     senders={suppressed}
                     onRemove={unsuppress}
@@ -369,6 +375,95 @@ function ScanWindowSection({ settings, saving, onSave }) {
                 onSave={() => onSave({ scan_window_months: months }, "Scan window saved")}
                 testid="save-scan-window"
             />
+        </Section>
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Daily digest
+// ---------------------------------------------------------------------------
+function DailyDigestSection({ settings, saving, onSave }) {
+    const [enabled, setEnabled] = useState(!!settings.daily_digest_enabled);
+    const [hour, setHour] = useState(settings.daily_digest_hour_utc ?? 14);
+    const [sending, setSending] = useState(false);
+    useEffect(() => { setEnabled(!!settings.daily_digest_enabled); }, [settings.daily_digest_enabled]);
+    useEffect(() => { setHour(settings.daily_digest_hour_utc ?? 14); }, [settings.daily_digest_hour_utc]);
+    const dirty = enabled !== !!settings.daily_digest_enabled || hour !== (settings.daily_digest_hour_utc ?? 14);
+
+    async function sendNow() {
+        setSending(true);
+        try {
+            const { data } = await api.post("/digest/send-now");
+            if (data.status === "sent") {
+                toast.success("Digest sent to your inbox");
+            } else if (data.reason === "empty") {
+                toast.info("Nothing to send today — you're all caught up.");
+            } else if (data.reason === "no_gmail" || data.reason === "no_send_scope") {
+                toast.error("Connect Gmail with send scope to email digests.");
+            } else if (String(data.reason || "").startsWith("auth_error")) {
+                toast.error("Gmail auth expired — reconnect from the dashboard.");
+            } else {
+                toast.error(`Digest not sent: ${data.reason || "unknown"}`);
+            }
+        } catch (e) {
+            toast.error(extractError(e));
+        } finally {
+            setSending(false);
+        }
+    }
+
+    return (
+        <Section
+            title="Daily digest email"
+            subtitle="Once a day, Scotive can email you a summary of what needs action — due/overdue, broken promises, and resolved payments. Sent from your own connected Gmail. Silent when there's nothing to report.">
+            <div className="flex items-center justify-between gap-4">
+                <div>
+                    <div className="font-medium">Send me a daily digest</div>
+                    <div className="text-xs text-muted-foreground">
+                        Last sent: {settings.last_digest_sent_at ? new Date(settings.last_digest_sent_at).toLocaleString() : "never"}
+                    </div>
+                </div>
+                <Switch checked={enabled} onCheckedChange={setEnabled} data-testid="toggle-daily-digest" />
+            </div>
+            {enabled ? (
+                <div className="mt-5 space-y-2 max-w-sm">
+                    <Label htmlFor="digest-hour">Send hour (UTC)</Label>
+                    <div className="flex items-baseline gap-2">
+                        <Input
+                            id="digest-hour"
+                            type="number"
+                            min={0}
+                            max={23}
+                            value={hour}
+                            onChange={(e) => setHour(Math.max(0, Math.min(23, parseInt(e.target.value, 10) || 0)))}
+                            className="max-w-[110px]"
+                            data-testid="input-digest-hour"
+                        />
+                        <span className="text-sm text-muted-foreground">
+                            {`${String(hour).padStart(2, "0")}:00 UTC`}
+                        </span>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                        Default 14:00 UTC (~9am US Eastern, ~7pm India). Local time zones aren't
+                        supported yet — pick the hour that lands early morning for you.
+                    </p>
+                </div>
+            ) : null}
+            <SectionFooter
+                dirty={dirty}
+                saving={saving}
+                onSave={() => onSave({ daily_digest_enabled: enabled, daily_digest_hour_utc: hour }, "Digest settings saved")}
+                testid="save-digest"
+            />
+            <div className="mt-5 pt-4 border-t border-border flex items-center justify-end gap-3">
+                <span className="text-[11px] font-mono uppercase tracking-widest text-muted-foreground">
+                    Preview
+                </span>
+                <Button variant="outline" size="sm" onClick={sendNow} disabled={sending} data-testid="digest-send-now">
+                    {sending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : null}
+                    Send digest to me now
+                </Button>
+            </div>
         </Section>
     );
 }

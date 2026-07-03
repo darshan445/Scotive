@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from scan_pipeline import run_historical_scan, reconcile_receipts, run_incremental_sync
 from escalation_scheduler import run_escalation_tick, generate_draft as _gen_escalation_draft
+from digest_sender import send_digest_for_user, build_digest_email, collect_today_sections, _totals as _digest_totals
 
 logger = logging.getLogger("scotive.scan_router")
 
@@ -890,5 +891,42 @@ def build_router(db, get_current_user):
             {"$set": {"last_chase_at": now_iso}, "$inc": {"chase_count": 1}},
         )
         return {"ok": True, "sent_at": now_iso}
+
+    # ---- Daily digest (Feature 9c) ---------------------------------------
+    @router.post("/digest/send-now")
+    async def digest_send_now(user: dict = Depends(get_current_user)):
+        res = await send_digest_for_user(db, user["_id"], force=True)
+        return res
+
+    @router.get("/digest/preview")
+    async def digest_preview(user: dict = Depends(get_current_user)):
+        sections = await collect_today_sections(db, user["_id"])
+        totals = _digest_totals(sections)
+        # Serialize enough for the frontend to show a preview
+        def _row(inv):
+            return {
+                "counterparty_name": inv.get("counterparty_name"),
+                "counterparty_email": inv.get("counterparty_email"),
+                "amount": inv.get("balance_remaining") or inv.get("amount"),
+                "currency": inv.get("currency", "USD"),
+                "invoice_ref": inv.get("invoice_ref"),
+                "due_date": inv.get("due_date"),
+                "promise_date": inv.get("promise_date"),
+                "status": inv.get("status"),
+            }
+        return {
+            "subject": build_digest_email(user, sections, totals)["subject"],
+            "totals": totals,
+            "sections": {k: [_row(i) for i in v] for k, v in sections.items()},
+        }
+
+    @router.get("/digest/last")
+    async def digest_last(user: dict = Depends(get_current_user)):
+        settings = await db.user_settings.find_one({"user_id": user["_id"]}) or {}
+        return {
+            "last_digest_sent_at": settings.get("last_digest_sent_at"),
+            "last_digest_status": settings.get("last_digest_status"),
+            "last_digest_counts": settings.get("last_digest_counts"),
+        }
 
     return router
