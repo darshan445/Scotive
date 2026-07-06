@@ -34,7 +34,8 @@ export function ChaseDialog({ invoice, open, onOpenChange, onSent }) {
         try {
             await api.post(`/invoices/${invoice._id}/send-chase`, { subject, body });
             toast.success("Chase sent from your Gmail");
-            onSent?.(); onOpenChange(false);
+            await onSent?.();
+            onOpenChange(false);
         } catch (e) { toast.error(extractError(e)); }
         setSending(false);
     }

@@ -41,9 +41,10 @@ export function useScan() {
         return stopPolling;
     }, [fetchStatus, startPolling, stopPolling]);
 
-    const startScan = useCallback(async (months = 12) => {
+    const startScan = useCallback(async (months) => {
         try {
-            await api.post("/scan/start", { months });
+            const body = months != null ? { months } : {};
+            await api.post("/scan/start", body);
             await fetchStatus();
             startPolling();
             return { ok: true };

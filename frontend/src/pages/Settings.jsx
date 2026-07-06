@@ -27,11 +27,14 @@ import {
 } from "@/components/ui/alert-dialog";
 import { api, extractError } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
+import { ConnectionPanel } from "@/components/ConnectionPanel";
+import { useGmailConnection } from "@/hooks/useGmailConnection";
 
 const ESCALATION_LABELS = ["Pre-due nudge", "Due-date reminder", "Firm follow-up", "Final notice"];
 
 export default function SettingsPage() {
     const { user, logout } = useAuth();
+    const { status: gmailStatus } = useGmailConnection();
     const [settings, setSettings] = useState(null);
     const [saving, setSaving] = useState(false);
     const [err, setErr] = useState("");
@@ -135,10 +138,11 @@ export default function SettingsPage() {
                         Settings
                     </h1>
                     <p className="mt-2 text-sm text-muted-foreground">
-                        Fine-tune how Scotive chases, when it flips invoices to overdue, and how
-                        much of your inbox to scan.
+                        Fine-tune when Scotive drafts each chase step. Due dates come from your invoices only.
                     </p>
                 </div>
+
+                <GmailAccountSection status={gmailStatus} />
 
                 <ChasingTimingSection
                     settings={settings}
@@ -148,7 +152,7 @@ export default function SettingsPage() {
 
                 <LateFeeSection settings={settings} saving={saving} onSave={persist} />
 
-                <ScanWindowSection settings={settings} saving={saving} onSave={persist} />
+                <ScanWindowSection settings={settings} />
 
                 <DailyDigestSection
                     settings={settings}
@@ -215,17 +219,33 @@ export default function SettingsPage() {
 }
 
 // ---------------------------------------------------------------------------
+// Gmail account
+// ---------------------------------------------------------------------------
+function GmailAccountSection({ status }) {
+    return (
+        <section data-testid="settings-gmail-account">
+            <h2 className="font-heading font-bold text-xl">Gmail account</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+                Connect read + send access so Scotive can scan sent invoices and draft chasers from your inbox.
+            </p>
+            <Separator className="my-4" />
+            <ConnectionPanel status={status} />
+        </section>
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Chasing timing
 // ---------------------------------------------------------------------------
 function ChasingTimingSection({ settings, saving, onSave }) {
-    const [grace, setGrace] = useState(settings.grace_days);
     const [offsets, setOffsets] = useState(settings.escalation_offsets);
-    useEffect(() => { setGrace(settings.grace_days); }, [settings.grace_days]);
+    const [followUpDays, setFollowUpDays] = useState(settings.follow_up_interval_days ?? 3);
     useEffect(() => { setOffsets(settings.escalation_offsets); }, [settings.escalation_offsets]);
+    useEffect(() => { setFollowUpDays(settings.follow_up_interval_days ?? 3); }, [settings.follow_up_interval_days]);
 
     const dirty =
-        grace !== settings.grace_days ||
-        JSON.stringify(offsets) !== JSON.stringify(settings.escalation_offsets);
+        JSON.stringify(offsets) !== JSON.stringify(settings.escalation_offsets)
+        || followUpDays !== (settings.follow_up_interval_days ?? 3);
 
     function updateOffset(i, value) {
         const v = parseInt(value, 10);
@@ -237,27 +257,11 @@ function ChasingTimingSection({ settings, saving, onSave }) {
     return (
         <Section
             title="Chasing timing"
-            subtitle="How many days after the due date before an invoice flips to overdue, and when to draft each chase step.">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                <div className="space-y-2">
-                    <Label htmlFor="grace-days">Grace period</Label>
-                    <div className="flex items-baseline gap-2">
-                        <Input
-                            id="grace-days"
-                            type="number"
-                            min={0}
-                            max={30}
-                            value={grace}
-                            onChange={(e) => setGrace(parseInt(e.target.value, 10) || 0)}
-                            className="max-w-[110px]"
-                            data-testid="input-grace-days"
-                        />
-                        <span className="text-sm text-muted-foreground">days after due date</span>
-                    </div>
-                </div>
+            subtitle="When to draft each chase step relative to the due date. Past-due flips happen automatically on the next hourly sync — no grace buffer.">
+            <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground mb-4 max-w-lg">
+                Invoices move to <strong>Past due</strong> the day after their due date during the hourly sync (or Sync now).
             </div>
-
-            <div className="mt-6 space-y-3">
+            <div className="mt-2 space-y-3">
                 <Label>Escalation ladder</Label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                     {ESCALATION_LABELS.map((label, i) => (
@@ -287,10 +291,33 @@ function ChasingTimingSection({ settings, saving, onSave }) {
                 </p>
             </div>
 
+            <div className="mt-6 space-y-2 max-w-lg">
+                <Label htmlFor="follow-up-interval">Follow-up interval (after you send)</Label>
+                <div className="flex items-baseline gap-2">
+                    <Input
+                        id="follow-up-interval"
+                        type="number"
+                        min={1}
+                        max={30}
+                        value={followUpDays}
+                        onChange={(e) => setFollowUpDays(parseInt(e.target.value, 10) || 1)}
+                        className="max-w-[90px]"
+                        data-testid="input-follow-up-interval"
+                    />
+                    <span className="text-xs text-muted-foreground">days with no client reply before the next escalation draft</span>
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                    Applies after you send a follow-up. Scotive drafts the next step for your review — never auto-sends.
+                </p>
+            </div>
+
             <SectionFooter
                 dirty={dirty}
                 saving={saving}
-                onSave={() => onSave({ grace_days: grace, escalation_offsets: offsets }, "Chasing timing saved")}
+                onSave={() => onSave({
+                    escalation_offsets: offsets,
+                    follow_up_interval_days: followUpDays,
+                }, "Chasing timing saved")}
                 testid="save-chasing-timing"
             />
         </Section>
@@ -350,42 +377,27 @@ function LateFeeSection({ settings, saving, onSave }) {
 }
 
 // ---------------------------------------------------------------------------
-// Scan window
+// Gmail sync (read-only info)
 // ---------------------------------------------------------------------------
-function ScanWindowSection({ settings, saving, onSave }) {
-    const [months, setMonths] = useState(settings.scan_window_months);
-    useEffect(() => { setMonths(settings.scan_window_months); }, [settings.scan_window_months]);
-    const dirty = months !== settings.scan_window_months;
+function ScanWindowSection({ settings }) {
+    const seedDays = settings.seed_lookback_days ?? 90;
+    const syncLookback = settings.sync_lookback ?? "1h";
 
     return (
         <Section
-            title="Scan window"
-            subtitle="How far back into your inbox Scotive looks when you start (or re-run) a historical scan.">
-            <div className="space-y-2 max-w-sm">
-                <Label htmlFor="scan-window">Months of history</Label>
-                <div className="flex items-baseline gap-2">
-                    <Input
-                        id="scan-window"
-                        type="number"
-                        min={1}
-                        max={36}
-                        value={months}
-                        onChange={(e) => setMonths(parseInt(e.target.value, 10) || 1)}
-                        className="max-w-[110px]"
-                        data-testid="input-scan-window"
-                    />
-                    <span className="text-sm text-muted-foreground">months</span>
-                </div>
-                <p className="text-[11px] text-muted-foreground">
-                    Default 12. Longer windows take longer and cost more AI credits.
+            title="Gmail sync"
+            subtitle="One job handles onboarding, hourly background sync, and Sync now.">
+            <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground max-w-lg space-y-1">
+                <p>
+                    <strong>First setup:</strong> last <strong>{seedDays} days</strong> of sent mail → you pick what to track.
+                </p>
+                <p>
+                    <strong>After that:</strong> sync runs every hour and checks the last <strong>{syncLookback}</strong> of sent mail (same as Sync now).
+                </p>
+                <p>
+                    <strong>Due dates:</strong> taken only from the invoice email or PDF. If none is found, you add it manually — Scotive never guesses.
                 </p>
             </div>
-            <SectionFooter
-                dirty={dirty}
-                saving={saving}
-                onSave={() => onSave({ scan_window_months: months }, "Scan window saved")}
-                testid="save-scan-window"
-            />
         </Section>
     );
 }
@@ -447,7 +459,7 @@ function DailyDigestSection({ settings, saving, onSave, timezones }) {
             } else if (data.reason === "no_gmail" || data.reason === "no_send_scope") {
                 toast.error("Connect Gmail with send scope to email digests.");
             } else if (String(data.reason || "").startsWith("auth_error")) {
-                toast.error("Gmail auth expired — reconnect from the dashboard.");
+                toast.error("Gmail auth expired — reconnect in Gmail account below.");
             } else {
                 toast.error(`Digest not sent: ${data.reason || "unknown"}`);
             }
@@ -461,7 +473,7 @@ function DailyDigestSection({ settings, saving, onSave, timezones }) {
     return (
         <Section
             title="Daily digest email"
-            subtitle="Once a day, Scotive can email you a summary of what needs action — due/overdue, broken promises, and resolved payments. Sent from your own connected Gmail. Silent when there's nothing to report.">
+            subtitle="Once a day, Scotive can email you a summary of what needs action — past due, broken promises, and resolved payments. Sent from your own connected Gmail. Silent when there's nothing to report.">
             <div className="flex items-center justify-between gap-4">
                 <div>
                     <div className="font-medium">Send me a daily digest</div>

@@ -7,6 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { api, extractError } from "@/lib/api";
 import { formatMoney } from "@/components/LedgerCard";
+import { useWorkspaceRefreshEffect } from "@/lib/workspaceRefresh";
 
 const STEP_LABEL_UI = {
     pre_due_nudge: "Pre-due nudge",
@@ -37,6 +38,8 @@ export function ChaseQueueCard({ onSent }) {
     }, []);
 
     useEffect(() => { refresh(); }, [refresh]);
+
+    useWorkspaceRefreshEffect(refresh);
 
     async function runNow() {
         setRunning(true);
@@ -143,7 +146,7 @@ function DraftCard({ draft, onChanged, onSent }) {
             await api.post(`/chase-drafts/${draft._id}/send`);
             toast.success("Sent from your Gmail");
             await onChanged?.();
-            onSent?.();
+            await onSent?.();
         } catch (e) {
             toast.error(extractError(e));
         } finally {

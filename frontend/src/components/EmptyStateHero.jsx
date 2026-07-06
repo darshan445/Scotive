@@ -22,15 +22,14 @@ export function EmptyStateHero() {
                 className="font-heading font-black text-3xl sm:text-4xl leading-tight tracking-tight text-foreground"
                 data-testid="empty-state-headline"
             >
-                Connect Gmail to build your ledger.
+                Chase every invoice — automatically.
             </h1>
 
             <p
                 className="mt-4 text-base md:text-lg text-muted-foreground leading-relaxed"
                 data-testid="empty-state-subhead"
             >
-                Scotive will scan the last 12 months for unpaid invoices, promises, and
-                receipts. This usually takes under two minutes.
+                Scotive watches your Gmail, tracks invoices you send, reads client replies, and drafts the follow-ups. Nothing sends without your approval.
             </p>
 
             <div className="mt-8 flex flex-col items-center gap-4">

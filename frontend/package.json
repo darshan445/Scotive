@@ -92,10 +92,29 @@
     "eslint-plugin-react": "7.37.4",
     "eslint-plugin-react-hooks": "5.2.0",
     "globals": "15.15.0",
+    "ajv": "^8.17.1",
     "postcss": "8.5.10",
     "tailwindcss": "3.4.17"
   },
+  "overrides": {
+    "ajv-keywords@^5": {
+      "ajv": "^8.17.1"
+    },
+    "schema-utils@^4": {
+      "ajv": "^8.17.1",
+      "ajv-keywords": "^5.1.0"
+    },
+    "schema-utils@^2": {
+      "ajv": "^6.12.6",
+      "ajv-keywords": "^3.5.2"
+    },
+    "schema-utils@^3": {
+      "ajv": "^6.12.6",
+      "ajv-keywords": "^3.5.2"
+    }
+  },
   "resolutions": {
+    "ajv": "^8.17.1",
     "react-router": "7.15.0",
     "node-forge": "1.4.0",
     "fast-uri": "3.1.2",

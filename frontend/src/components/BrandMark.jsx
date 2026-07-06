@@ -5,8 +5,8 @@ export function BrandMark({ to = "/", size = "md" }) {
     const text = size === "lg" ? "text-2xl" : "text-lg";
     return (
         <Link to={to} className="inline-flex items-center gap-2 group" data-testid="brand-mark">
-            <span className={`${dot} rounded-full bg-foreground transition-transform group-hover:scale-110`} />
-            <span className={`font-heading font-black ${text} tracking-tight text-foreground`}>
+            <span className={`${dot} rounded-full bg-primary transition-transform group-hover:scale-110`} />
+            <span className={`font-heading font-bold ${text} tracking-tight text-foreground`}>
                 Scotive
             </span>
         </Link>

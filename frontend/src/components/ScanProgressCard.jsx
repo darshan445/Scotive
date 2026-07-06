@@ -1,9 +1,9 @@
 import { CheckCircle2, Loader2, Mail, Sparkles, ListChecks, AlertTriangle } from "lucide-react";
 
 const PHASES = [
-    { key: "fetching", label: "Fetching messages", icon: Mail, countKey: "fetched" },
-    { key: "filtering", label: "Filtering noise", icon: ListChecks, countKey: "filtered_in" },
-    { key: "extracting", label: "Finding invoices", icon: Sparkles, countKey: "ai_extracted" },
+    { key: "fetching", label: "Finding sent invoices", icon: Mail, countKey: "clients_found" },
+    { key: "filtering", label: "Sweeping client threads", icon: ListChecks, countKey: "messages_swept" },
+    { key: "extracting", label: "Analysing clients (AI)", icon: Sparkles, countKey: "ai_extracted" },
     { key: "building", label: "Building your ledger", icon: CheckCircle2, countKey: "invoices_created" },
 ];
 
@@ -30,7 +30,7 @@ export function ScanProgressCard({ state }) {
                             ? "Something went wrong"
                             : state.status === "complete"
                             ? "All done."
-                            : "Reading the last 12 months…"}
+                            : `Scanning the last ${state.months ?? 12} months…`}
                     </h2>
                 </div>
                 {state.status !== "complete" && !isError ? (

@@ -1,16 +1,20 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { TopNav } from "@/components/TopNav";
 import { api, extractError } from "@/lib/api";
-import { formatDate, formatMoney } from "@/components/LedgerCard";
+import { formatDate, formatMoney, formatOpenTotals } from "@/components/LedgerCard";
+import { useWorkspaceRefreshEffect } from "@/lib/workspaceRefresh";
 
 export default function ClientsPage() {
     const [clients, setClients] = useState(null);
     const [err, setErr] = useState("");
 
-    useEffect(() => {
+    const load = useCallback(() => {
         api.get("/clients").then(({ data }) => setClients(data.clients)).catch((e) => setErr(extractError(e)));
     }, []);
+
+    useEffect(() => { load(); }, [load]);
+    useWorkspaceRefreshEffect(load);
 
     return (
         <div className="min-h-screen bg-background text-foreground" data-testid="clients-page">
@@ -47,7 +51,9 @@ export default function ClientsPage() {
                                             </Link>
                                             {c.name ? <div className="text-[11px] font-mono text-muted-foreground">{c.email}</div> : null}
                                         </td>
-                                        <td className="px-4 py-3 text-right font-mono tabular-nums">{formatMoney(c.open_amount)}</td>
+                                        <td className="px-4 py-3 text-right font-mono tabular-nums">
+                                            {formatOpenTotals(c.open_by_currency ?? c.open_amount)}
+                                        </td>
                                         <td className="px-4 py-3 text-right font-mono tabular-nums text-muted-foreground">{c.invoice_count}</td>
                                         <td className="px-4 py-3 text-sm text-muted-foreground">{formatDate(c.last_activity)}</td>
                                     </tr>

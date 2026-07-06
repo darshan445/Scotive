@@ -1,6 +1,6 @@
 import { useEffect, Fragment, useState } from "react";
 import { Link } from "react-router-dom";
-import { ChevronRight, MoreHorizontal, PlusCircle, Quote, Send } from "lucide-react";
+import { ChevronRight, Calendar, MoreHorizontal, PlusCircle, Send } from "lucide-react";
 import { api, extractError } from "@/lib/api";
 import { toast } from "sonner";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -16,6 +16,13 @@ import {
 } from "@/components/ui/alert-dialog";
 import { ChaseDialog } from "@/components/ChaseDialog";
 import { ManualInvoiceDialog } from "@/components/ManualInvoiceDialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
+
+import { pastDueDaysLabel, invoiceDisplayRef, isJunkInvoiceRef, statusLabel, watchingSubtitle } from "@/lib/invoiceCopy";
+import { InvoiceTimeline } from "@/components/InvoiceTimeline";
+import { useWorkspaceVersion } from "@/lib/workspaceRefresh";
 
 const STATUS_STYLES = {
     invoiced: "bg-gray-100 text-gray-700 border-gray-200",
@@ -27,13 +34,14 @@ const STATUS_STYLES = {
     paid_unconfirmed: "bg-emerald-50 text-emerald-700 border-emerald-200",
     paid: "bg-green-50 text-green-700 border-green-200",
     written_off: "bg-gray-100 text-gray-500 border-gray-200",
+    stale: "bg-stone-100 text-stone-600 border-stone-200",
 };
 
 function StatusPill({ status }) {
     const cls = STATUS_STYLES[status] || STATUS_STYLES.invoiced;
     return (
-        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border ${cls} capitalize`} data-testid="invoice-status-pill">
-            {(status || "invoiced").replace(/_/g, " ")}
+        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border ${cls}`} data-testid="invoice-status-pill">
+            {statusLabel(status)}
         </span>
     );
 }
@@ -45,49 +53,22 @@ export function formatMoney(n, currency = "USD") {
     } catch { return `$${Number(n).toFixed(2)}`; }
 }
 
+/** Render open balances grouped by currency — never sums across currencies. */
+export function formatOpenTotals(totalsByCurrency) {
+    if (totalsByCurrency == null) return formatMoney(0);
+    if (typeof totalsByCurrency === "number") {
+        return formatMoney(totalsByCurrency);
+    }
+    const entries = Object.entries(totalsByCurrency).filter(([, v]) => Number(v) > 0);
+    if (entries.length === 0) return formatMoney(0);
+    return entries.map(([cur, amt]) => formatMoney(amt, cur)).join(" + ");
+}
+
+export const NO_DUE_DATE_LABEL = "No due date — please add one";
+
 export function formatDate(iso) {
     if (!iso) return "—";
     try { return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }); } catch { return iso; }
-}
-
-function TimelineRow({ invoiceId }) {
-    const [data, setData] = useState(null);
-    const [err, setErr] = useState("");
-    useEffect(() => {
-        let alive = true;
-        api.get(`/invoices/${invoiceId}/timeline`)
-            .then(({ data }) => { if (alive) setData(data); })
-            .catch((e) => { if (alive) setErr(extractError(e)); });
-        return () => { alive = false; };
-    }, [invoiceId]);
-    if (err) return <div className="text-sm text-red-700">{err}</div>;
-    if (!data) return <div className="text-sm text-muted-foreground">Loading timeline…</div>;
-    return (
-        <div className="space-y-3" data-testid="invoice-timeline">
-            {data.events.map((ev, i) => (
-                <div key={i} className="flex gap-3">
-                    <div className="w-2 h-2 rounded-full bg-foreground mt-1.5 flex-shrink-0" />
-                    <div className="flex-1 min-w-0">
-                        <div className="flex flex-wrap items-baseline gap-2">
-                            <span className="text-sm font-medium capitalize">{(ev.kind || "event").replace(/_/g, " ")}</span>
-                            <span className="text-[11px] font-mono text-muted-foreground">{formatDate(ev.date)}</span>
-                        </div>
-                        {ev.quote ? (
-                            <div className="mt-1 rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-foreground italic flex gap-2">
-                                <Quote className="w-3.5 h-3.5 mt-1 text-muted-foreground flex-shrink-0" />
-                                <span>&ldquo;{ev.quote}&rdquo;</span>
-                            </div>
-                        ) : null}
-                        {ev.subject ? (
-                            <div className="mt-1 text-[11px] font-mono text-muted-foreground truncate">
-                                {ev.subject} · from {ev.from}
-                            </div>
-                        ) : null}
-                    </div>
-                </div>
-            ))}
-        </div>
-    );
 }
 
 const CONFIRM_COPY = {
@@ -108,19 +89,47 @@ const CONFIRM_COPY = {
 };
 
 export function LedgerCard({ ledger, onChanged }) {
+    const workspaceVersion = useWorkspaceVersion();
     const [expanded, setExpanded] = useState(null);
     const [chaseInvoice, setChaseInvoice] = useState(null);
     const [confirm, setConfirm] = useState(null); // { invoice, action }
     const [manualOpen, setManualOpen] = useState(false);
+    const [dueDateEdit, setDueDateEdit] = useState(null); // invoice
+    const [dueDateValue, setDueDateValue] = useState("");
+    const [dueDateBusy, setDueDateBusy] = useState(false);
     if (!ledger) return null;
-    const { invoices = [], total_open = 0, client_count = 0 } = ledger;
+    const { invoices = [], totals_by_currency, total_open, client_count = 0 } = ledger;
+    const openTotals = totals_by_currency ?? total_open;
 
     async function act(id, action) {
         try {
             await api.post(`/invoices/${id}/action`, { action });
             toast.success("Updated");
-            onChanged?.();
+            await onChanged?.();
         } catch (e) { toast.error(extractError(e)); }
+    }
+
+    async function saveDueDate() {
+        if (!dueDateEdit || !dueDateValue) return;
+        setDueDateBusy(true);
+        try {
+            await api.post(`/invoices/${dueDateEdit._id}/action`, {
+                action: "set_due_date",
+                due_date: dueDateValue,
+            });
+            toast.success("Due date saved");
+            setDueDateEdit(null);
+            await onChanged?.();
+        } catch (e) {
+            toast.error(extractError(e));
+        } finally {
+            setDueDateBusy(false);
+        }
+    }
+
+    function openDueDateEditor(inv) {
+        setDueDateEdit(inv);
+        setDueDateValue(inv.due_date ? String(inv.due_date).slice(0, 10) : "");
     }
 
     async function runDestructive(invoice, action) {
@@ -135,14 +144,14 @@ export function LedgerCard({ ledger, onChanged }) {
                         try {
                             await api.post(`/invoices/${invoice._id}/action`, { action: "undo" });
                             toast.success("Reverted");
-                            onChanged?.();
+                            await onChanged?.();
                         } catch (e) {
                             toast.error(extractError(e));
                         }
                     },
                 },
             });
-            onChanged?.();
+            await onChanged?.();
         } catch (e) {
             toast.error(extractError(e));
         } finally {
@@ -157,7 +166,7 @@ export function LedgerCard({ ledger, onChanged }) {
                         <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">You&apos;re owed</div>
                         <div className="mt-1 flex items-baseline gap-4 flex-wrap">
                             <span className="font-heading font-black text-4xl md:text-5xl tracking-tight tabular-nums" data-testid="ledger-total">
-                                {formatMoney(total_open)}
+                                {formatOpenTotals(openTotals)}
                             </span>
                             <span className="text-muted-foreground text-sm" data-testid="ledger-client-count">
                                 across {client_count} client{client_count === 1 ? "" : "s"}
@@ -175,7 +184,10 @@ export function LedgerCard({ ledger, onChanged }) {
 
             {invoices.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-border bg-card/40 p-10 text-center" data-testid="ledger-empty">
-                    <h3 className="font-heading font-semibold text-lg">No unpaid invoices found in the last 12 months.</h3>
+                    <h3 className="font-heading font-semibold text-lg">No tracked invoices yet.</h3>
+                    <p className="mt-2 text-sm text-muted-foreground max-w-md mx-auto">
+                        Scotive is watching your sent mail — send your next invoice like you always do and it will appear here.
+                    </p>
                     <button
                         onClick={() => setManualOpen(true)}
                         className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-md border border-border bg-card text-sm font-medium hover:bg-muted transition-colors"
@@ -221,8 +233,10 @@ export function LedgerCard({ ledger, onChanged }) {
                                                 ) : null}
                                             </td>
                                             <td className="px-4 py-3 align-top">
-                                                <div className="font-mono text-xs text-foreground">{inv.invoice_ref || "—"}</div>
-                                                {inv.source_subject ? <div className="text-[11px] text-muted-foreground truncate max-w-[240px]">{inv.source_subject}</div> : null}
+                                                <div className="text-xs text-foreground break-words max-w-[240px]">{invoiceDisplayRef(inv)}</div>
+                                                {inv.source_subject && invoiceDisplayRef(inv) !== inv.source_subject ? (
+                                                    <div className="text-[11px] text-muted-foreground truncate max-w-[240px]">{inv.source_subject}</div>
+                                                ) : null}
                                             </td>
                                             <td className="px-4 py-3 align-top text-right font-mono tabular-nums text-sm">
                                                 <div>{formatMoney(inv.amount, inv.currency || "USD")}</div>
@@ -234,7 +248,29 @@ export function LedgerCard({ ledger, onChanged }) {
                                             </td>
                                             <td className="px-4 py-3 align-top"><StatusPill status={inv.status} /></td>
                                             <td className="px-4 py-3 align-top text-sm text-muted-foreground">
-                                                {inv.promise_date ? <span>Promised {formatDate(inv.promise_date)}</span> : <span>{formatDate(inv.due_date)}</span>}
+                                                {inv.status === "stale" ? (
+                                                    <span>No activity 120+ days</span>
+                                                ) : inv.promise_date ? (
+                                                    <span>Promised {formatDate(inv.promise_date)}</span>
+                                                ) : inv.due_date ? (
+                                                    <span>
+                                                        {formatDate(inv.due_date)}
+                                                        {inv.status === "overdue" && pastDueDaysLabel(inv.due_date) ? (
+                                                            <span className="block text-[10px] text-red-700/80">{pastDueDaysLabel(inv.due_date)}</span>
+                                                        ) : null}
+                                                        {watchingSubtitle(inv) ? (
+                                                            <span className="block text-[10px] text-muted-foreground/90">{watchingSubtitle(inv)}</span>
+                                                        ) : null}
+                                                    </span>
+                                                ) : (
+                                                    <button
+                                                        type="button"
+                                                        onClick={(e) => { e.stopPropagation(); openDueDateEditor(inv); }}
+                                                        className="text-left text-amber-800 hover:text-amber-950 underline underline-offset-2 decoration-amber-400/60"
+                                                        data-testid="ledger-add-due-date">
+                                                        {NO_DUE_DATE_LABEL}
+                                                    </button>
+                                                )}
                                             </td>
                                             <td className="px-2 py-3 align-top text-right" onClick={(e) => e.stopPropagation()}>
                                                 <DropdownMenu>
@@ -243,6 +279,12 @@ export function LedgerCard({ ledger, onChanged }) {
                                                     </DropdownMenuTrigger>
                                                     <DropdownMenuContent align="end">
                                                         <DropdownMenuItem onClick={() => setChaseInvoice(inv)} data-testid="row-draft-chase"><Send className="w-3.5 h-3.5 mr-2" />Draft chase</DropdownMenuItem>
+                                                        <DropdownMenuItem onClick={() => openDueDateEditor(inv)} data-testid="row-set-due-date">
+                                                            <Calendar className="w-3.5 h-3.5 mr-2" />{inv.due_date ? "Edit due date" : "Add due date"}
+                                                        </DropdownMenuItem>
+                                                        {inv.status === "stale" ? (
+                                                            <DropdownMenuItem onClick={() => act(inv._id, "dismiss_stale")} data-testid="row-stale-chase">Still chasing</DropdownMenuItem>
+                                                        ) : null}
                                                         <DropdownMenuItem onClick={() => setConfirm({ invoice: inv, action: "mark_paid" })} data-testid="row-mark-paid">Mark paid</DropdownMenuItem>
                                                         <DropdownMenuItem onClick={() => act(inv._id, "dispute")} data-testid="row-dispute">Mark disputed</DropdownMenuItem>
                                                         <DropdownMenuItem onClick={() => act(inv._id, inv.chasing_paused ? "resume" : "pause")} data-testid="row-pause">
@@ -257,7 +299,7 @@ export function LedgerCard({ ledger, onChanged }) {
                                             <tr className="bg-muted/20">
                                                 <td />
                                                 <td colSpan={6} className="px-4 py-4">
-                                                    <TimelineRow invoiceId={inv._id} />
+                                                    <InvoiceTimeline key={`${inv._id}-${workspaceVersion}`} invoiceId={inv._id} />
                                                 </td>
                                             </tr>
                                         ) : null}
@@ -268,7 +310,12 @@ export function LedgerCard({ ledger, onChanged }) {
                     </table>
                 </div>
             )}
-            <ChaseDialog invoice={chaseInvoice} open={!!chaseInvoice} onOpenChange={(o) => !o && setChaseInvoice(null)} onSent={() => { setChaseInvoice(null); onChanged?.(); }} />
+            <ChaseDialog
+                invoice={chaseInvoice}
+                open={!!chaseInvoice}
+                onOpenChange={(o) => !o && setChaseInvoice(null)}
+                onSent={async () => { setChaseInvoice(null); await onChanged?.(); }}
+            />
             <ManualInvoiceDialog
                 open={manualOpen}
                 onOpenChange={setManualOpen}
@@ -295,8 +342,10 @@ export function LedgerCard({ ledger, onChanged }) {
                                                 confirm.invoice.currency || "USD",
                                             )}
                                         </span>
-                                        {confirm.invoice.invoice_ref ? (
+                                        {confirm.invoice.invoice_ref && !isJunkInvoiceRef(confirm.invoice.invoice_ref) ? (
                                             <span className="text-muted-foreground"> · {confirm.invoice.invoice_ref}</span>
+                                        ) : confirm.invoice.source_subject ? (
+                                            <span className="text-muted-foreground"> · {confirm.invoice.source_subject}</span>
                                         ) : null}
                                     </span>
                                 </AlertDialogDescription>
@@ -312,6 +361,32 @@ export function LedgerCard({ ledger, onChanged }) {
                             </AlertDialogFooter>
                         </>
                     ) : null}
+                </AlertDialogContent>
+            </AlertDialog>
+            <AlertDialog open={!!dueDateEdit} onOpenChange={(o) => !dueDateBusy && !o && setDueDateEdit(null)}>
+                <AlertDialogContent data-testid="due-date-dialog">
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>{dueDateEdit?.due_date ? "Edit due date" : "Add due date"}</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Scotive only uses due dates found in your invoice or that you set here — it never guesses.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <div className="space-y-2">
+                        <Label htmlFor="ledger-due-date">Due date</Label>
+                        <Input
+                            id="ledger-due-date"
+                            type="date"
+                            value={dueDateValue}
+                            onChange={(e) => setDueDateValue(e.target.value)}
+                            data-testid="ledger-due-date-input"
+                        />
+                    </div>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel disabled={dueDateBusy}>Cancel</AlertDialogCancel>
+                        <Button onClick={saveDueDate} disabled={dueDateBusy || !dueDateValue} data-testid="ledger-due-date-save">
+                            Save
+                        </Button>
+                    </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>
         </div>

@@ -8,8 +8,8 @@ module.exports = {
     theme: {
         extend: {
             fontFamily: {
-                heading: ['Cabinet Grotesk', 'Manrope', 'ui-sans-serif', 'system-ui'],
-                sans: ['Manrope', 'ui-sans-serif', 'system-ui'],
+                heading: ['Plus Jakarta Sans', 'ui-sans-serif', 'system-ui'],
+                sans: ['Plus Jakarta Sans', 'ui-sans-serif', 'system-ui'],
                 mono: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
             },
             borderRadius: {

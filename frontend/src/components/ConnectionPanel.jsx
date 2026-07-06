@@ -42,6 +42,26 @@ export function ConnectionPanel({ status }) {
         );
     }
 
+    // Not connected
+    if (!status.connected || status.status === "disconnected") {
+        return (
+            <div className="rounded-xl border border-dashed border-border bg-card p-6 flex flex-col sm:flex-row sm:items-center gap-4" data-testid="connection-panel-disconnected">
+                <div className="flex items-start gap-3 flex-1">
+                    <span className="inline-flex items-center justify-center w-10 h-10 rounded-lg bg-muted border border-border">
+                        <Mail className="w-5 h-5 text-muted-foreground" />
+                    </span>
+                    <div>
+                        <div className="font-heading font-semibold text-foreground">No Gmail connected</div>
+                        <div className="text-sm text-muted-foreground mt-1">
+                            Connect your inbox to scan sent invoices and draft chasers.
+                        </div>
+                    </div>
+                </div>
+                <ConnectGmailButton label="Connect Gmail" testId="connect-gmail-button" />
+            </div>
+        );
+    }
+
     // Revoked externally
     if (status.status === "revoked") {
         return (

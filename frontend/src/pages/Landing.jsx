@@ -1,18 +1,18 @@
 import { Link } from "react-router-dom";
-import { ArrowRight, Check, Lock, Mail, Sparkles } from "lucide-react";
+import { AlertTriangle, ArrowRight, Check, Eye, Lock, Mail, Send, Wallet } from "lucide-react";
 import { FcGoogle } from "react-icons/fc";
 
 function HowItWorksStep({ index, title, description, icon: Icon, iconTone = "dark" }) {
     return (
         <div
-            className="flex flex-col gap-3 rounded-xl border border-border bg-card p-6 group hover:border-foreground/30 transition-colors"
+            className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-6 shadow-sm hover:shadow-md transition-shadow"
             data-testid={`landing-how-step-${index}`}
         >
             <div className="flex items-center justify-between">
-                <span className={`inline-flex items-center justify-center w-9 h-9 rounded-lg ${iconTone === "dark" ? "bg-foreground text-background" : "bg-card border border-border"}`}>
+                <span className={`inline-flex items-center justify-center w-10 h-10 rounded-xl ${iconTone === "dark" ? "bg-primary text-primary-foreground" : "bg-primary/10 text-primary"}`}>
                     <Icon className="w-4 h-4" strokeWidth={2} />
                 </span>
-                <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">
+                <span className="pill text-[11px]">
                     Step {index}
                 </span>
             </div>
@@ -27,10 +27,10 @@ function HowItWorksStep({ index, title, description, icon: Icon, iconTone = "dar
 export default function LandingPage() {
     return (
         <div className="min-h-screen bg-background text-foreground" data-testid="landing-page">
-            <header className="border-b border-border">
+            <header className="border-b border-border bg-card/80 backdrop-blur-md sticky top-0 z-30">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
                     <Link to="/" className="flex items-center gap-2 font-heading font-bold text-lg tracking-tight">
-                        <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                        <span className="w-2 h-2 rounded-full bg-primary" />
                         Scotive
                     </Link>
                     <nav className="flex items-center gap-2 sm:gap-4">
@@ -43,7 +43,7 @@ export default function LandingPage() {
                         </Link>
                         <Link
                             to="/register"
-                            className="inline-flex items-center gap-1.5 text-sm font-medium bg-foreground text-background px-4 py-1.5 rounded-md hover:bg-foreground/90 transition-colors"
+                            className="inline-flex items-center gap-1.5 text-sm font-semibold bg-primary text-primary-foreground px-4 py-2 rounded-full hover:bg-primary/90 transition-colors shadow-sm"
                             data-testid="landing-signup"
                         >
                             Get started
@@ -59,34 +59,30 @@ export default function LandingPage() {
                     data-testid="landing-hero"
                 >
                     <div className="lg:col-span-8 animate-fade-up">
-                        <div className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-[11px] font-mono uppercase tracking-[0.18em] text-muted-foreground mb-6">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                            Payment ops · Inside Gmail
+                        <div className="pill mb-6">
+                            <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+                            Payment ops inside Gmail
                         </div>
 
                         <h1
-                            className="font-heading font-black text-4xl sm:text-5xl lg:text-6xl leading-[1.02] tracking-tight text-foreground"
+                            className="font-heading font-extrabold text-4xl sm:text-5xl lg:text-[3.5rem] leading-[1.08] tracking-tight text-foreground"
                             data-testid="landing-headline"
                         >
-                            See every dollar<br />
-                            clients owe you —<br />
-                            <span className="relative inline-block">
-                                <span className="relative z-10">in 60 seconds.</span>
-                                <span className="absolute inset-x-0 bottom-1 h-3 bg-[hsl(221_83%_53%_/_0.18)] -z-0" aria-hidden />
-                            </span>
+                            Chase every invoice —<br />
+                            <span className="text-primary">automatically.</span>
                         </h1>
 
                         <p
-                            className="mt-6 text-lg md:text-xl text-muted-foreground leading-relaxed max-w-2xl"
+                            className="mt-6 text-lg text-muted-foreground leading-relaxed max-w-2xl"
                             data-testid="landing-subhead"
                         >
-                            {`Scotive reads your Gmail, finds every unpaid invoice, tracks every "I'll pay Friday," and drafts the follow-ups. Nothing is ever sent without your approval.`}
+                            Scotive watches your Gmail, tracks invoices you send, reads client replies, and drafts the follow-ups. Nothing sends without your approval.
                         </p>
 
                         <div className="mt-10 flex flex-col sm:flex-row items-start sm:items-center gap-4">
                             <Link
                                 to="/register"
-                                className="group inline-flex items-center gap-3 rounded-full bg-foreground text-background pl-2 pr-6 py-2 font-semibold text-base transition-all shadow-sm active:scale-[0.98] hover:bg-foreground/90 hover:pr-7"
+                                className="group inline-flex items-center gap-3 rounded-full bg-primary text-primary-foreground pl-2 pr-6 py-2 font-semibold text-base transition-all shadow-md hover:shadow-lg active:scale-[0.98] hover:bg-primary/90"
                                 data-testid="landing-cta-primary"
                             >
                                 <span className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-background border border-border">
@@ -130,46 +126,51 @@ export default function LandingPage() {
                         style={{ animationDelay: "120ms" }}
                         data-testid="landing-preview-card"
                     >
-                        <div className="rounded-2xl border border-border bg-card overflow-hidden shadow-sm">
-                            <div className="px-5 py-4 border-b border-border flex items-center justify-between">
+                        <div className="rounded-2xl border border-border bg-card overflow-hidden shadow-md">
+                            <div className="px-5 py-4 border-b border-border flex items-center justify-between bg-muted/30">
                                 <div className="flex flex-col leading-tight">
-                                    <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">Preview</span>
-                                    <span className="font-heading font-semibold text-base">You&apos;re owed</span>
+                                    <span className="text-xs font-medium text-muted-foreground">Preview</span>
+                                    <span className="font-heading font-semibold text-base">Today</span>
                                 </div>
-                                <span className="inline-flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">
-                                    <Sparkles className="w-3 h-3" />
-                                    Sample
-                                </span>
-                            </div>
-                            <div className="px-5 py-6">
-                                <div className="font-heading font-black text-4xl md:text-5xl tracking-tight tabular-nums">$18,450</div>
-                                <div className="mt-1 text-sm text-muted-foreground">across 7 clients</div>
+                                <span className="pill text-[11px]">Sample</span>
                             </div>
                             <ul className="divide-y divide-border">
                                 {[
-                                    { name: "Northbeam Studio", amount: "$6,200", tag: "Overdue 8d", tone: "red" },
-                                    { name: "Rahul (Loomcraft)", amount: "$5,000", tag: "Promised Jun 22", tone: "amber" },
-                                    { name: "Ferra Coffee Co.", amount: "$3,750", tag: "Due tomorrow", tone: "slate" },
-                                    { name: "Halcyon Legal", amount: "$3,500", tag: "Partial · $500", tone: "green" },
+                                    { icon: AlertTriangle, name: "Acme Studio", amount: "$2,400", tag: "4 days overdue", tone: "red", action: "View follow-up draft" },
+                                    { icon: Wallet, name: "Meraki Co.", amount: "$1,850", tag: "Due today", tone: "amber", action: "View reminder draft" },
+                                    { icon: Eye, name: "Nuts Over Tech", amount: "₹84,700", tag: "Due Jul 3 — reading replies", tone: "slate", action: null },
                                 ].map((row) => (
-                                    <li key={row.name} className="px-5 py-3 flex items-center justify-between gap-3">
-                                        <div className="flex flex-col min-w-0">
-                                            <span className="text-sm font-medium truncate">{row.name}</span>
-                                            <span className={`text-[11px] font-mono ${
-                                                row.tone === "red" ? "text-red-700" :
-                                                row.tone === "amber" ? "text-amber-700" :
-                                                row.tone === "green" ? "text-emerald-700" :
-                                                "text-muted-foreground"
-                                            }`}>
-                                                {row.tag}
-                                            </span>
+                                    <li key={row.name} className="px-5 py-3.5">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="flex gap-2 min-w-0">
+                                                <row.icon className={`w-4 h-4 mt-0.5 flex-shrink-0 ${
+                                                    row.tone === "red" ? "text-red-600" :
+                                                    row.tone === "amber" ? "text-amber-600" :
+                                                    "text-muted-foreground"
+                                                }`} />
+                                                <div className="min-w-0">
+                                                    <span className="text-sm font-medium truncate block">{row.name}</span>
+                                                    <span className={`text-[11px] font-mono ${
+                                                        row.tone === "red" ? "text-red-700" :
+                                                        row.tone === "amber" ? "text-amber-700" :
+                                                        "text-muted-foreground"
+                                                    }`}>
+                                                        {row.tag}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <span className="font-mono text-sm tabular-nums text-foreground flex-shrink-0">{row.amount}</span>
                                         </div>
-                                        <span className="font-mono text-sm tabular-nums text-foreground">{row.amount}</span>
+                                        {row.action ? (
+                                            <div className="mt-2 ml-6 text-[11px] font-medium text-foreground/80 inline-flex items-center gap-1">
+                                                <Send className="w-3 h-3" /> {row.action}
+                                            </div>
+                                        ) : null}
                                     </li>
                                 ))}
                             </ul>
-                            <div className="px-5 py-3 border-t border-border text-[11px] font-mono uppercase tracking-[0.18em] text-muted-foreground text-center">
-                                Yours will fill in after you connect
+                            <div className="px-5 py-3 border-t border-border text-xs text-muted-foreground text-center">
+                                Yours starts after a 60-second pick-list
                             </div>
                         </div>
                     </aside>
@@ -178,9 +179,7 @@ export default function LandingPage() {
                 <section className="pb-24" data-testid="landing-how-it-works">
                     <div className="flex items-baseline justify-between mb-8">
                         <h2 className="font-heading font-bold text-2xl md:text-3xl tracking-tight">How it works</h2>
-                        <span className="text-xs font-mono uppercase tracking-[0.2em] text-muted-foreground">
-                            3 steps · ~60 seconds
-                        </span>
+                        <span className="pill text-xs">3 steps · ~60 seconds</span>
                     </div>
                     <div className="grid md:grid-cols-3 gap-4">
                         <HowItWorksStep
@@ -192,33 +191,32 @@ export default function LandingPage() {
                         />
                         <HowItWorksStep
                             index={2}
-                            title="We build your money ledger"
-                            description="Scotive scans the last 12 months, filters out newsletters and noise, and surfaces every unpaid invoice with the evidence."
-                            icon={Sparkles}
+                            title="Pick what's still unpaid"
+                            description="Scotive finds invoices you sent in the last 90 days. You tap which ones to track — you know your recent work cold."
+                            icon={Check}
                         />
                         <HowItWorksStep
                             index={3}
-                            title="You approve & send chasers"
+                            title="Approve & send chasers"
                             description="Every chase draft is written in your voice. Edit, regenerate, or skip. Nothing is ever auto-sent."
-                            icon={Check}
+                            icon={Send}
                         />
                     </div>
                 </section>
 
                 <section className="pb-24" data-testid="landing-final-cta">
-                    <div className="rounded-2xl border border-border bg-card p-8 md:p-12 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+                    <div className="rounded-2xl border border-border bg-card p-8 md:p-12 flex flex-col md:flex-row items-start md:items-center justify-between gap-6 shadow-sm">
                         <div>
                             <h2 className="font-heading font-bold text-2xl md:text-3xl tracking-tight">
-                                Stop chasing payments in your head.
+                                Send invoices like always. Scotive watches from here.
                             </h2>
                             <p className="mt-2 text-sm text-muted-foreground max-w-xl">
-                                Two minutes to set up. Nothing gets sent without your approval.
-                                Disconnect anytime and your ledger is still yours.
+                                Connect in under a minute. Pick your open invoices. Approve your first chase draft before your coffee gets cold.
                             </p>
                         </div>
                         <Link
                             to="/register"
-                            className="inline-flex items-center gap-2 rounded-full bg-foreground text-background px-6 py-3 font-semibold text-base hover:bg-foreground/90 transition-colors"
+                            className="inline-flex items-center gap-2 rounded-full bg-primary text-primary-foreground px-6 py-3 font-semibold text-base hover:bg-primary/90 transition-colors shadow-md"
                             data-testid="landing-cta-final"
                         >
                             Get started free
@@ -229,7 +227,7 @@ export default function LandingPage() {
             </main>
 
             <footer className="border-t border-border">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-wrap justify-between items-center gap-3 text-[11px] font-mono uppercase tracking-[0.2em] text-muted-foreground">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-wrap justify-between items-center gap-3 text-sm text-muted-foreground">
                     <span>© {new Date().getFullYear()} Scotive</span>
                     <span>Payment ops · Inside Gmail</span>
                 </div>

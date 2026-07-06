@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { LogOut } from "lucide-react";
 import { Link, NavLink } from "react-router-dom";
 import { BrandMark } from "@/components/BrandMark";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
+import { useWorkspaceRefreshEffect } from "@/lib/workspaceRefresh";
 
 const linkBase = "px-3 py-1.5 rounded-md text-sm font-medium transition-colors";
 
@@ -12,16 +13,23 @@ export function TopNav() {
     const { user, logout } = useAuth();
     const [reviewCount, setReviewCount] = useState(0);
 
-    useEffect(() => {
-        let alive = true;
-        api.get("/review-queue")
-            .then(({ data }) => { if (alive) setReviewCount(data.count || 0); })
-            .catch(() => {});
-        return () => { alive = false; };
+    const loadReviewCount = useCallback(async () => {
+        try {
+            const { data } = await api.get("/review-queue");
+            setReviewCount(data.count || 0);
+        } catch {
+            /* ignore */
+        }
     }, []);
 
+    useEffect(() => {
+        loadReviewCount();
+    }, [loadReviewCount]);
+
+    useWorkspaceRefreshEffect(loadReviewCount);
+
     return (
-        <header className="border-b border-border bg-background/80 backdrop-blur-sm sticky top-0 z-30">
+        <header className="border-b border-border bg-card/90 backdrop-blur-md sticky top-0 z-30 shadow-sm">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
                 <div className="flex items-center gap-8">
                     <BrandMark to="/dashboard" />
@@ -41,7 +49,7 @@ export function TopNav() {
                 </div>
                 <div className="flex items-center gap-4">
                     <div className="hidden sm:flex flex-col items-end leading-tight">
-                        <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">Signed in</span>
+                        <span className="text-xs text-muted-foreground">Signed in</span>
                         <span className="text-sm font-medium" data-testid="nav-user-email">{user?.email}</span>
                     </div>
                     <Button variant="outline" size="sm" onClick={logout} className="rounded-md" data-testid="nav-logout-button">

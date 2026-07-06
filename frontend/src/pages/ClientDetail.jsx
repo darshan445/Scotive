@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Quote, TrendingUp, AlertTriangle, Clock } from "lucide-react";
+import { ArrowLeft, ChevronRight, TrendingUp, AlertTriangle, Clock } from "lucide-react";
 import { TopNav } from "@/components/TopNav";
 import { api, extractError } from "@/lib/api";
-import { formatDate, formatMoney } from "@/components/LedgerCard";
+import { formatMoney, formatOpenTotals } from "@/components/LedgerCard";
+import { invoiceDisplayRef, invoiceStatusDateLine } from "@/lib/invoiceCopy";
+import { InvoiceTimeline } from "@/components/InvoiceTimeline";
 
 const RISK_STYLES = {
     on_time: { label: "Pays on time", cls: "bg-green-50 text-green-800 border-green-200", Icon: TrendingUp },
@@ -77,6 +79,7 @@ export default function ClientDetailPage() {
     const { email } = useParams();
     const [data, setData] = useState(null);
     const [err, setErr] = useState("");
+    const [expanded, setExpanded] = useState(null);
 
     useEffect(() => {
         api.get(`/clients/${encodeURIComponent(email)}`)
@@ -106,7 +109,7 @@ export default function ClientDetailPage() {
                             <div className="mt-6 rounded-2xl border border-border bg-card p-6">
                                 <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">Open balance</div>
                                 <div className="mt-1 font-heading font-black text-3xl md:text-4xl tracking-tight tabular-nums" data-testid="client-open-balance">
-                                    {formatMoney(data.total_open)}
+                                    {formatOpenTotals(data.totals_by_currency ?? data.total_open)}
                                 </div>
                             </div>
                         </div>
@@ -128,23 +131,38 @@ export default function ClientDetailPage() {
                         <section>
                             <h2 className="font-heading font-bold text-xl mb-3">Invoices & evidence</h2>
                             <div className="space-y-3" data-testid="client-invoices">
-                                {data.invoices.map((inv) => (
-                                    <div key={inv._id} className="rounded-xl border border-border bg-card p-4">
-                                        <div className="flex flex-wrap items-baseline justify-between gap-2">
-                                            <div className="font-medium">{inv.invoice_ref || inv.source_subject || "Invoice"}</div>
-                                            <div className="font-mono tabular-nums">{formatMoney(inv.amount, inv.currency)}</div>
+                                {data.invoices.map((inv) => {
+                                    const isOpen = expanded === inv._id;
+                                    return (
+                                        <div
+                                            key={inv._id}
+                                            className="rounded-xl border border-border bg-card overflow-hidden"
+                                            data-testid="client-invoice-row">
+                                            <button
+                                                type="button"
+                                                onClick={() => setExpanded(isOpen ? null : inv._id)}
+                                                className="w-full text-left p-4 hover:bg-muted/30 transition-colors">
+                                                <div className="flex items-start gap-2">
+                                                    <ChevronRight className={`w-4 h-4 mt-0.5 text-muted-foreground flex-shrink-0 transition-transform ${isOpen ? "rotate-90" : ""}`} />
+                                                    <div className="flex-1 min-w-0">
+                                                        <div className="flex flex-wrap items-baseline justify-between gap-2">
+                                                            <div className="font-medium">{invoiceDisplayRef(inv)}</div>
+                                                            <div className="font-mono tabular-nums">{formatMoney(inv.amount, inv.currency)}</div>
+                                                        </div>
+                                                        <div className="mt-1 text-[11px] font-mono text-muted-foreground">
+                                                            {invoiceStatusDateLine(inv)}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </button>
+                                            {isOpen ? (
+                                                <div className="px-4 pb-4 pl-10 border-t border-border/60 bg-muted/10">
+                                                    <InvoiceTimeline invoiceId={inv._id} className="pt-3" />
+                                                </div>
+                                            ) : null}
                                         </div>
-                                        <div className="mt-1 text-[11px] font-mono text-muted-foreground">
-                                            {inv.status?.replace(/_/g, " ")} · {formatDate(inv.source_date || inv.created_at)}
-                                        </div>
-                                        {inv.evidence_sentence ? (
-                                            <div className="mt-2 flex gap-2 text-sm italic text-foreground">
-                                                <Quote className="w-3.5 h-3.5 mt-1 text-muted-foreground flex-shrink-0" />
-                                                <span>&ldquo;{inv.evidence_sentence}&rdquo;</span>
-                                            </div>
-                                        ) : null}
-                                    </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                         </section>
                     </>
