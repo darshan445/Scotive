@@ -162,7 +162,10 @@ async def _draft_exists(db, user_id, invoice_id, step_key) -> bool:
 
 async def run_escalation_tick(db, user_id) -> dict:
     """Generate any missing chase drafts for this user based on today's date + config."""
-    counts = {"drafts_generated": 0, "skipped_existing": 0, "invoices_scanned": 0}
+    from invoice_lifecycle import apply_stale_transitions
+
+    counts = {"drafts_generated": 0, "skipped_existing": 0, "invoices_scanned": 0, "stale": 0}
+    counts["stale"] = await apply_stale_transitions(db, user_id)
 
     settings = await db.user_settings.find_one({"user_id": user_id}) or {}
     offsets = settings.get("escalation_offsets", [-3, 0, 3, 10])
@@ -178,12 +181,19 @@ async def run_escalation_tick(db, user_id) -> dict:
     }):
         counts["invoices_scanned"] += 1
 
+        # Post-chase ladder handles follow-ups after the user has sent one.
+        if inv.get("watching_for_reply") or inv.get("last_chase_at") or inv.get("ladder_exhausted"):
+            continue
+
         # ---- Regular offset-driven ladder --------------------------------
         due = _parse_date(inv.get("due_date"))
         if due:
             days_since_due = (today - due).days
             for i, off in enumerate(offsets):
                 if days_since_due != off:
+                    continue
+                floor = int(inv.get("escalation_step_floor") or 0)
+                if i < floor:
                     continue
                 step_key = f"offset_{i}"
                 if await _draft_exists(db, user_id, inv["_id"], step_key):

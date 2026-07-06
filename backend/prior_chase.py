@@ -1,0 +1,87 @@
+"""Infer prior user follow-ups on seed-scan candidates (pre-Scotive chases)."""
+from __future__ import annotations
+
+import re
+from typing import Optional
+
+from ledger_reconcile import is_invoice_followup, parse_email_date
+
+FINAL_CHASE_RE = re.compile(
+    r"final\s+notice|last\s+(?:reminder|chance)|second\s+notice|third\s+notice|"
+    r"urgent|immediate\s+payment|legal\s+action",
+    re.I,
+)
+FIRM_CHASE_RE = re.compile(
+    r"overdue|past\s+due|outstanding|firm\s+reminder|still\s+unpaid|"
+    r"amount\s+outstanding|balance\s+due",
+    re.I,
+)
+
+
+def _is_user_chase(msg: dict, invoice_msg: dict, my_email: str) -> bool:
+    """Sent mail from the user after the invoice anchor that looks like a follow-up."""
+    if msg.get("id") == invoice_msg.get("id"):
+        return False
+    inv_dt = parse_email_date(invoice_msg.get("source_date") or invoice_msg.get("date"))
+    msg_dt = parse_email_date(msg.get("source_date") or msg.get("date"))
+    if inv_dt and msg_dt and msg_dt <= inv_dt:
+        return False
+    subj = msg.get("subject") or ""
+    body = " ".join([subj, msg.get("snippet") or "", msg.get("body") or ""])
+    if is_invoice_followup(subj):
+        return True
+    if FINAL_CHASE_RE.search(body) or FIRM_CHASE_RE.search(body):
+        return True
+    if re.search(r"follow[\s\-]?up|reminder|chase|nudge|kindly\s+(?:pay|remit)", body, re.I):
+        return True
+    return False
+
+
+def _related(msg: dict, invoice: dict) -> bool:
+    if invoice.get("source_thread_id") and msg.get("thread_id") == invoice.get("source_thread_id"):
+        return True
+    inv_client = (invoice.get("counterparty_email") or "").lower()
+    msg_to = (msg.get("to") or "").lower()
+    if inv_client and inv_client in msg_to:
+        return True
+    return False
+
+
+def infer_escalation_floor(chase_msgs: list[dict]) -> int:
+    """Map prior chase count/tone → first escalation step Scotive should draft (0–3)."""
+    n = len(chase_msgs)
+    if n == 0:
+        return 0
+    texts = " ".join(
+        (m.get("subject") or "") + " " + (m.get("snippet") or "") for m in chase_msgs
+    )
+    if FINAL_CHASE_RE.search(texts) or n >= 3:
+        return min(3, n)
+    if n >= 2 or FIRM_CHASE_RE.search(texts):
+        return 2
+    return 1
+
+
+def enrich_candidates_with_prior_chases(
+    candidates: list[dict],
+    messages: list[dict],
+    my_email: str,
+) -> None:
+    """Annotate seed candidates in-place with prior-chase signals."""
+    by_id = {m["id"]: m for m in messages}
+    for cand in candidates:
+        anchor = by_id.get(cand.get("message_id") or "")
+        if not anchor:
+            cand["prior_chase_count"] = 0
+            cand["escalation_step_floor"] = 0
+            cand["likely_still_open"] = False
+            continue
+        chases = [
+            m for m in messages
+            if _related(m, cand) and _is_user_chase(m, anchor, my_email)
+        ]
+        chases.sort(key=lambda m: (parse_email_date(m.get("date")) or parse_email_date("1970-01-01")).timestamp())
+        floor = infer_escalation_floor(chases)
+        cand["prior_chase_count"] = len(chases)
+        cand["escalation_step_floor"] = floor
+        cand["likely_still_open"] = len(chases) > 0

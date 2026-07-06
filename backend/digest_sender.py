@@ -23,6 +23,7 @@ from datetime import datetime, timezone, timedelta
 import httpx
 
 from gmail_client import get_access_token, GmailAuthError
+from ledger_reconcile import sort_by_email_date
 
 logger = logging.getLogger("scotive.digest")
 
@@ -66,13 +67,23 @@ async def collect_today_sections(db, user_id) -> dict:
     broken = []
     needs_reply = []
     resolved = []
+    confirm_prompts = []
+    stale_prompts = []
+    watching = []
     async for inv in db.invoices.find({"user_id": user_id}):
         s = inv.get("status")
-        if s == "overdue":
-            due_overdue.append(inv)
+        if s == "paid_unconfirmed":
+            confirm_prompts.append(inv)
+        elif s == "stale" and inv.get("stale_prompt_pending"):
+            stale_prompts.append(inv)
+        elif s == "overdue":
+            if inv.get("watching_for_reply") or inv.get("ladder_exhausted"):
+                watching.append(inv)
+            else:
+                due_overdue.append(inv)
         elif s == "invoiced" and inv.get("due_date"):
             d = _parse_date(inv.get("due_date"))
-            if d and d <= today:
+            if d and d < today:
                 due_overdue.append(inv)
         elif s == "promise_broken":
             broken.append(inv)
@@ -82,11 +93,16 @@ async def collect_today_sections(db, user_id) -> dict:
             d = _parse_date(inv.get("paid_at"))
             if d and (today - d).days <= 1:
                 resolved.append(inv)
+    sync_state = await db.gmail_sync_state.find_one({"user_id": user_id}) or {}
     return {
-        "due_overdue": due_overdue,
-        "broken_promises": broken,
-        "needs_reply": needs_reply,
-        "resolved": resolved,
+        "due_overdue": sort_by_email_date(due_overdue),
+        "broken_promises": sort_by_email_date(broken),
+        "needs_reply": sort_by_email_date(needs_reply),
+        "resolved": sort_by_email_date(resolved),
+        "watching": sort_by_email_date(watching),
+        "confirm_prompts": sort_by_email_date(confirm_prompts),
+        "stale_prompts": sort_by_email_date(stale_prompts),
+        "followup_prompts": list(sync_state.get("pending_followup_prompts") or []),
     }
 
 
@@ -95,6 +111,10 @@ def _totals(sections: dict) -> dict:
         "due_overdue": len(sections["due_overdue"]),
         "broken_promises": len(sections["broken_promises"]),
         "needs_reply": len(sections["needs_reply"]),
+        "confirm_prompts": len(sections.get("confirm_prompts") or []),
+        "stale_prompts": len(sections.get("stale_prompts") or []),
+        "watching": len(sections.get("watching") or []),
+        "followup_prompts": len(sections.get("followup_prompts") or []),
         "resolved": len(sections["resolved"]),
         "total_open_amount": round(sum(
             float(i.get("balance_remaining") or i.get("amount") or 0)
@@ -113,8 +133,14 @@ def build_digest_email(user: dict, sections: dict, totals: dict) -> dict:
         subject_bits.append(f"{totals['broken_promises']} broken")
     if totals["needs_reply"]:
         subject_bits.append(f"{totals['needs_reply']} needs reply")
-    if totals["resolved"]:
-        subject_bits.append(f"{totals['resolved']} resolved")
+    if totals.get("confirm_prompts"):
+        subject_bits.append(f"{totals['confirm_prompts']} to confirm")
+    if totals.get("stale_prompts"):
+        subject_bits.append(f"{totals['stale_prompts']} gone quiet")
+    if totals.get("followup_prompts"):
+        subject_bits.append(f"{totals['followup_prompts']} follow-up?")
+    if totals.get("watching"):
+        subject_bits.append(f"{totals['watching']} watching")
     subject_summary = " · ".join(subject_bits) if subject_bits else "You're all caught up"
     subject = f"Scotive · {subject_summary} · {date_str}"
 
@@ -140,12 +166,8 @@ def build_digest_email(user: dict, sections: dict, totals: dict) -> dict:
         d = _parse_date(inv.get("due_date"))
         if not d:
             return ""
-        days = (datetime.now(timezone.utc).date() - d).days
-        if days > 0:
-            return f"{days}d overdue"
-        if days == 0:
-            return "due today"
-        return f"due in {-days}d"
+        name = inv.get("counterparty_name") or inv.get("counterparty_email") or "Client"
+        return f"{name} was due {d.isoformat()} — has it arrived?"
 
     def _promise_label(inv):
         d = _parse_date(inv.get("promise_date"))
@@ -157,8 +179,23 @@ def build_digest_email(user: dict, sections: dict, totals: dict) -> dict:
         d = _parse_date(inv.get("paid_at"))
         return f"paid {d.isoformat()}" if d else "paid"
 
-    bucket_text("Due / Overdue", sections["due_overdue"], _due_label)
+    def _watching_label(inv):
+        if inv.get("ladder_exhausted"):
+            return "still open — no further auto-drafts"
+        if inv.get("watching_for_reply"):
+            return "awaiting reply after your follow-up"
+        return ""
+
+    def _followup_label(p):
+        name = p.get("counterparty_name") or p.get("counterparty_email") or "Client"
+        return f"No reply from {name} yet — send this follow-up?"
+
+    bucket_text("Past due", sections["due_overdue"], _due_label)
+    bucket_text("Follow-up ready", sections.get("followup_prompts") or [], _followup_label)
     bucket_text("Broken promises", sections["broken_promises"], _promise_label)
+    bucket_text("Watching", sections.get("watching") or [], _watching_label)
+    bucket_text("Confirm payment", sections.get("confirm_prompts") or [], lambda i: "says paid — confirm?")
+    bucket_text("Gone quiet", sections.get("stale_prompts") or [], lambda i: "120+ days — still chasing?")
     bucket_text("Needs reply", sections["needs_reply"], lambda i: i.get("status") or "")
     bucket_text("Resolved (last 24h)", sections["resolved"], _resolved_label)
 
@@ -203,8 +240,12 @@ def build_digest_email(user: dict, sections: dict, totals: dict) -> dict:
         "<div style='max-width:640px;margin:0 auto'>"
         f"<div style='color:#6b7280;font-size:12px;letter-spacing:.2em;text-transform:uppercase;margin-bottom:4px'>Scotive · {html.escape(date_str)}</div>"
         f"<h1 style='font-size:22px;margin:4px 0 0 0'>{hero_bits}</h1>"
-        f"{html_bucket('Due / Overdue', sections['due_overdue'], '#b91c1c', _due_label)}"
+        f"{html_bucket('Past due', sections['due_overdue'], '#b91c1c', _due_label)}"
+        f"{html_bucket('Follow-up ready', sections.get('followup_prompts') or [], '#7c3aed', _followup_label)}"
         f"{html_bucket('Broken promises', sections['broken_promises'], '#b45309', _promise_label)}"
+        f"{html_bucket('Watching', sections.get('watching') or [], '#64748b', _watching_label)}"
+        f"{html_bucket('Confirm payment', sections.get('confirm_prompts') or [], '#6d28d9', lambda i: 'says paid')}"
+        f"{html_bucket('Gone quiet', sections.get('stale_prompts') or [], '#57534e', lambda i: '120+ days idle')}"
         f"{html_bucket('Needs reply', sections['needs_reply'], '#1d4ed8', lambda i: i.get('status') or '')}"
         f"{html_bucket('Resolved (last 24h)', sections['resolved'], '#059669', _resolved_label)}"
     )
@@ -273,7 +314,8 @@ async def send_digest_for_user(db, user_id, force: bool = False) -> dict:
     sections = await collect_today_sections(db, user_id)
     totals = _totals(sections)
     counts = {**totals}
-    if (totals["due_overdue"] + totals["broken_promises"] + totals["needs_reply"] + totals["resolved"]) == 0:
+    if (totals["due_overdue"] + totals["broken_promises"] + totals["needs_reply"]
+            + totals["resolved"] + totals.get("watching", 0) + totals.get("followup_prompts", 0)) == 0:
         # Still update last_digest_sent_at so we don't recompute over and over today
         await db.user_settings.update_one(
             {"user_id": user_id},

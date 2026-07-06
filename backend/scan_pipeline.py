@@ -110,28 +110,38 @@ def _sender_domain(email: str) -> str:
     return email.split("@")[-1].lower() if "@" in email else ""
 
 
-def cheap_filter(msg: dict) -> bool:
-    """Return True if the message survives cheap noise filters."""
+def _msg_label(msg: dict) -> str:
+    """Compact one-liner for pipeline logs."""
+    subj = (msg.get("subject") or "")[:80]
+    sender = _extract_email_addr(msg.get("from", ""))
+    return f"id={msg.get('id','?')} from={sender!r} subj={subj!r}"
+
+
+def cheap_filter_detail(msg: dict) -> tuple[bool, str]:
+    """Return (keep, reason) for cheap noise filters."""
     sender = _extract_email_addr(msg.get("from", ""))
     domain = _sender_domain(sender)
     haystack = " ".join([msg.get("subject", ""), msg.get("snippet", ""), sender])
 
-    # Always keep known payment processors
     if domain in PAYMENT_SENDER_DOMAINS:
-        return True
-    # Always keep PDFs (likely invoices)
+        return True, "payment_processor_domain"
     if msg.get("has_attachment"):
-        return True
-    # Kill obvious noise senders unless money-signal in subject
+        return True, "pdf_attachment"
     if NOISE_RE.search(sender):
-        # Only keep if subject SCREAMS invoice/receipt (rare exception)
         subj = msg.get("subject", "").lower()
         if not any(k in subj for k in ("invoice", "receipt", "payment", "past due")):
-            return False
-    # Keep if there's a money signal anywhere obvious
-    if MONEY_RE.search(haystack) or AMOUNT_RE.search(haystack):
-        return True
-    return False
+            return False, "noise_sender"
+    if MONEY_RE.search(haystack):
+        return True, "money_keyword"
+    if AMOUNT_RE.search(haystack):
+        return True, "dollar_amount"
+    return False, "no_money_signal"
+
+
+def cheap_filter(msg: dict) -> bool:
+    """Return True if the message survives cheap noise filters."""
+    keep, _reason = cheap_filter_detail(msg)
+    return keep
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +184,7 @@ Rules:
 async def extract_with_ai(msg: dict, my_email: str = "") -> Optional[dict]:
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
+        logger.warning("pipeline.ai SKIP %s reason=no_openrouter_key", _msg_label(msg))
         return None
 
     user_content = (
@@ -208,13 +219,26 @@ async def extract_with_ai(msg: dict, my_email: str = "") -> Optional[dict]:
                 },
             )
             if r.status_code != 200:
-                logger.warning("AI call failed: %s %s", r.status_code, r.text[:200])
+                logger.warning(
+                    "pipeline.ai FAIL %s status=%s body=%s",
+                    _msg_label(msg), r.status_code, r.text[:200],
+                )
                 return None
             data = r.json()
             content = data["choices"][0]["message"]["content"]
-            return json.loads(content)
+            parsed = json.loads(content)
+            logger.info(
+                "pipeline.ai OK %s -> money=%s kind=%s amount=%s conf=%s cp=%s",
+                _msg_label(msg),
+                parsed.get("is_money_related"),
+                parsed.get("kind"),
+                parsed.get("amount"),
+                parsed.get("confidence"),
+                parsed.get("counterparty_email") or parsed.get("counterparty_name"),
+            )
+            return parsed
     except Exception as e:
-        logger.warning("AI extract error: %s", e)
+        logger.warning("pipeline.ai ERROR %s err=%s", _msg_label(msg), e)
         return None
 
 
@@ -236,102 +260,10 @@ async def _counts_dict(fetched=0, filtered_in=0, ai_extracted=0, invoices_create
 
 
 async def run_historical_scan(db, user_id, job_id, months: int = 12):
-    """Long-running task. Updates scan_jobs doc as it progresses."""
-    try:
-        access = await get_access_token(db, user_id)
-    except GmailAuthError:
-        await _update_job(db, job_id, {"status": "error", "phase": "auth", "error": "Gmail auth failed. Please reconnect."})
-        return
-
-    # Load user's Gmail address up-front so extraction + writer can enforce
-    # direction guardrails (never invoice yourself, never treat vendors as clients).
-    _conn = await db.gmail_connections.find_one({"user_id": user_id})
-    my_email = ((_conn or {}).get("email") or "").lower()
-
-    counts = await _counts_dict()
-
-    # PHASE 1: fetching IDs
-    await _update_job(db, job_id, {"status": "running", "phase": "fetching", "counts": counts})
-    after_ts = int((datetime.now(timezone.utc) - timedelta(days=months * 30)).timestamp())
-    query = f"after:{after_ts} -category:promotions -category:social -category:forums"
-    try:
-        ids = await list_message_ids(access, query, max_pages=int(MAX_MESSAGES_TO_FETCH / 500) + 1)
-    except Exception as e:
-        await _update_job(db, job_id, {"status": "error", "phase": "fetching", "error": str(e)})
-        return
-    ids = ids[:MAX_MESSAGES_TO_FETCH]
-    counts["fetched"] = len(ids)
-    await _update_job(db, job_id, {"phase": "filtering", "counts": counts})
-
-    # PHASE 2 & 3: fetch each message, apply cheap filter, batch to AI (with cap)
-    survivors: list[dict] = []
-    fetched_bodies = 0
-    for mid in ids:
-        # We only need headers/snippet first — but Gmail API single-call gives us both cheaply
-        msg = await get_message(access, mid)
-        fetched_bodies += 1
-        if not msg:
-            continue
-        if cheap_filter(msg):
-            survivors.append(msg)
-        # Occasional progress updates every 25 messages
-        if fetched_bodies % 25 == 0:
-            counts["filtered_in"] = len(survivors)
-            await _update_job(db, job_id, {"counts": counts})
-        if len(survivors) >= MAX_MESSAGES_FOR_AI:
-            break
-
-    counts["filtered_in"] = len(survivors)
-    await _update_job(db, job_id, {"phase": "extracting", "counts": counts})
-
-    # PHASE 4: AI extraction (bounded concurrency)
-    sem = asyncio.Semaphore(AI_CONCURRENCY)
-    results: list[tuple[dict, dict]] = []
-
-    async def _one(m):
-        async with sem:
-            ext = await extract_with_ai(m, my_email=my_email)
-            if ext:
-                results.append((m, ext))
-                nonlocal_counts["ai_extracted"] += 1
-                if nonlocal_counts["ai_extracted"] % 5 == 0:
-                    await _update_job(db, job_id, {"counts": {**counts, "ai_extracted": nonlocal_counts["ai_extracted"]}})
-
-    nonlocal_counts = {"ai_extracted": 0}
-    await asyncio.gather(*[_one(m) for m in survivors])
-    counts["ai_extracted"] = nonlocal_counts["ai_extracted"]
-    await _update_job(db, job_id, {"phase": "building", "counts": counts})
-
-    # PHASE 5: build invoices from money-related results (delegates to the
-    # shared _extract_and_write() helper so guardrails apply here too).
-    now_iso = datetime.now(timezone.utc).isoformat()
-    invoices_created = 0
-    review_created = 0
-    receipts_created = 0
-    for msg, ext in results:
-        inv_c, rec_c, rev_c = await _extract_and_write(db, user_id, msg, ext, my_email, now_iso)
-        invoices_created += inv_c
-        receipts_created += rec_c
-        review_created += rev_c
-
-    counts["invoices_created"] = invoices_created
-    counts["review_items"] = review_created
-    counts["receipts_created"] = receipts_created
-
-    # PHASE 6: reconcile unmatched receipts against open invoices
-    try:
-        recon = await reconcile_receipts(db, user_id)
-        counts["receipts_matched"] = recon.get("matched", 0)
-        counts["receipts_ambiguous"] = recon.get("ambiguous", 0)
-    except Exception as e:  # pragma: no cover
-        logger.warning("Receipt reconcile failed: %s", e)
-
-    await _update_job(db, job_id, {
-        "status": "complete",
-        "phase": "complete",
-        "counts": counts,
-        "finished_at": datetime.now(timezone.utc).isoformat(),
-    })
+    """Deprecated — use onboarding seed (90d) via POST /seed/start."""
+    logger.warning("run_historical_scan deprecated user=%s job=%s months=%s", user_id, job_id, months)
+    from gmail_sync import run_onboarding_sync
+    await run_onboarding_sync(db, user_id, job_id)
 
 
 # ---------------------------------------------------------------------------
@@ -344,8 +276,15 @@ INCREMENTAL_MAX_MESSAGES = 40   # per-tick cap so a single user can't hog the lo
 
 async def _extract_and_write(db, user_id, msg, ext, my_email, now_iso, CONFIDENCE_THRESHOLD=0.75):
     """Persist a single AI extraction outcome. Returns (invoice_created, receipt_created, review_created)."""
-    if not ext.get("is_money_related"):
+    label = _msg_label(msg)
+
+    def _drop(reason: str, **fields):
+        extra = " ".join(f"{k}={v!r}" for k, v in fields.items()) if fields else ""
+        logger.info("pipeline.write DROP %s reason=%s %s", label, reason, extra)
         return (0, 0, 0)
+
+    if not ext.get("is_money_related"):
+        return _drop("not_money_related", kind=ext.get("kind"), confidence=ext.get("confidence"))
     kind = ext.get("kind") or "none"
 
     sender_email = _extract_email_addr(msg.get("from", ""))
@@ -353,18 +292,13 @@ async def _extract_and_write(db, user_id, msg, ext, my_email, now_iso, CONFIDENC
     my_email_lc = (my_email or "").lower()
     my_domain = _sender_domain(my_email_lc)
 
-    # Direction guardrail: if the email is FROM a well-known vendor domain,
-    # this is a bill the user PAYS — not an invoice the user issued and not a
-    # receipt of incoming money. Send it to the review queue so the user can
-    # dismiss/suppress, never straight into the ledger. Overrides whatever the
-    # LLM said.
     if _is_vendor(sender_domain) and kind in ("invoice_sent", "payment_promise", "partial_payment", "receipt"):
         amount = ext.get("amount")
         if amount in (None, 0):
-            return (0, 0, 0)
+            return _drop("vendor_domain_no_amount", kind=kind, sender_domain=sender_domain)
         existing_r = await db.review_items.find_one({"user_id": user_id, "source_message_id": msg["id"]})
         if existing_r:
-            return (0, 0, 0)
+            return _drop("duplicate_review_item", kind=kind)
         await db.review_items.insert_one({
             "user_id": user_id,
             "counterparty_email": sender_email,
@@ -384,19 +318,19 @@ async def _extract_and_write(db, user_id, msg, ext, my_email, now_iso, CONFIDENC
             "review_reason": "vendor_domain",
             "created_at": now_iso,
         })
+        logger.info("pipeline.write REVIEW %s reason=vendor_domain kind=%s amount=%s", label, kind, amount)
         return (0, 0, 1)
 
     if kind == "receipt":
         amount = ext.get("amount")
         if amount in (None, 0):
-            return (0, 0, 0)
-        # Reject "receipts" whose payer is the user themselves (self-receipt)
+            return _drop("receipt_no_amount")
         payer_name = (ext.get("counterparty_name") or "").lower()
         if my_email_lc and (my_email_lc in payer_name or (my_domain and my_domain in payer_name)):
-            return (0, 0, 0)
+            return _drop("receipt_self_payer", payer=payer_name)
         existing = await db.receipts.find_one({"user_id": user_id, "source_message_id": msg["id"]})
         if existing:
-            return (0, 0, 0)
+            return _drop("duplicate_receipt")
         await db.receipts.insert_one({
             "user_id": user_id,
             "amount": float(amount),
@@ -414,21 +348,20 @@ async def _extract_and_write(db, user_id, msg, ext, my_email, now_iso, CONFIDENC
             "candidate_invoice_ids": [],
             "created_at": now_iso,
         })
+        logger.info("pipeline.write RECEIPT %s amount=%s payer=%s", label, amount, ext.get("counterparty_name"))
         return (0, 1, 0)
 
     if kind not in ("invoice_sent", "payment_promise", "partial_payment"):
-        return (0, 0, 0)
+        return _drop("unsupported_kind", kind=kind)
     amount = ext.get("amount")
     if amount in (None, 0):
-        return (0, 0, 0)
+        return _drop("invoice_no_amount", kind=kind, confidence=ext.get("confidence"))
 
     counterparty_email = (ext.get("counterparty_email") or sender_email).lower()
     if counterparty_email == my_email_lc:
         counterparty_email = _extract_email_addr(msg.get("to", "")).lower()
-    # Direction guardrail: refuse to create an invoice against the user's own
-    # email or their own domain — you can't be your own client.
     if counterparty_email == my_email_lc or (my_domain and _sender_domain(counterparty_email) == my_domain):
-        return (0, 0, 0)
+        return _drop("counterparty_is_self", cp=counterparty_email, kind=kind)
 
     status = "invoiced"
     if kind == "payment_promise":
@@ -463,159 +396,39 @@ async def _extract_and_write(db, user_id, msg, ext, my_email, now_iso, CONFIDENC
     if confidence < CONFIDENCE_THRESHOLD:
         existing_r = await db.review_items.find_one({"user_id": user_id, "source_message_id": msg["id"]})
         if existing_r:
-            return (0, 0, 0)
-        await db.review_items.insert_one({**base_doc, "review_status": "pending"})
+            return _drop("duplicate_review_item", kind=kind)
+        await db.review_items.insert_one({**base_doc, "review_status": "pending", "review_reason": "low_confidence"})
+        logger.info(
+            "pipeline.write REVIEW %s reason=low_confidence kind=%s amount=%s conf=%.2f cp=%s",
+            label, kind, amount, confidence, counterparty_email,
+        )
         return (0, 0, 1)
 
     existing = await db.invoices.find_one({"user_id": user_id, "source_message_id": msg["id"]})
     if existing:
-        return (0, 0, 0)
+        return _drop("duplicate_invoice", kind=kind)
     await db.invoices.insert_one(base_doc)
+    logger.info(
+        "pipeline.write INVOICE %s kind=%s amount=%s status=%s conf=%.2f cp=%s due=%s",
+        label, kind, amount, status, confidence, counterparty_email, ext.get("due_date"),
+    )
     return (1, 0, 0)
 
 
 async def _already_processed(db, user_id, message_id: str) -> bool:
     """True if we've already stored this message in any bucket."""
-    for coll in ("invoices", "receipts", "review_items"):
-        if await db[coll].find_one({"user_id": user_id, "source_message_id": message_id}, {"_id": 1}):
-            return True
-    return False
+    from invoice_event_idempotency import message_already_handled
+    return await message_already_handled(db, user_id, message_id)
 
 
 async def run_incremental_sync(db, user_id) -> dict:
-    """One tick of continuous sync. Idempotent, safe to call on a timer."""
-    counts = {"fetched": 0, "filtered_in": 0, "ai_extracted": 0,
-              "invoices_created": 0, "receipts_created": 0, "review_items": 0,
-              "receipts_matched": 0, "receipts_ambiguous": 0}
-    state = await db.gmail_sync_state.find_one({"user_id": user_id})
-    conn = await db.gmail_connections.find_one({"user_id": user_id})
-    if not conn or conn.get("status") != "connected":
-        return {**counts, "skipped": "no_connection"}
-
-    my_email = conn.get("email") or ""
-
-    try:
-        access = await get_access_token(db, user_id)
-    except GmailAuthError:
-        await db.gmail_sync_state.update_one(
-            {"user_id": user_id},
-            {"$set": {"user_id": user_id, "last_sync_status": "auth_error",
-                      "last_synced_at": datetime.now(timezone.utc).isoformat()}},
-            upsert=True,
-        )
-        return {**counts, "skipped": "auth_error"}
-
-    # Determine window: last_message_epoch - overlap, or lookback default on first run
-    now = datetime.now(timezone.utc)
-    last_epoch = (state or {}).get("last_message_epoch")
-    if last_epoch:
-        since_ts = int(last_epoch) - INCREMENTAL_OVERLAP_HOURS * 3600
-    else:
-        since_ts = int((now - timedelta(days=INCREMENTAL_LOOKBACK_DAYS)).timestamp())
-    query = f"after:{since_ts} -category:promotions -category:social -category:forums"
-
-    # Fetch IDs (only need one page, cap tightly)
-    try:
-        ids = await list_message_ids(access, query, max_pages=1)
-    except Exception as e:
-        logger.warning("Sync list failed: %s", e)
-        return {**counts, "error": "list_failed"}
-    counts["fetched"] = len(ids)
-
-    # Filter out ones we already processed
-    fresh_ids = []
-    for mid in ids:
-        if not await _already_processed(db, user_id, mid):
-            fresh_ids.append(mid)
-        if len(fresh_ids) >= INCREMENTAL_MAX_MESSAGES:
-            break
-
-    if not fresh_ids:
-        await db.gmail_sync_state.update_one(
-            {"user_id": user_id},
-            {"$set": {"user_id": user_id, "last_sync_status": "ok",
-                      "last_synced_at": now.isoformat(),
-                      "last_message_epoch": int(now.timestamp())}},
-            upsert=True,
-        )
-        return counts
-
-    # Cheap filter + AI + write
-    survivors: list[dict] = []
-    newest_epoch = last_epoch or since_ts
-    for mid in fresh_ids:
-        msg = await get_message(access, mid)
-        if not msg:
-            continue
-        # Track newest date so next tick starts after it
-        d = msg.get("date")
-        if d:
-            try:
-                from email.utils import parsedate_to_datetime
-                dt = parsedate_to_datetime(d)
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                newest_epoch = max(newest_epoch, int(dt.timestamp()))
-            except Exception:
-                pass
-        if cheap_filter(msg):
-            survivors.append(msg)
-
-    counts["filtered_in"] = len(survivors)
-
-    if survivors:
-        sem = asyncio.Semaphore(AI_CONCURRENCY)
-
-        async def _one(m):
-            async with sem:
-                return (m, await extract_with_ai(m, my_email=my_email))
-
-        pairs = await asyncio.gather(*[_one(m) for m in survivors])
-        now_iso = datetime.now(timezone.utc).isoformat()
-        for m, ext in pairs:
-            if not ext:
-                continue
-            counts["ai_extracted"] += 1
-            inv, rec, rev = await _extract_and_write(db, user_id, m, ext, my_email, now_iso)
-            counts["invoices_created"] += inv
-            counts["receipts_created"] += rec
-            counts["review_items"] += rev
-
-    # Reconcile any new receipts against open invoices
-    try:
-        recon = await reconcile_receipts(db, user_id)
-        counts["receipts_matched"] = recon.get("matched", 0)
-        counts["receipts_ambiguous"] = recon.get("ambiguous", 0)
-    except Exception as e:
-        logger.warning("Sync reconcile failed: %s", e)
-
-    await db.gmail_sync_state.update_one(
-        {"user_id": user_id},
-        {"$set": {"user_id": user_id, "last_sync_status": "ok",
-                  "last_synced_at": now.isoformat(),
-                  "last_message_epoch": int(newest_epoch),
-                  "last_counts": counts}},
-        upsert=True,
-    )
-    return counts
+    from incremental_sync import run_incremental_sync as _run
+    return await _run(db, user_id)
 
 
 async def sync_all_users(db) -> dict:
-    """Iterate every connected user and run one incremental sync tick per user."""
-    totals = {"users": 0, "invoices_created": 0, "receipts_created": 0,
-              "receipts_matched": 0, "review_items": 0}
-    async for conn in db.gmail_connections.find({"status": "connected"}):
-        uid = conn.get("user_id")
-        if not uid:
-            continue
-        try:
-            c = await run_incremental_sync(db, uid)
-            totals["users"] += 1
-            for k in ("invoices_created", "receipts_created", "receipts_matched", "review_items"):
-                totals[k] += c.get(k, 0)
-        except Exception as e:
-            logger.exception("Sync failed for user %s: %s", uid, e)
-    return totals
+    from incremental_sync import sync_all_users as _sync_all
+    return await _sync_all(db)
 
 
 # ---------------------------------------------------------------------------
@@ -720,22 +533,38 @@ async def reconcile_receipts(db, user_id) -> dict:
         new_paid = round(float(inv.get("paid_amount") or 0) + applied, 2)
 
         if top["close_full"] or new_balance <= 0.005:
-            new_status = "paid"
-            paid_at = now_iso
+            # Auto-match → paid (unconfirmed); user confirms in Today / Payments UI
+            new_status = "paid_unconfirmed"
+            paid_at = None
         else:
             new_status = "partially_paid"
             paid_at = inv.get("paid_at")
             partial += 1
 
+        amt_label = f"{rc.get('currency') or ''} {rc_amount}".strip()
+        prev_status = inv.get("status") or "invoiced"
+        prev_bal = bal
+        prev_paid = float(inv.get("paid_amount") or 0)
+        patch: dict = {
+            "status": new_status,
+            "balance_remaining": max(new_balance, 0.0),
+            "paid_amount": new_paid,
+            "paid_at": paid_at,
+            "status_updated_at": now_iso,
+            "chasing_paused": True,
+        }
+        if new_status == "paid_unconfirmed":
+            patch["payment_claim_quote"] = (
+                f"Payment of {amt_label} from {payer}"
+                if payer
+                else f"Processor payment of {amt_label}"
+            )
+            patch["status_before_claim"] = prev_status
+            patch["claim_balance_before"] = prev_bal
+            patch["claim_paid_before"] = prev_paid
         await db.invoices.update_one(
             {"_id": inv["_id"]},
-            {"$set": {
-                "status": new_status,
-                "balance_remaining": max(new_balance, 0.0),
-                "paid_amount": new_paid,
-                "paid_at": paid_at,
-                "status_updated_at": now_iso,
-            }},
+            {"$set": patch},
         )
         await db.receipts.update_one(
             {"_id": rc["_id"]},
@@ -760,6 +589,8 @@ async def reconcile_receipts(db, user_id) -> dict:
                 "score": top["score"],
             },
         })
+        from post_chase import clear_watching_on_client_event
+        await clear_watching_on_client_event(db, inv["_id"], now_iso)
         # Reflect the balance update locally so subsequent receipts see it
         inv["balance_remaining"] = max(new_balance, 0.0)
         inv["status"] = new_status

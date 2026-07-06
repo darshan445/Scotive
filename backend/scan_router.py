@@ -9,15 +9,48 @@ from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from scan_pipeline import run_historical_scan, reconcile_receipts, run_incremental_sync
+from scan_pipeline import reconcile_receipts
+from gmail_sync import INCREMENTAL_LOOKBACK, ack_detections, ack_due_date_prompts, run_onboarding_sync
+from post_chase import ack_followup_prompts, mark_chase_sent
+from incremental_sync import run_incremental_sync
+from seed_scan import (
+    SEED_DAYS,
+    confirm_seed_curation,
+    get_onboarding_state,
+    list_seed_candidates,
+    run_seed_scan,
+)
+from ledger_reconcile import (
+    INVOICE_MONGO_SORT,
+    REVIEW_MONGO_SORT,
+    client_identity_key,
+    compute_open_totals,
+    enrich_invoice_doc,
+    normalize_source_date,
+    sort_by_email_date,
+)
 from escalation_scheduler import run_escalation_tick, generate_draft as _gen_escalation_draft
 from digest_sender import send_digest_for_user, build_digest_email, collect_today_sections, _totals as _digest_totals
+from invoice_lifecycle import apply_stale_transitions, clear_stale_fields
+from client_merge import (
+    apply_client_merge,
+    detect_cross_domain_merge_prompts,
+    dismiss_merge_prompt,
+    list_pending_merge_prompts,
+    resolve_canonical_key_for_lookup,
+)
 
 logger = logging.getLogger("scotive.scan_router")
 
 
-class StartScanInput(BaseModel):
-    months: int = 12
+class SeedConfirmInput(BaseModel):
+    candidate_ids: list[str] = Field(default_factory=list)
+    track_none: bool = False
+    due_dates: dict[str, str | None] = Field(default_factory=dict)
+
+
+class DetectionAckInput(BaseModel):
+    invoice_ids: list[str] | None = None
 
 
 class ReviewConfirmInput(BaseModel):
@@ -36,7 +69,8 @@ _OPEN_STATUSES = ("invoiced", "overdue", "promised", "partially_paid", "promise_
 
 
 class InvoiceActionInput(BaseModel):
-    action: str  # mark_paid | write_off | dispute | resolve_dispute | pause | resume | undo
+    action: str  # mark_paid | write_off | dispute | resolve_dispute | pause | resume | undo | dismiss_stale | set_due_date | skip_due_date
+    due_date: str | None = Field(default=None, max_length=32)
 
 
 class ChaseDraftInput(BaseModel):
@@ -205,45 +239,42 @@ def _compute_client_stats(invoices: list[dict]) -> dict | None:
 def build_router(db, get_current_user):
     router = APIRouter(tags=["scan"])
 
-    @router.post("/scan/start")
-    async def start_scan(payload: StartScanInput | None = None, user: dict = Depends(get_current_user)):
+    @router.get("/onboarding/state")
+    async def onboarding_state(user: dict = Depends(get_current_user)):
+        return await get_onboarding_state(db, user["_id"])
+
+    @router.post("/seed/start")
+    async def seed_start(user: dict = Depends(get_current_user)):
         conn = await db.gmail_connections.find_one({"user_id": user["_id"]})
         if not conn or conn.get("status") == "revoked":
-            raise HTTPException(status_code=400, detail="Connect Gmail before starting a scan.")
-        # If a scan is already running, return it instead of starting a new one
-        existing = await db.scan_jobs.find_one(
+            raise HTTPException(status_code=400, detail="Connect Gmail before seed scan.")
+        existing = await db.seed_jobs.find_one(
             {"user_id": user["_id"], "status": {"$in": ["queued", "running"]}}
         )
         if existing:
             return {"job_id": str(existing["_id"]), "status": existing.get("status")}
-
-        # If caller didn't supply months, fall back to user_settings.scan_window_months, else 12
-        default_months = 12
-        try:
-            s = await db.user_settings.find_one({"user_id": user["_id"]})
-            if s and isinstance(s.get("scan_window_months"), int):
-                default_months = s["scan_window_months"]
-        except Exception:
-            pass
-        months = (payload.months if payload else default_months) or default_months
-        doc = {
+        now_iso = datetime.now(timezone.utc).isoformat()
+        res = await db.seed_jobs.insert_one({
             "user_id": user["_id"],
             "status": "queued",
             "phase": "queued",
-            "months": months,
-            "counts": {"fetched": 0, "filtered_in": 0, "ai_extracted": 0, "invoices_created": 0},
-            "started_at": datetime.now(timezone.utc).isoformat(),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-        res = await db.scan_jobs.insert_one(doc)
+            "days": SEED_DAYS,
+            "counts": {"candidates": 0},
+            "started_at": now_iso,
+            "updated_at": now_iso,
+        })
         job_id = res.inserted_id
-        # Fire and forget
-        asyncio.create_task(run_historical_scan(db, user["_id"], job_id, months=months))
+        await db.gmail_sync_state.update_one(
+            {"user_id": user["_id"]},
+            {"$set": {"awaiting_curation": True, "updated_at": now_iso}},
+            upsert=True,
+        )
+        asyncio.create_task(run_seed_scan(db, user["_id"], job_id))
         return {"job_id": str(job_id), "status": "queued"}
 
-    @router.get("/scan/status")
-    async def scan_status(user: dict = Depends(get_current_user)):
-        job = await db.scan_jobs.find_one(
+    @router.get("/seed/status")
+    async def seed_status(user: dict = Depends(get_current_user)):
+        job = await db.seed_jobs.find_one(
             {"user_id": user["_id"]}, sort=[("started_at", -1)]
         )
         if not job:
@@ -254,47 +285,105 @@ def build_router(db, get_current_user):
             "status": job.get("status"),
             "phase": job.get("phase"),
             "counts": job.get("counts", {}),
-            "months": job.get("months", 12),
-            "started_at": job.get("started_at"),
-            "finished_at": job.get("finished_at"),
+            "days": job.get("days", SEED_DAYS),
             "error": job.get("error"),
         }
 
+    @router.get("/seed/candidates")
+    async def seed_candidates(user: dict = Depends(get_current_user)):
+        rows = await list_seed_candidates(db, user["_id"])
+        return {"candidates": [_serialize(r) for r in rows], "count": len(rows)}
+
+    @router.post("/seed/confirm")
+    async def seed_confirm(payload: SeedConfirmInput, user: dict = Depends(get_current_user)):
+        try:
+            result = await confirm_seed_curation(
+                db,
+                user["_id"],
+                payload.candidate_ids,
+                track_none=payload.track_none,
+                due_dates=payload.due_dates,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        return {"ok": True, **result}
+
     @router.post("/scan/sync")
     async def scan_sync(user: dict = Depends(get_current_user)):
-        """Manually trigger one incremental sync tick for the current user."""
+        """Manual sync — same job as the hourly background sync (last hour of sent mail)."""
         try:
             counts = await run_incremental_sync(db, user["_id"])
         except Exception as e:
             logger.exception("Manual sync failed: %s", e)
             raise HTTPException(status_code=500, detail="Sync failed. Check backend logs.")
-        state = await db.gmail_sync_state.find_one({"user_id": user["_id"]})
-        last_synced_at = (state or {}).get("last_synced_at")
-        return {"ok": True, "counts": counts, "last_synced_at": last_synced_at}
+        state = await db.gmail_sync_state.find_one({"user_id": user["_id"]}) or {}
+        return {
+            "ok": True,
+            "counts": counts,
+            "last_synced_at": state.get("last_synced_at"),
+            "new_invoices": counts.get("new_invoices") or [],
+        }
+
+    @router.post("/sync/detections/ack")
+    async def sync_detections_ack(
+        payload: DetectionAckInput | None = None,
+        user: dict = Depends(get_current_user),
+    ):
+        ids = payload.invoice_ids if payload else None
+        return await ack_detections(db, user["_id"], ids)
+
+    @router.post("/sync/due-date-prompts/ack")
+    async def due_date_prompts_ack(
+        payload: DetectionAckInput | None = None,
+        user: dict = Depends(get_current_user),
+    ):
+        ids = payload.invoice_ids if payload else None
+        return await ack_due_date_prompts(db, user["_id"], ids)
+
+    @router.post("/sync/followup-prompts/ack")
+    async def followup_prompts_ack(
+        payload: DetectionAckInput | None = None,
+        user: dict = Depends(get_current_user),
+    ):
+        ids = payload.invoice_ids if payload else None
+        return await ack_followup_prompts(db, user["_id"], ids)
 
     @router.get("/scan/sync-state")
     async def scan_sync_state(user: dict = Depends(get_current_user)):
         state = await db.gmail_sync_state.find_one({"user_id": user["_id"]}) or {}
-        state.pop("_id", None)
-        state.pop("user_id", None)
-        return state
+        out = {
+            "last_synced_at": state.get("last_synced_at"),
+            "last_detected_at": state.get("last_detected_at"),
+            "last_sync_status": state.get("last_sync_status"),
+            "watching_sent_mail": state.get("watching_sent_mail", False),
+            "unread_detections": state.get("unread_detections") or [],
+            "pending_due_date_prompts": state.get("pending_due_date_prompts") or [],
+            "pending_followup_prompts": state.get("pending_followup_prompts") or [],
+            "sync_lookback": INCREMENTAL_LOOKBACK,
+            "seed_lookback_days": SEED_DAYS,
+            "sync_running": bool(state.get("sync_running")),
+        }
+        return out
 
     @router.get("/ledger")
     async def get_ledger(user: dict = Depends(get_current_user)):
-        cursor = db.invoices.find({"user_id": user["_id"]}).sort("created_at", -1)
+        cursor = db.invoices.find({"user_id": user["_id"]}).sort(INVOICE_MONGO_SORT)
         rows = []
-        total_open = 0.0
-        clients: set[str] = set()
+        raw_docs = []
         async for doc in cursor:
-            # For legacy rows that don't carry balance_remaining, fall back to amount.
             if doc.get("balance_remaining") is None:
                 doc["balance_remaining"] = float(doc.get("amount") or 0)
-            rows.append(_serialize(doc))
-            if doc.get("status") in _OPEN_STATUSES:
-                total_open += float(doc.get("balance_remaining") or doc.get("amount") or 0)
-                if doc.get("counterparty_email"):
-                    clients.add(doc["counterparty_email"])
-        return {"invoices": rows, "total_open": round(total_open, 2), "client_count": len(clients)}
+            doc = enrich_invoice_doc(doc, doc.get("counterparty_email") or "")
+            raw_docs.append(doc)
+        raw_docs = sort_by_email_date(raw_docs)
+        rows = [_serialize(doc) for doc in raw_docs]
+        agg = compute_open_totals(raw_docs, _OPEN_STATUSES)
+        return {
+            "invoices": rows,
+            "totals_by_currency": agg["totals_by_currency"],
+            "total_open": agg["totals_by_currency"],  # legacy key → per-currency map
+            "client_count": agg["client_count"],
+        }
 
     # ---- Receipts --------------------------------------------------------
     @router.get("/receipts")
@@ -302,6 +391,8 @@ def build_router(db, get_current_user):
         query: dict = {"user_id": user["_id"]}
         if status:
             query["match_status"] = status
+        else:
+            query["match_status"] = {"$nin": ["rejected"]}
         cursor = db.receipts.find(query).sort("source_date", -1)
         rows = []
         async for doc in cursor:
@@ -329,16 +420,28 @@ def build_router(db, get_current_user):
         applied = min(float(rc.get("amount") or 0), bal)
         new_balance = round(bal - applied, 2)
         new_paid = round(float(inv.get("paid_amount") or 0) + applied, 2)
-        new_status = "paid" if new_balance <= 0.005 else "partially_paid"
+        new_status = "paid_unconfirmed" if new_balance <= 0.005 else "partially_paid"
+        payer = rc.get("payer_name") or ""
+        amt_label = f"{rc.get('currency') or ''} {applied}".strip()
+        prev_status = inv.get("status") or "invoiced"
+        patch: dict = {
+            "status": new_status,
+            "balance_remaining": max(new_balance, 0.0),
+            "paid_amount": new_paid,
+            "paid_at": inv.get("paid_at") if new_status != "paid_unconfirmed" else None,
+            "status_updated_at": now_iso,
+            "chasing_paused": True,
+        }
+        if new_status == "paid_unconfirmed":
+            patch["payment_claim_quote"] = (
+                f"Payment of {amt_label} from {payer}" if payer else f"Processor payment of {amt_label}"
+            )
+            patch["status_before_claim"] = prev_status
+            patch["claim_balance_before"] = bal
+            patch["claim_paid_before"] = float(inv.get("paid_amount") or 0)
         await db.invoices.update_one(
             {"_id": inv["_id"]},
-            {"$set": {
-                "status": new_status,
-                "balance_remaining": max(new_balance, 0.0),
-                "paid_amount": new_paid,
-                "paid_at": now_iso if new_status == "paid" else inv.get("paid_at"),
-                "status_updated_at": now_iso,
-            }},
+            {"$set": patch},
         )
         await db.receipts.update_one(
             {"_id": rc["_id"]},
@@ -369,128 +472,148 @@ def build_router(db, get_current_user):
         await db.receipts.update_one({"_id": rc["_id"]}, {"$set": {"match_status": "rejected"}})
         return {"ok": True}
 
+    @router.post("/receipts/dismiss-unmatched")
+    async def dismiss_unmatched_receipts(user: dict = Depends(get_current_user)):
+        """Bulk-dismiss noisy processor emails that aren't client payments."""
+        res = await db.receipts.update_many(
+            {"user_id": user["_id"], "match_status": "unmatched"},
+            {"$set": {"match_status": "rejected", "updated_at": datetime.now(timezone.utc).isoformat()}},
+        )
+        return {"ok": True, "dismissed": res.modified_count}
+
     @router.get("/invoices/{invoice_id}/timeline")
     async def invoice_timeline(invoice_id: str, user: dict = Depends(get_current_user)):
+        from invoice_timeline import build_invoice_timeline, invoice_next_line
+        from invoice_event_idempotency import dedupe_stored_invoice_events
+
         try:
             inv = await db.invoices.find_one({"_id": ObjectId(invoice_id), "user_id": user["_id"]})
         except Exception:
             raise HTTPException(status_code=404, detail="Invoice not found")
         if not inv:
             raise HTTPException(status_code=404, detail="Invoice not found")
-        events = []
-        # Origin event
-        events.append({
-            "kind": inv.get("kind") or "invoice_sent",
-            "date": inv.get("source_date") or inv.get("created_at"),
-            "quote": inv.get("evidence_sentence"),
-            "subject": inv.get("source_subject"),
-            "from": inv.get("source_from"),
-            "message_id": inv.get("source_message_id"),
-            "thread_id": inv.get("source_thread_id"),
-        })
-        # Any other invoices from same counterparty in the same thread as additional evidence
-        if inv.get("source_thread_id"):
-            related = db.invoices.find({
-                "user_id": user["_id"],
-                "source_thread_id": inv["source_thread_id"],
-                "_id": {"$ne": inv["_id"]},
-            })
-            async for r in related:
-                events.append({
-                    "kind": r.get("kind"),
-                    "date": r.get("source_date") or r.get("created_at"),
-                    "quote": r.get("evidence_sentence"),
-                    "subject": r.get("source_subject"),
-                    "from": r.get("source_from"),
-                    "message_id": r.get("source_message_id"),
-                    "thread_id": r.get("source_thread_id"),
-                })
-        # Receipt matches applied to this invoice
+        inv = enrich_invoice_doc(dict(inv), inv.get("counterparty_email") or "")
+
+        receipts = []
         async for rc in db.receipts.find({"user_id": user["_id"], "matched_invoice_id": inv["_id"]}):
-            events.append({
-                "kind": "receipt",
-                "date": rc.get("source_date") or rc.get("created_at"),
-                "quote": rc.get("evidence_sentence"),
-                "subject": rc.get("source_subject"),
-                "from": rc.get("processor_from"),
-                "message_id": rc.get("source_message_id"),
-                "thread_id": rc.get("source_thread_id"),
-                "amount": rc.get("applied_amount") or rc.get("amount"),
-                "payer_name": rc.get("payer_name"),
-                "receipt_id": str(rc.get("_id")) if rc.get("_id") else None,
-            })
-        # Recorded invoice_events (mark_paid, receipt_matched, etc.). `meta`
-        # can contain nested ObjectIds (e.g. matched receipt_id) which must be
-        # normalized before FastAPI's default encoder trips on them.
+            receipts.append(rc)
+
+        await dedupe_stored_invoice_events(db, user["_id"], inv["_id"])
+        event_rows = []
         async for ev in db.invoice_events.find({"user_id": user["_id"], "invoice_id": inv["_id"]}):
-            events.append({
-                "kind": ev.get("action"),
-                "date": ev.get("at"),
-                "meta": _json_safe(ev.get("meta") or {}),
-            })
-        events.sort(key=lambda e: str(e.get("date") or ""))
-        return {"invoice": _serialize(inv), "events": events}
+            event_rows.append(ev)
+
+        events = build_invoice_timeline(inv, receipts, event_rows)
+        serialized_inv = _serialize(inv)
+        return {
+            "invoice": serialized_inv,
+            "events": [_json_safe(e) for e in events],
+            "next": invoice_next_line(serialized_inv),
+        }
 
     # ---- Clients ---------------------------------------------------------
     @router.get("/clients")
     async def list_clients(user: dict = Depends(get_current_user)):
         pipeline = [
             {"$match": {"user_id": user["_id"]}},
+            {"$addFields": {
+                "client_key": {
+                    "$ifNull": [
+                        "$client_identity_key",
+                        {"$concat": ["email:", {"$toLower": "$counterparty_email"}]},
+                    ]
+                }
+            }},
             {"$group": {
-                "_id": "$counterparty_email",
-                "name": {"$first": "$counterparty_name"},
+                "_id": "$client_key",
+                "emails": {"$addToSet": {"$toLower": "$counterparty_email"}},
+                "names": {"$push": "$counterparty_name"},
                 "invoice_count": {"$sum": 1},
-                "open_amount": {"$sum": {
+                "open_by_currency": {"$push": {
                     "$cond": [
                         {"$in": ["$status", list(_OPEN_STATUSES)]},
-                        {"$ifNull": ["$balance_remaining", "$amount"]},
-                        0,
+                        {
+                            "currency": {"$ifNull": ["$currency", "USD"]},
+                            "amount": {"$ifNull": ["$balance_remaining", "$amount"]},
+                        },
+                        None,
                     ]
                 }},
-                "last_activity": {"$max": "$created_at"},
+                "last_activity": {"$max": {"$ifNull": ["$source_date", "$created_at"]}},
             }},
-            {"$sort": {"open_amount": -1}},
+            {"$sort": {"last_activity": -1}},
         ]
         rows = []
         async for c in db.invoices.aggregate(pipeline):
+            totals: dict[str, float] = {}
+            for item in c.get("open_by_currency") or []:
+                if not item:
+                    continue
+                cur = (item.get("currency") or "USD").upper()
+                totals[cur] = round(totals.get(cur, 0) + float(item.get("amount") or 0), 2)
+            names = [n for n in (c.get("names") or []) if n]
+            display_name = names[0] if names else None
+            emails = sorted(c.get("emails") or [])
+            primary_email = emails[0] if emails else c["_id"]
             rows.append({
-                "email": c["_id"],
-                "name": c.get("name"),
+                "email": primary_email,
+                "name": display_name,
+                "identities": emails,
+                "client_key": c["_id"],
                 "invoice_count": c.get("invoice_count", 0),
-                "open_amount": round(float(c.get("open_amount") or 0), 2),
+                "open_by_currency": totals,
+                "open_amount": sum(totals.values()),  # legacy — prefer open_by_currency in UI
                 "last_activity": c.get("last_activity"),
             })
         return {"clients": rows}
 
+    @router.get("/clients/merge-prompts")
+    async def get_merge_prompts(user: dict = Depends(get_current_user)):
+        prompts = await list_pending_merge_prompts(db, user["_id"])
+        return {"prompts": prompts, "count": len(prompts)}
+
+    @router.post("/clients/merge-prompts/{prompt_id}/confirm")
+    async def confirm_merge_prompt(prompt_id: str, user: dict = Depends(get_current_user)):
+        try:
+            result = await apply_client_merge(db, user["_id"], prompt_id)
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        return {"ok": True, **result}
+
+    @router.post("/clients/merge-prompts/{prompt_id}/dismiss")
+    async def dismiss_merge_prompt_route(prompt_id: str, user: dict = Depends(get_current_user)):
+        try:
+            await dismiss_merge_prompt(db, user["_id"], prompt_id)
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        return {"ok": True}
+
     @router.get("/clients/{email}")
     async def client_detail(email: str, user: dict = Depends(get_current_user)):
         email = email.lower()
-        # Auto-link same-domain identities
-        domain = email.split("@")[-1] if "@" in email else ""
-        query = {"user_id": user["_id"]}
-        if domain:
-            query["counterparty_email"] = {"$regex": f"@{domain}$", "$options": "i"}
-        else:
-            query["counterparty_email"] = email
-        cursor = db.invoices.find(query).sort("created_at", -1)
-        invoices = []
+        canonical_key = await resolve_canonical_key_for_lookup(db, user["_id"], email)
+        query = {"user_id": user["_id"], "client_identity_key": canonical_key}
+        cursor = db.invoices.find(query).sort(INVOICE_MONGO_SORT)
+        raw_docs = []
         identities: dict[str, int] = {}
-        total_open = 0.0
         primary_name = None
         async for doc in cursor:
             if doc.get("balance_remaining") is None:
                 doc["balance_remaining"] = float(doc.get("amount") or 0)
-            invoices.append(_serialize(doc))
+            doc = enrich_invoice_doc(doc, doc.get("counterparty_email") or "")
+            raw_docs.append(doc)
             ident = doc.get("counterparty_email")
             if ident:
                 identities[ident] = identities.get(ident, 0) + 1
             if not primary_name and doc.get("counterparty_name"):
                 primary_name = doc["counterparty_name"]
-            if doc.get("status") in _OPEN_STATUSES:
-                total_open += float(doc.get("balance_remaining") or doc.get("amount") or 0)
-        if not invoices:
+        if not raw_docs:
             raise HTTPException(status_code=404, detail="Client not found")
 
+        raw_docs = sort_by_email_date(raw_docs)
+        invoices = [_serialize(doc) for doc in raw_docs]
+
+        agg = compute_open_totals(raw_docs, _OPEN_STATUSES)
         stats = _compute_client_stats(invoices)
 
         return {
@@ -498,17 +621,24 @@ def build_router(db, get_current_user):
             "name": primary_name,
             "identities": [{"email": e, "message_count": n} for e, n in sorted(identities.items(), key=lambda x: -x[1])],
             "invoices": invoices,
-            "total_open": round(total_open, 2),
-            "stats": stats,  # None when payment_cycles < 2
+            "totals_by_currency": agg["totals_by_currency"],
+            "total_open": agg["totals_by_currency"],
+            "stats": stats,
+            "client_key": canonical_key,
         }
 
     # ---- Review queue -----------------------------------------------------
     @router.get("/review-queue")
     async def list_review(user: dict = Depends(get_current_user)):
-        cursor = db.review_items.find({"user_id": user["_id"], "review_status": "pending"}).sort("created_at", -1)
-        items = []
+        cursor = db.review_items.find({"user_id": user["_id"], "review_status": "pending"}).sort(REVIEW_MONGO_SORT)
+        items_raw = []
         async for doc in cursor:
-            items.append(_serialize(doc))
+            if doc.get("source_date"):
+                normalized = normalize_source_date(doc["source_date"])
+                if normalized:
+                    doc["source_date"] = normalized
+            items_raw.append(doc)
+        items = [_serialize(doc) for doc in sort_by_email_date(items_raw)]
         return {"items": items, "count": len(items)}
 
     @router.post("/review-queue/{item_id}/confirm")
@@ -525,6 +655,7 @@ def build_router(db, get_current_user):
         merged.pop("_id", None)
         merged.pop("review_status", None)
         merged["confidence"] = 1.0  # user-confirmed
+        merged = enrich_invoice_doc(merged, merged.get("counterparty_email") or "")
         existing = await db.invoices.find_one({"user_id": user["_id"], "source_message_id": item["source_message_id"]})
         if not existing:
             await db.invoices.insert_one(merged)
@@ -607,16 +738,70 @@ def build_router(db, get_current_user):
             patch["paid_at"] = now
             patch["balance_remaining"] = 0.0
             patch["paid_amount"] = float(inv.get("amount") or 0)
+            patch["payment_claim_quote"] = None
+            patch["status_before_claim"] = None
+            patch["claim_balance_before"] = None
+            patch["claim_paid_before"] = None
+            patch["chasing_paused"] = False
+            patch["watching_for_reply"] = False
+            patch["ladder_exhausted"] = False
+            clear_stale_fields(patch)
+            patch["last_activity_at"] = now
+            await ack_followup_prompts(db, user["_id"], [invoice_id])
+        elif action == "deny_payment_claim":
+            prev = inv.get("status_before_claim") or "overdue"
+            if prev == "stale":
+                prev = inv.get("status_before_stale") or "overdue"
+            patch["status"] = prev
+            patch["chasing_paused"] = False
+            patch["payment_claim_quote"] = None
+            patch["status_before_claim"] = None
+            if inv.get("claim_balance_before") is not None:
+                patch["balance_remaining"] = float(inv["claim_balance_before"])
+                patch["paid_amount"] = float(inv.get("claim_paid_before") or 0)
+                patch["claim_balance_before"] = None
+                patch["claim_paid_before"] = None
         elif action == "write_off":
             patch["status"] = "written_off"
+            patch["watching_for_reply"] = False
+            clear_stale_fields(patch)
+            patch["last_activity_at"] = now
+            await ack_followup_prompts(db, user["_id"], [invoice_id])
         elif action == "dispute":
             patch["status"] = "disputed"
+            patch["last_activity_at"] = now
         elif action == "resolve_dispute":
             patch["status"] = "invoiced"
+            patch["last_activity_at"] = now
+        elif action == "dismiss_stale":
+            patch["status"] = inv.get("status_before_stale") or "overdue"
+            patch["chasing_paused"] = False
+            clear_stale_fields(patch)
+            patch["last_activity_at"] = now
         elif action == "pause":
             patch["chasing_paused"] = True
+            await ack_followup_prompts(db, user["_id"], [invoice_id])
         elif action == "resume":
             patch["chasing_paused"] = False
+        elif action == "set_due_date":
+            if not payload.due_date:
+                raise HTTPException(status_code=400, detail="due_date required")
+            try:
+                d = datetime.strptime(payload.due_date[:10], "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid due_date")
+            patch["due_date"] = d.isoformat()
+            patch["due_date_assumed"] = False
+            patch["last_activity_at"] = now
+            today = datetime.now(timezone.utc).date()
+            if d < today and inv.get("status") == "invoiced":
+                patch["status"] = "overdue"
+            elif d >= today and inv.get("status") == "overdue":
+                patch["status"] = "invoiced"
+            await ack_due_date_prompts(db, user["_id"], [invoice_id])
+        elif action == "skip_due_date":
+            patch["last_activity_at"] = now
+            await ack_due_date_prompts(db, user["_id"], [invoice_id])
         else:
             raise HTTPException(status_code=400, detail="Unknown action")
         await db.invoices.update_one({"_id": inv["_id"]}, {"$set": patch})
@@ -628,31 +813,14 @@ def build_router(db, get_current_user):
 
     @router.post("/lifecycle/run")
     async def run_lifecycle(user: dict = Depends(get_current_user)):
-        """Recompute date-driven transitions: overdue + promise_broken."""
-        today = datetime.now(timezone.utc).date()
-        settings_doc = await db.user_settings.find_one({"user_id": user["_id"]}) or {}
-        grace_days = int(settings_doc.get("grace_days", 1))
-        overdue_updates = 0
-        broken_updates = 0
-        # Invoiced -> Overdue
-        async for inv in db.invoices.find({"user_id": user["_id"], "status": "invoiced", "due_date": {"$ne": None}}):
-            try:
-                due = datetime.fromisoformat(inv["due_date"]).date()
-            except Exception:
-                continue
-            if (today - due).days > grace_days:
-                await db.invoices.update_one({"_id": inv["_id"]}, {"$set": {"status": "overdue"}})
-                overdue_updates += 1
-        # Promised -> Promise broken
-        async for inv in db.invoices.find({"user_id": user["_id"], "status": "promised", "promise_date": {"$ne": None}}):
-            try:
-                pd = datetime.fromisoformat(inv["promise_date"]).date()
-            except Exception:
-                continue
-            if (today - pd).days > grace_days:
-                await db.invoices.update_one({"_id": inv["_id"]}, {"$set": {"status": "promise_broken"}})
-                broken_updates += 1
-        return {"ok": True, "overdue": overdue_updates, "promise_broken": broken_updates}
+        """Recompute stale transitions and merge prompts (past-due runs on hourly sync)."""
+        stale_updates = await apply_stale_transitions(db, user["_id"])
+        merge_prompts = await detect_cross_domain_merge_prompts(db, user["_id"])
+        return {
+            "ok": True,
+            "stale": stale_updates,
+            "merge_prompts": merge_prompts,
+        }
 
     # ---- Today digest ----------------------------------------------------
     @router.get("/digest/today")
@@ -660,20 +828,39 @@ def build_router(db, get_current_user):
         today = datetime.now(timezone.utc).date()
         due_overdue = []
         broken = []
-        needs_reply = []  # placeholder — populated when sync detects unanswered questions
+        needs_reply = []
         resolved = []
+        watching = []
+        confirm_prompts = []
+        stale_prompts = []
+        merge_prompts = []
         async for inv in db.invoices.find({"user_id": user["_id"]}):
             s = inv.get("status")
             row = _serialize(inv)
-            if s in ("overdue",):
-                due_overdue.append(row)
+            if s == "paid_unconfirmed":
+                confirm_prompts.append(row)
+            elif s == "stale" and inv.get("stale_prompt_pending"):
+                stale_prompts.append(row)
+            elif s in ("overdue",):
+                if inv.get("watching_for_reply"):
+                    watching.append(row)
+                elif inv.get("ladder_exhausted"):
+                    watching.append(row)
+                else:
+                    due_overdue.append(row)
             elif s == "invoiced" and inv.get("due_date"):
                 try:
                     due = datetime.fromisoformat(inv["due_date"]).date()
-                    if due <= today:
+                    if due < today:
                         due_overdue.append(row)
+                    elif due == today:
+                        watching.append(row)
+                    else:
+                        watching.append(row)
                 except Exception:
                     pass
+            elif s == "invoiced" and not inv.get("due_date"):
+                watching.append(row)
             elif s == "promise_broken":
                 broken.append(row)
             elif s == "disputed":
@@ -686,11 +873,16 @@ def build_router(db, get_current_user):
                         resolved.append(row)
                 except Exception:
                     pass
+        merge_prompts = await list_pending_merge_prompts(db, user["_id"])
         return {
-            "due_overdue": due_overdue,
-            "broken_promises": broken,
-            "needs_reply": needs_reply,
-            "resolved": resolved,
+            "due_overdue": sort_by_email_date(due_overdue),
+            "broken_promises": sort_by_email_date(broken),
+            "needs_reply": sort_by_email_date(needs_reply),
+            "resolved": sort_by_email_date(resolved),
+            "watching": sort_by_email_date(watching),
+            "confirm_prompts": sort_by_email_date(confirm_prompts),
+            "stale_prompts": sort_by_email_date(stale_prompts),
+            "merge_prompts": merge_prompts,
         }
 
     # ---- Chase drafts (Feature 7) ----------------------------------------
@@ -711,14 +903,18 @@ def build_router(db, get_current_user):
         if not inv:
             raise HTTPException(status_code=404, detail="Invoice not found")
         tone = payload.tone or _tone_for(inv)
+        thread_subject = inv.get("source_subject") or ""
         sys = (
             "You draft short, professional payment follow-up emails for a small business owner. "
             "Under 120 words. Plain professional tone. No 'hope this finds you well'. "
             "Always include invoice ref (if any), amount, due date. On a broken promise, quote the client's own stated date verbatim. "
-            "Never sound templated or AI-written. Output STRICT JSON: {\"subject\": string, \"body\": string}."
+            "Never sound templated or AI-written. "
+            "This is a REPLY in an existing email thread — subject must be 'Re: <original subject>' matching the thread. "
+            "Output STRICT JSON: {\"subject\": string, \"body\": string}."
         )
         user_msg = (
             f"Client: {inv.get('counterparty_name') or inv.get('counterparty_email')}\n"
+            f"Original thread subject: {thread_subject or 'n/a'}\n"
             f"Invoice ref: {inv.get('invoice_ref') or 'n/a'}\n"
             f"Amount: {inv.get('amount')} {inv.get('currency','USD')}\n"
             f"Due date: {inv.get('due_date') or 'n/a'}\n"
@@ -745,8 +941,7 @@ def build_router(db, get_current_user):
 
     @router.post("/invoices/{invoice_id}/send-chase")
     async def send_chase(invoice_id: str, payload: ChaseSendInput, user: dict = Depends(get_current_user)):
-        from gmail_client import get_access_token
-        import httpx, base64
+        from gmail_client import get_access_token, send_gmail_reply
         try:
             inv = await db.invoices.find_one({"_id": ObjectId(invoice_id), "user_id": user["_id"]})
         except Exception:
@@ -759,21 +954,31 @@ def build_router(db, get_current_user):
         access = await get_access_token(db, user["_id"])
         to_addr = inv.get("counterparty_email")
         from_addr = conn.get("email")
-        raw = f"From: {from_addr}\r\nTo: {to_addr}\r\nSubject: {payload.subject}\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n{payload.body}"
-        encoded = base64.urlsafe_b64encode(raw.encode("utf-8")).decode("utf-8").rstrip("=")
-        body = {"raw": encoded}
-        if inv.get("source_thread_id"):
-            body["threadId"] = inv["source_thread_id"]
-        async with httpx.AsyncClient(timeout=20.0) as c:
-            r = await c.post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
-                             headers={"Authorization": f"Bearer {access}", "Content-Type":"application/json"}, json=body)
-            if r.status_code >= 400:
-                raise HTTPException(status_code=502, detail=f"Gmail send failed: {r.text[:200]}")
+        try:
+            sent = await send_gmail_reply(
+                access,
+                from_addr=from_addr,
+                to_addr=to_addr,
+                subject=payload.subject,
+                body=payload.body,
+                thread_id=inv.get("source_thread_id"),
+                reply_to_message_id=inv.get("source_message_id"),
+            )
+        except RuntimeError as e:
+            raise HTTPException(status_code=502, detail=str(e))
+        now_iso = datetime.now(timezone.utc).isoformat()
         await db.chase_sends.insert_one({
-            "user_id": user["_id"], "invoice_id": inv["_id"], "to": to_addr, "subject": payload.subject,
-            "body": payload.body, "sent_at": datetime.now(timezone.utc).isoformat(),
+            "user_id": user["_id"], "invoice_id": inv["_id"], "to": to_addr,
+            "subject": sent.get("subject") or payload.subject,
+            "body": payload.body, "sent_at": now_iso,
+            "gmail_thread_id": sent.get("thread_id"),
         })
-        await db.invoices.update_one({"_id": inv["_id"]}, {"$set": {"last_chase_at": datetime.now(timezone.utc).isoformat()}, "$inc": {"chase_count": 1}})
+        await mark_chase_sent(db, user["_id"], inv["_id"], step_index=None, now_iso=now_iso)
+        await ack_followup_prompts(db, user["_id"], [invoice_id])
+        await db.invoices.update_one(
+            {"_id": inv["_id"]},
+            {"$inc": {"chase_count": 1}},
+        )
         return {"ok": True}
 
     @router.post("/quick-compose")
@@ -848,6 +1053,7 @@ def build_router(db, get_current_user):
             "evidence_sentence": payload.note or "Manually added",
             "confidence": 1.0,
             "created_at": now_iso,
+            "last_activity_at": now_iso,
         }
         res = await db.invoices.insert_one(doc)
         doc["_id"] = res.inserted_id
@@ -903,6 +1109,9 @@ def build_router(db, get_current_user):
             raise HTTPException(status_code=404, detail="Draft not found")
         if res.matched_count == 0:
             raise HTTPException(status_code=404, detail="Draft not found or already actioned")
+        draft = await db.chase_drafts.find_one({"_id": ObjectId(draft_id)})
+        if draft and draft.get("invoice_id"):
+            await ack_followup_prompts(db, user["_id"], [str(draft["invoice_id"])])
         return {"ok": True}
 
     @router.post("/chase-drafts/{draft_id}/regenerate")
@@ -934,8 +1143,7 @@ def build_router(db, get_current_user):
     @router.post("/chase-drafts/{draft_id}/send")
     async def send_chase_draft(draft_id: str, user: dict = Depends(get_current_user)):
         """Send a queued draft via the user's Gmail. Marks the draft as sent."""
-        from gmail_client import get_access_token
-        import base64
+        from gmail_client import get_access_token, send_gmail_reply
         try:
             draft = await db.chase_drafts.find_one({"_id": ObjectId(draft_id), "user_id": user["_id"]})
         except Exception:
@@ -950,39 +1158,48 @@ def build_router(db, get_current_user):
         access = await get_access_token(db, user["_id"])
         to_addr = draft.get("to")
         from_addr = conn.get("email")
-        raw = (
-            f"From: {from_addr}\r\n"
-            f"To: {to_addr}\r\n"
-            f"Subject: {draft.get('subject','')}\r\n"
-            f"Content-Type: text/plain; charset=UTF-8\r\n\r\n"
-            f"{draft.get('body','')}"
-        )
-        encoded = base64.urlsafe_b64encode(raw.encode("utf-8")).decode("utf-8").rstrip("=")
-        body = {"raw": encoded}
-        if draft.get("thread_id"):
-            body["threadId"] = draft["thread_id"]
-        import httpx as _httpx
-        async with _httpx.AsyncClient(timeout=20.0) as c:
-            r = await c.post(
-                "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
-                headers={"Authorization": f"Bearer {access}", "Content-Type": "application/json"},
-                json=body,
+        inv = None
+        if draft.get("invoice_id"):
+            inv = await db.invoices.find_one({"_id": draft["invoice_id"], "user_id": user["_id"]})
+        try:
+            sent = await send_gmail_reply(
+                access,
+                from_addr=from_addr,
+                to_addr=to_addr,
+                subject=draft.get("subject", ""),
+                body=draft.get("body", ""),
+                thread_id=draft.get("thread_id") or (inv or {}).get("source_thread_id"),
+                reply_to_message_id=(inv or {}).get("source_message_id"),
             )
-            if r.status_code >= 400:
-                raise HTTPException(status_code=502, detail=f"Gmail send failed: {r.text[:200]}")
+        except RuntimeError as e:
+            raise HTTPException(status_code=502, detail=str(e))
         now_iso = datetime.now(timezone.utc).isoformat()
         await db.chase_drafts.update_one(
             {"_id": draft["_id"]}, {"$set": {"status": "sent", "sent_at": now_iso}}
         )
         await db.chase_sends.insert_one({
             "user_id": user["_id"], "invoice_id": draft.get("invoice_id"),
-            "to": to_addr, "subject": draft.get("subject", ""), "body": draft.get("body", ""),
+            "to": to_addr,
+            "subject": sent.get("subject") or draft.get("subject", ""),
+            "body": draft.get("body", ""),
             "sent_at": now_iso, "chase_draft_id": draft["_id"],
+            "gmail_thread_id": sent.get("thread_id"),
         })
+        step_index = draft.get("step_index")
+        if step_index is not None:
+            try:
+                step_index = int(step_index)
+            except (TypeError, ValueError):
+                step_index = None
+        await mark_chase_sent(
+            db, user["_id"], draft.get("invoice_id"),
+            step_index=step_index, now_iso=now_iso,
+        )
         await db.invoices.update_one(
             {"_id": draft.get("invoice_id"), "user_id": user["_id"]},
-            {"$set": {"last_chase_at": now_iso}, "$inc": {"chase_count": 1}},
+            {"$inc": {"chase_count": 1}},
         )
+        await ack_followup_prompts(db, user["_id"], [str(draft.get("invoice_id"))])
         return {"ok": True, "sent_at": now_iso}
 
     # ---- Daily digest (Feature 9c) ---------------------------------------

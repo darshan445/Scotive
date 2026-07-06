@@ -9,12 +9,14 @@ from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, field_validator
 
+from scan_settings import attach_scan_metadata
+
 logger = logging.getLogger("scotive.settings")
 
 
 DEFAULT_SETTINGS: dict = {
-    "grace_days": 1,
     "escalation_offsets": [-3, 0, 3, 10],  # days relative to due date
+    "follow_up_interval_days": 3,
     "late_fee_enabled": False,
     "late_fee_text": "",
     "scan_window_months": 12,
@@ -34,8 +36,8 @@ def _valid_iana_zone(name: str) -> bool:
 
 
 class SettingsPatch(BaseModel):
-    grace_days: Optional[int] = Field(default=None, ge=0, le=30)
     escalation_offsets: Optional[list[int]] = None
+    follow_up_interval_days: Optional[int] = Field(default=None, ge=1, le=30)
     late_fee_enabled: Optional[bool] = None
     late_fee_text: Optional[str] = Field(default=None, max_length=280)
     scan_window_months: Optional[int] = Field(default=None, ge=1, le=36)
@@ -133,7 +135,7 @@ def build_router(db, get_current_user):
     async def get_settings(user: dict = Depends(get_current_user)):
         s = await get_settings_doc(db, user["_id"])
         s.pop("user_id", None)
-        return s
+        return attach_scan_metadata(s)
 
     @router.patch("/settings")
     async def patch_settings(payload: SettingsPatch, user: dict = Depends(get_current_user)):
@@ -146,7 +148,7 @@ def build_router(db, get_current_user):
         )
         s = await get_settings_doc(db, user["_id"])
         s.pop("user_id", None)
-        return s
+        return attach_scan_metadata(s)
 
     @router.get("/settings/timezones")
     async def list_timezones():

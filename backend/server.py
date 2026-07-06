@@ -22,7 +22,7 @@ from starlette.middleware.cors import CORSMiddleware
 from gmail_oauth import build_router as build_gmail_router
 from scan_router import build_router as build_scan_router
 from settings_router import build_router as build_settings_router
-from scan_pipeline import sync_all_users
+from incremental_sync import sync_all_users
 from escalation_scheduler import escalate_all_users
 from digest_sender import send_daily_digests
 
@@ -457,6 +457,7 @@ async def on_startup():
     await db.invoices.create_index([("user_id", 1), ("created_at", -1)])
     await db.invoices.create_index([("user_id", 1), ("source_message_id", 1)], unique=True)
     await db.invoices.create_index([("user_id", 1), ("counterparty_email", 1)])
+    await db.invoices.create_index([("user_id", 1), ("client_identity_key", 1), ("invoice_ref_normalized", 1)])
     await db.review_items.create_index([("user_id", 1), ("source_message_id", 1)], unique=True)
     await db.review_items.create_index([("user_id", 1), ("review_status", 1)])
     await db.suppressed_senders.create_index([("user_id", 1), ("email", 1)], unique=True)
@@ -468,11 +469,18 @@ async def on_startup():
     await db.chase_drafts.create_index([("user_id", 1), ("invoice_id", 1), ("step_key", 1)])
     await db.chase_drafts.create_index([("user_id", 1), ("status", 1), ("generated_at", -1)])
     await db.digest_sends.create_index([("user_id", 1), ("sent_at", -1)])
+    await db.seed_jobs.create_index([("user_id", 1), ("started_at", -1)])
+    await db.seed_candidates.create_index([("user_id", 1), ("job_id", 1), ("status", 1)])
+    await db.seed_candidates.create_index([("user_id", 1), ("message_id", 1)])
+    await db.client_merges.create_index([("user_id", 1), ("canonical_key", 1)])
+    await db.client_merges.create_index([("user_id", 1), ("alias_keys", 1)])
+    await db.client_merge_prompts.create_index([("user_id", 1), ("status", 1), ("created_at", -1)])
+    await db.client_merge_prompts.create_index([("user_id", 1), ("pair_key", 1), ("status", 1)])
     await seed_admin()
 
     # Kick off continuous sync loop (F9a). Interval is configurable via env.
     global _sync_task, _escalation_task, _digest_task
-    interval = int(os.environ.get("SYNC_INTERVAL_SECONDS", "300"))
+    interval = int(os.environ.get("SYNC_INTERVAL_SECONDS", "3600"))
     esc_interval = int(os.environ.get("ESCALATION_INTERVAL_SECONDS", "3600"))
     digest_interval = int(os.environ.get("DIGEST_CHECK_INTERVAL_SECONDS", "900"))
     if os.environ.get("DISABLE_SYNC_LOOP") != "1":
@@ -499,9 +507,8 @@ async def _sync_loop(interval_seconds: int):
             totals = await sync_all_users(db)
             if totals.get("users"):
                 logger.info(
-                    "Sync tick: users=%s inv+%s rcpt+%s matched=%s review+%s",
-                    totals["users"], totals["invoices_created"], totals["receipts_created"],
-                    totals["receipts_matched"], totals["review_items"],
+                    "Sync tick: users=%s invoices+%s skipped=%s",
+                    totals["users"], totals.get("invoices_created", 0), totals.get("skipped", 0),
                 )
         except Exception as e:
             logger.exception("Sync loop iteration failed: %s", e)
