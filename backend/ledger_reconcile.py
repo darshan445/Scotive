@@ -393,6 +393,75 @@ async def find_related_invoice(
     return None
 
 
+async def apply_invoice_correction(
+    db,
+    user_id,
+    inv: dict,
+    new_amount: float,
+    *,
+    now_iso: str,
+    due_date: str | None = None,
+    message_id: str | None = None,
+    subject: str | None = None,
+    quote: str | None = None,
+    record_event: bool = True,
+) -> dict:
+    """The user revised an existing invoice (e.g. "corrected: $300").
+
+    Updates amount/balance on the SAME row — never a second row — resets a
+    dispute back to normal tracking, and logs an invoice_corrected event.
+    """
+    paid = float(inv.get("paid_amount") or 0)
+    new_amt = float(new_amount)
+    new_bal = round(max(new_amt - paid, 0), 2)
+    due = due_date or inv.get("due_date")
+
+    if inv.get("status") in ("paid", "written_off"):
+        status = inv["status"]
+    elif new_bal <= 0.005:
+        status = "paid"
+    else:
+        status = "invoiced"
+        d = parse_iso_date(due) if due else None
+        if d and d.date() < datetime.now(timezone.utc).date():
+            status = "overdue"
+
+    patch: dict[str, Any] = {
+        "amount": new_amt,
+        "balance_remaining": new_bal,
+        "status": status,
+        "promise_date": None,
+        "chasing_paused": False,
+        "status_updated_at": now_iso,
+        "last_activity_at": now_iso,
+        "updated_at": now_iso,
+    }
+    if due_date:
+        patch["due_date"] = normalize_explicit_due_date(due_date) or inv.get("due_date")
+        patch["due_date_assumed"] = False
+    await db.invoices.update_one({"_id": inv["_id"]}, {"$set": patch})
+
+    if record_event:
+        meta: dict[str, Any] = {
+            "old_amount": float(inv.get("amount") or 0),
+            "new_amount": new_amt,
+        }
+        if message_id:
+            meta["message_id"] = message_id
+        if subject:
+            meta["subject"] = subject
+        if quote:
+            meta["quote"] = quote
+        await db.invoice_events.insert_one({
+            "user_id": user_id,
+            "invoice_id": inv["_id"],
+            "action": "invoice_corrected",
+            "at": now_iso,
+            "meta": meta,
+        })
+    return patch
+
+
 async def _thread_evidence_exists(db, user_id, invoice_id, message_id: str | None) -> bool:
     if not message_id:
         return False
@@ -479,20 +548,40 @@ async def upsert_sweep_invoice(
 
     if existing:
         old_amt = float(existing.get("amount") or 0)
-        if new_amt is not None and not amounts_close(new_amt, old_amt) and not followup:
-            existing_r = await db.review_items.find_one({
-                "user_id": user_id,
-                "source_message_id": doc["source_message_id"],
-            })
-            if not existing_r:
-                await db.review_items.insert_one({
-                    **doc,
-                    "review_status": "pending",
-                    "review_reason": "amount_mismatch_duplicate_ref",
-                    "existing_invoice_id": str(existing["_id"]),
-                    "existing_amount": old_amt,
+        same_thread = (
+            doc.get("source_thread_id")
+            and doc.get("source_thread_id") == existing.get("source_thread_id")
+        )
+        doc_dt = parse_email_date(doc.get("source_date"))
+        existing_dt = parse_email_date(existing.get("source_date"))
+        is_newer = bool(doc_dt and existing_dt and doc_dt > existing_dt)
+        if new_amt is not None and not amounts_close(new_amt, old_amt):
+            # Same thread + later send = user revised the invoice ("corrected: $300").
+            # Applies even when the subject is Re:/Fwd: — not a payment chase.
+            if same_thread and is_newer:
+                await apply_invoice_correction(
+                    db, user_id, existing, new_amt,
+                    now_iso=now_iso,
+                    due_date=due,
+                    message_id=doc.get("source_message_id"),
+                    subject=doc.get("source_subject"),
+                    quote=doc.get("evidence_sentence"),
+                )
+                return "merged", existing["_id"]
+            if not followup:
+                existing_r = await db.review_items.find_one({
+                    "user_id": user_id,
+                    "source_message_id": doc["source_message_id"],
                 })
-            return "review", existing["_id"]
+                if not existing_r:
+                    await db.review_items.insert_one({
+                        **doc,
+                        "review_status": "pending",
+                        "review_reason": "amount_mismatch_duplicate_ref",
+                        "existing_invoice_id": str(existing["_id"]),
+                        "existing_amount": old_amt,
+                    })
+                return "review", existing["_id"]
         # Same invoice — merge as thread evidence, never second row
         await _record_thread_evidence(
             db, user_id, existing["_id"],

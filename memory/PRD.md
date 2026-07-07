@@ -1,24 +1,236 @@
-# Scotive — PRD
+# Scotive MVP — Final Locked Spec (Payment-First, Forward-Tracking)
 
-## Shipped (Feb 2026)
-- **F1 Auth**: JWT email/password, register/login/logout/me/refresh/forgot/reset. Bcrypt, brute-force lockout, admin seeded.
-- **F2 Empty-state dashboard**: hero "$18,450 across 7 clients" preview, Connect Gmail CTA, trust line, 3-step how-it-works.
-- **F3 Gmail OAuth**: scopes `gmail.readonly` + `gmail.send` + `openid email profile`. Fernet-encrypted refresh tokens. States: disconnected/connected/send_missing/revoked with reconnect banners. Endpoints: `/api/gmail/{status,oauth/start,oauth/callback,disconnect,mark-revoked}`.
-- **F4 Historical scan**: 5 phases (fetching/filtering/extracting/building/complete). Cheap noise filter + payment-processor whitelist + money-keyword regex. gpt-4o-mini via OpenRouter, 150-call cap, concurrency 4. Progress polling. Ledger populated. Endpoints: `/api/scan/{start,status}`, `/api/ledger`.
-- **F5 Clients + timelines + review queue**: same-domain identity linking, expandable evidence timelines with quoted sentences. Review queue for confidence < 0.75 with confirm/reject/suppress actions. Pages: `/clients`, `/clients/:email`, `/review`. Endpoints: `/api/invoices/:id/timeline`, `/api/clients`, `/api/clients/:email`, `/api/review-queue/*`.
-- **F6 Lifecycle + Today digest**: state machine (invoiced/overdue/promised/promise_broken/disputed/partially_paid/paid/written_off). Date-driven transitions via `/api/lifecycle/run`. Row actions dropdown. Today card with 4 sections. Endpoints: `/api/invoices/:id/action`, `/api/lifecycle/run`, `/api/digest/today`.
-- **F7 Chase drafts + send**: AI drafts (tone auto by status), regenerate w/ note, quick-compose from rough intent, real Gmail send threaded into original conversation, `chase_sends` log. Endpoints: `/api/invoices/:id/{draft-chase,send-chase}`, `/api/quick-compose`.
-- **F8a Receipt matching + partial payments** (Jul 2026): AI pipeline routes `kind:"receipt"` into new `receipts` collection. `reconcile_receipts()` matches on amount (±2% or $1 floor) + payer-name SequenceMatcher (≥0.6). Score = 0.6·amount + 0.4·name; auto-match if lead ≥0.05 else `ambiguous`. Invoices carry `balance_remaining`/`paid_amount`; partial → `partially_paid` w/ decremented balance, full → `paid`. Timeline surfaces receipt-match events. Frontend `PaymentsCard` on dashboard with ambiguous-disambiguator + recent payments feed. Endpoints: `GET /api/receipts`, `POST /api/receipts/reconcile`, `POST /api/receipts/:id/{match,reject}`. `invoice_events` now snapshot pre-state so `action:"undo"` can revert.
-- **F8b Mark-paid / write-off confirm + undo toast** (Jul 2026): destructive row actions now open an `AlertDialog` with tailored copy (client · amount · invoice ref preview). After confirming, success toast has a 5-second **Undo** action button that hits `POST /api/invoices/:id/action` with `action:"undo"`, restoring the pre-action `status`/`balance_remaining`/`paid_amount`/`paid_at`/`chasing_paused` snapshot captured in `invoice_events.undo_snapshot`.
-- **F8c Client payment stats** (Jul 2026): `_compute_client_stats(invoices)` in `scan_router.py` returns `{payment_cycles, avg_days_late, promise_keep_rate, promise_kept, promise_total, risk_hint}` (or `None` if <2 paid invoices). Risk hint: `on_time` (≤2d late & ≥80% kept) / `risky` (≥14d late OR <50% kept) / `slow` otherwise. Client detail page renders a Payment behavior card with 3 stats + risk pill when data present; silent otherwise.
-- **F8d Settings** (Jul 2026): `settings_router.py` + new `user_settings` collection. Defaults `grace_days=1`, `escalation_offsets=[-3,0,3,10]`, `late_fee_enabled=false`, `scan_window_months=12`. Endpoints: `GET/PATCH /api/settings`, `GET /api/suppressed-senders`, `DELETE /api/suppressed-senders/:email`, `DELETE /api/account` (requires `confirm_email` matching current user). `POST /api/lifecycle/run` now honors `grace_days`; `POST /api/scan/start` uses `scan_window_months` as default. New `/settings` route with sections: Chasing timing (grace + 4-step ladder), Late fees (toggle + wording), Scan window, Suppressed senders (with per-row unsuppress), Danger zone (delete-account dialog gated by exact email match). Per-section dirty-tracking + Save button + success toast.
-- **F9a Continuous sync** (Jul 2026): `run_incremental_sync()` and `sync_all_users()` in `scan_pipeline.py`. Each tick queries Gmail with `after:{last_message_epoch - 24h overlap}` (fallback to 3-day lookback on first run), deduplicates against invoices/receipts/review_items, runs the same cheap-filter → AI → writer → `reconcile_receipts()` pipeline (extracted into shared `_extract_and_write()` helper). Per-user state persisted in `gmail_sync_state`. Server startup schedules an asyncio loop that ticks every `SYNC_INTERVAL_SECONDS` (default 300s, `DISABLE_SYNC_LOOP=1` to opt out). Endpoints: `POST /api/scan/sync` (manual), `GET /api/scan/sync-state`. Dashboard has a `SyncStatusBar` above the ledger showing "Last synced Xm ago" + "Sync now" button that refreshes the ledger + receipts on completion.
-- **F9b Escalation ladder scheduler** (Jul 2026): new `escalation_scheduler.py` + `chase_drafts` collection. `run_escalation_tick(db, user_id)` iterates chaseable invoices (`invoiced`, `overdue`, `promise_broken`, `partially_paid` and not paused), and for each `offset` in `user_settings.escalation_offsets` where `today - due_date == offset`, materializes an AI-drafted chase (tone per step: friendly / friendly / firm / final). Broken promises get a dedicated firm-tone draft that quotes the client's own words. Late-fee wording is appended to the final-notice step when enabled. Drafts are idempotent per `(invoice_id, step_key)`. Endpoints: `POST /api/escalation/run` (manual), `GET /api/chase-drafts?status=`, `PATCH /api/chase-drafts/:id` (edit subject/body), `POST /api/chase-drafts/:id/{regenerate,dismiss,send}`. Sending goes through the user's own Gmail, threaded into the original conversation, logs to `chase_sends`, bumps `chase_count` on the invoice, and marks the draft `sent`. New periodic loop ticks every `ESCALATION_INTERVAL_SECONDS` (default 3600s). Dashboard `ChaseQueueCard` renders the queue with Send / Edit / Regenerate / Dismiss per draft; hidden when empty.
-- **F9c Daily digest email** (Jul 2026): new `digest_sender.py` + `digest_sends` collection. Once per user per day, sends the Today card as a multipart plain+HTML email via the user's own connected Gmail (uses existing send scope). Buckets: Due/Overdue, Broken promises, Needs reply, Resolved-in-last-24h. Silent when all four are empty. Idempotent per calendar day (`last_digest_sent_at` in `user_settings`). Timezone-aware since Jul 2026 v2: `daily_digest_hour` (0-23) + `daily_digest_timezone` (IANA name, default `UTC`) replaces the old UTC-only field (legacy `daily_digest_hour_utc` is still honored on read). Backend uses `zoneinfo` to compute `now.astimezone(tz).hour == target_hour`. New endpoint `GET /api/settings/timezones` returns a curated 35-city IANA list. Server loop ticks every `DIGEST_CHECK_INTERVAL_SECONDS` (default 900s). Endpoints: `POST /api/digest/send-now` (force, for preview), `GET /api/digest/preview`, `GET /api/digest/last`. Settings page has a Daily-digest section with enable toggle, hour dropdown, timezone dropdown, and a live "Next send: Sat, 7 AM (Asia/Kolkata)" preview computed via `Intl.DateTimeFormat`.
-- **Landing page split** (Jul 2026): Public `/` now renders a proper marketing landing page (`Landing.jsx`) with hero, sample ledger preview, "How it works" and CTAs pointing at `/register` and `/login`. Logged-in users hitting `/` bounce to `/dashboard` via `GuestRoute`. The old marketing pitch has been removed from the authenticated dashboard's empty state — `EmptyStateHero` is now a minimal "One last step · Connect Gmail to build your ledger" card. Rationale: prospects need the pitch before they sign up; already-authed users just need to complete Gmail connect without re-reading the pitch.
+**One line**: Scotive watches your Gmail, tracks every invoice you send from sent-to-paid, reads client replies for promises and disputes, and drafts the follow-ups — you approve with one tap, it sends from your own address.
 
-## Post-MVP (deferred)
-- **F9d** Gmail push notifications (Pub/Sub webhook) to replace polling with near-real-time updates. **Deferred** — polling every 5 min (F9a) is sufficient for MVP chase workflows. Deferral requires GCP Pub/Sub setup which is out of scope for the beta launch.
+**Users**: creators, freelancers, and small agencies (1–20 people) with multiple clients, invoicing over email.
+
+**Core principle**: **forward-tracking, not archaeology.** Scotive is the authority on everything that happens in email (sent, overdue, promised, disputed); the user is the authority on money received (mark paid). No historical paid/unpaid inference, no bank statements, no reconciliation screens.
+
+---
+
+## Product sections (locked)
+
+### 1. Sign Up / Sign In
+
+Email + password with verification, login, forgot password. App account is separate from the Gmail connection.
+
+**Status**: Shipped. **Do not change** unless user explicitly asks.
+
+### 2. Empty Dashboard (pre-connect)
+
+- Headline: **"Chase every invoice — automatically."**
+- Subhead: **"Scotive watches your Gmail, tracks invoices you send, reads client replies, and drafts the follow-ups. Nothing sends without your approval."**
+- CTA: Connect Gmail.
+- Trust line: read + send-with-approval only · emails never train AI · disconnect anytime.
+
+**Status**: Partially aligned. Landing + empty state exist but copy/hero differ from locked spec. **UI copy update only** — no auth/Gmail changes.
+
+### 3. Connect Gmail
+
+Two permissions only: read email, send on user's behalf. Handle: consent cancelled (friendly return, no dead end) · send permission unchecked (tracking works, sending disabled, reconnect banner) · access revoked later (reconnect banner, never silent failure).
+
+**Status**: Shipped. **Do not change** unless user explicitly asks.
+
+### 4. Seed Scan + Curation (the first 60 seconds)
+
+Scan the last **60 days of sent mail only** for invoice signals (invoice-like subjects, amounts + due language, invoice attachments). **No inbox-wide scan, no paid/unpaid guessing.**
+
+Show a **curation list**:
+
+> "We found 6 invoices you sent in the last 60 days. Which are still unpaid? (tap to track)"
+
+Each row: client · amount · sent date · due date if found. Older rows dimmed. Grouped by client with select-all when volume is high.
+
+Buttons: **[Track selected]** · **[None — start fresh]**
+
+The user curates in ~20 seconds — they know their last 60 days cold. Selected invoices enter the ledger; everything else is **ignored forever**.
+
+**Immediately after curation**: state machine evaluates real due dates on the spot — anything past due flips to **Overdue** instantly — so the very next screen is the digest already working:
+
+> ⚠️ Acme — $2,400 — 4 days overdue → [View follow-up draft]
+> 💰 Meraki — $1,850 — due today → [View reminder draft]
+> 👀 Watching: Nuts Over Tech (due Jul 3 — reading replies)
+
+**Goal**: user approves their first real chase draft within **3 minutes** of connecting.
+
+**Empty/edge paths**: nothing found or nothing selected → "Scotive is watching — send your next invoice like you always do and it appears here" + [Track manually] (client, amount, due date — 20 seconds) + tip: forward any invoice email to see it tracked. All-paid users → same watching state; digest stays quiet until something is real.
+
+**Status**: **Major gap.** Current build runs a deep client-sweep (months of mail, AI per client, no curation). Must be replaced with 60d sent-only seed + curation screen + instant state eval. See **Alignment backlog** below.
+
+### 5. Live Auto-Detection (the first magic)
+
+From connection onward, Scotive watches **sent mail**. When the user sends an invoice the way they always do (attachment or amount + due language in the body), it appears tracked within **minutes** — no action required. This moment is the product's signature; it must be fast and reliable.
+
+Detection also parses **invoice notification emails** from accounting tools (QuickBooks, FreshBooks, Wave, Zoho) so users who invoice from software are covered — replies still land in Gmail where only Scotive can read them.
+
+**Status**: Partial. Incremental sync exists (polling) but is not sent-first / minutes-fast UX. Accounting-tool notification parsing not shipped. **Behavior + UI surfacing** needed.
+
+### 6. Clients, Not Threads
+
+The tracked entity is the **client** (counterparty), never the thread. Each client has known email identities; same-business-domain senders auto-link (accounts person counts), cross-domain matches prompt a one-tap merge. Every message from any known identity is evaluated against that client's open invoices — new thread, old thread, mixed-topic email, different sender at same company: all caught.
+
+Message-to-invoice mapping: explicit invoice number → exact amount → single-open-invoice shortcut → ask the user. Evidence is sentence-level.
+
+**Status**: Partial. Domain dedup + client view exist. **Cross-domain merge prompt** shipped Jul 2026 (same-name / same-invoice detection + one-tap merge).
+
+### 7. Reply Intelligence (the moat — highest accuracy bar)
+
+From client replies, detect: promises · disputes · partial payments · payment claims without proof · payment confirmations with references · approvals · adjustments. Deliverable-anchored terms resolve against deliverable date. Every extraction stores exact quoted sentence + link to source message. Below confidence bar → **review queue** — never silently into ledger.
+
+**Status**: Partial. Client-sweep AI + review queue exist. Full reply taxonomy (approvals, deliverable-anchored terms, etc.) not complete. Review queue UI now shows reasons (not just "low confidence").
+
+### 8. Invoice Lifecycle
+
+States: Invoiced · Overdue · Promised · Promise broken · Disputed · Partially paid · Paid (unconfirmed) · Paid · Written off · **Stale**.
+
+Rules: due + grace → Overdue · promise pauses chasing · dispute pauses chasing · client says paid without reference → Paid (unconfirmed) · missing due date → assumed terms (editable) · **120 days no activity → Stale** · nightly job for date transitions + next-day drafts.
+
+**Data integrity** (from live bugs): one row per client + invoice number · Re: attaches as events not rows · quoted history stripped · same-domain dedup · never sum across currencies.
+
+**Status**: Partial. Most states shipped. **Stale** state + 120d one-time prompt shipped Jul 2026. Nightly job exists via escalation/digest loops.
+
+### 9. Confirming Paid (user is the authority)
+
+Three channels, in order:
+1. **Receipt/remittance parsing (no AI)**: Stripe, PayPal, Zelle, Wise, Payoneer, Square, Bill.com, Melio, QuickBooks payments, bank credit alerts — template-parsed, matched by reference or amount + payer. Remittance → Paid (unconfirmed).
+2. **Client confirmation with reference** → confirmable.
+3. **One-tap mark-paid everywhere**: ledger, drawer, digest card. Digest asks: "paid, or chase?" — both one tap.
+
+**Status**: Partial. Receipt parsing + mark-paid + undo exist. **No reconciliation screen** (correct per spec). Digest confirm prompts + PaymentsCard confirm-paid framing shipped Jul 2026.
+
+### 10. Chasing (grounded drafts, one-tap send)
+
+Escalation ladder (configurable): pre-due nudge (−3d) → due-date reminder → firm (+3d) → final (+10d). Draft rules: ≤120 words · user's tone per client · invoice #, amount, due date · broken-promise quotes client · approval-aware · never templated.
+
+**Approval is absolute**: draft → edit / regenerate / skip / pause → explicit Send only. **Nothing auto-sends.** Sends from user's Gmail, threaded, lands in Sent, recorded as evidence.
+
+**Quick-compose**: rough intent → AI expands with thread + ledger context → review → send.
+
+**Status**: Shipped (drafts, queue, send, quick-compose, escalation scheduler). Tone-learning from sent mail per client not verified.
+
+### 11. Digest & Alerts (the daily habit)
+
+Dashboard **Today** card + morning digest email: due/overdue with drafts · broken promises · confirm prompts · needs reply (disputes) · resolved since yesterday.
+
+**Hard rule: no ledger link, no digest slot.**
+
+Alerts: due today, became overdue, promise broken, dispute detected, payment confirmed, connection lost.
+
+**Status**: Partial. Today card + digest email exist. Buckets need alignment (confirm prompts, "watching" state). **Hard rule** (nothing in digest unless ledger-linked) must be enforced in UI copy + filtering.
+
+### 12. Client View
+
+Per client: open + past invoices (newest Gmail date first), evidence timeline, identities, follow-ups sent, behavior stats after 2+ closed cycles.
+
+**Status**: Partial. Client detail + stats exist. Invoice sort by `source_date` shipped. Follow-ups-sent section may be thin.
+
+### 13. Review Queue
+
+Low-confidence extractions and ambiguous mappings → cards with fields + quote + source → confirm / edit / not-payment-related (suppress). Users must never find a wrong number silently in ledger.
+
+**Status**: Shipped. Queue surfaces reason labels, source + quote, field grid, and edit-before-confirm (Jul 2026).
+
+### 14. Settings
+
+Connection + disconnect (purge cache, ledger stays) · grace · escalation timing · late-fee · default payment terms · suppressed senders · delete account.
+
+**Status**: Shipped. **Seed fixed at 60d**; `scan_window_months` applies to **ongoing background sync** only (Jul 2026 alignment).
+
+### 15. Privacy Commitments
+
+Two Gmail permissions. Store extracted facts + evidence + message refs — not the mailbox. Emails never train AI. Disconnect/deletion honored.
+
+**Status**: Shipped in policy/copy; verify consent screen matches.
+
+### 16. Explicitly OUT of MVP
+
+Do **not** build or surface:
+
+- Historical reconciliation / paid-unpaid inference / client confirmation cards at seed
+- Bank statements & bank connections
+- Generic inbox digest or triage
+- General open-loop chasing (architect generically; ship payments only)
+- Invoice creation (beyond manual track)
+- Accounting-software sync (read notification emails only — no API sync)
+- Auto-send
+- Outlook
+- Money-out / subscription tracking
+- Analytics dashboards
+- Teams
+- Native mobile apps
+- Deep archaeology scans (12-month inbox sweeps as default onboarding)
+- Reconciliation screens / ambiguous receipt matcher as primary UX
+
+### 17. Build Order (locked)
+
+1. Auth + empty state + Gmail connect — **done**
+2. Seed scan (60d sent-only) + curation screen + ledger + instant state eval → **demo-able** — **next**
+3. Live sent-invoice auto-detection (signature moment)
+4. Reply intelligence + client entities + evidence + review queue
+5. State machine + nightly job + alerts + digest (in-app, then email)
+6. Chase drafts + escalation + one-tap send + quick-compose → **sellable** — largely done; polish after seed
+7. Receipt/remittance parsers + mark-paid polish + client behavior stats + settings — largely done
+
+### 18. Beta Success Gates
+
+| Metric | Gate |
+|---|---|
+| Time to first approved chase draft | < 3 minutes from OAuth for most users |
+| Auto-detection of newly sent invoices | Appears within minutes, ≥95% precision |
+| Reply-intelligence accuracy | ≥95% on regression fixture (S1–S20) before scaling |
+| Daily/weekly digest engagement | >50% of connected users weekly |
+| Core loop completions | send invoice → watch tracked → approve chase → mark paid |
+
+---
+
+## Alignment backlog (UI & behavior — implement when user says go)
+
+Ordered by impact on the new vision. **No code changes until user requests each item.**
+
+| # | Area | Current | Target (locked spec) |
+|---|---|---|---|
+| A1 | Onboarding scan | ~~12-month client-sweep~~ | **Done (Jul 2026)** — 60d sent-only seed + curation API + UI |
+| A2 | Post-curation UX | ~~Lands on full ledger table~~ | **Done (Jul 2026)** — Today card first, ledger secondary |
+| A3 | Empty / zero selection | ~~Generic empty ledger~~ | **Done (Jul 2026)** — WatchingEmptyState + forward tip |
+| A4 | Empty dashboard copy | ~~Old hero~~ | **Done (Jul 2026)** — locked headline on landing + empty state |
+| A5 | Today card | ~~4 buckets only~~ | **Done (Jul 2026)** — confirm prompts bucket + Received/Not yet actions |
+| A6 | Live detection UX | ~~Background sync bar only~~ | **Done (Jul 2026)** — sent-only auto-track, 75s poll, banner + toast |
+| A7 | Accounting tools | ~~Not parsed~~ | **Done (Jul 2026)** — QB/FreshBooks/Wave/Zoho notification parse in live detect |
+| A8 | Payments UI | PaymentsCard + reconcile CTA | **Done (Jul 2026)** — confirm-paid framing; ambiguous matcher collapsed |
+| A9 | Stale invoices | Not implemented | **Done (Jul 2026)** — 120d inactivity → Stale + one-time Today/digest prompt |
+| A10 | Cross-domain merge | Auto domain only | **Done (Jul 2026)** — one-tap merge prompt for cross-domain same client |
+| A11 | Settings scan window | Default 12 months | **Done (Jul 2026)** — seed fixed 60d; setting drives ongoing sync lookback |
+| A12 | Review queue | Mixed reasons | **Done (Jul 2026)** — PRD §13 copy, fields + source, edit-before-confirm |
+
+---
+
+## Implementation reference (what exists today — Jul 2026)
+
+Condensed technical inventory for agents. **Do not treat as product spec** — the locked sections above are authoritative for UX.
+
+| Area | Shipped |
+|---|---|
+| Auth | JWT email/password, register/login/forgot/reset, lockout |
+| Gmail | OAuth readonly+send, encrypted tokens, reconnect banners |
+| Scan (legacy) | Client-sweep pipeline (`client_sweep.py`), 5-phase progress UI, OpenRouter AI per client |
+| Ledger | Invoice rows, per-currency totals, domain client dedup, upsert by invoice ref |
+| Clients | List + detail, payment behavior stats, identities |
+| Lifecycle | States, grace, row actions, mark-paid/write-off + undo |
+| Chase | AI drafts, escalation scheduler, chase queue card, Gmail send threaded |
+| Receipts | Template parse (processors), match/reconcile API, PaymentsCard |
+| Digest | Today card, daily email, timezone-aware schedule |
+| Sync | Polling incremental sync (`run_client_sweep_sync`), manual sync button |
+| Review | Queue with confirm/reject/suppress, reason codes |
+| Settings | Grace, escalation, late fee, payment terms, suppress list, delete account |
+
+**Key files**: `client_sweep.py`, `scan_router.py`, `ledger_reconcile.py`, `digest_sender.py`, `escalation_scheduler.py`, `Dashboard.jsx`, `TodayCard.jsx`, `ScanProgressCard.jsx`, `ReviewQueue.jsx`, `LedgerCard.jsx`.
+
+---
 
 ## Instructions to next agent
-User builds feature-by-feature and approves each. NO auto-testing (user tests themselves). Backend URL: `https://partial-pay-1.preview.emergentagent.com`. Env keys already set: JWT_SECRET, GOOGLE_CLIENT_ID/SECRET, GMAIL_REDIRECT_URI, ENCRYPTION_KEY, OPENROUTER_API_KEY. Admin: admin@scotive.com / Admin@Scotive1.
+
+- User approves changes **one feature at a time**. Do not batch-align the whole backlog unless asked.
+- **Do not change** sign-up, sign-in, or Gmail connect flows unless explicitly requested.
+- When implementing alignment items, update the **Alignment backlog** table (mark done / note deltas).
+- NO auto-testing unless user asks. User tests themselves.
+- Backend: `uvicorn server:app --reload --host 0.0.0.0 --port 8000`. Env: JWT_SECRET, GOOGLE_*, GMAIL_REDIRECT_URI, ENCRYPTION_KEY, OPENROUTER_API_KEY.

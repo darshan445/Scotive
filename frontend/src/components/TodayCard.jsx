@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, Clock, Eye, HelpCircle, MessageSquareWarning, Send, Wallet } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronDown, Clock, Eye, HelpCircle, MessageSquareWarning, PartyPopper, Send, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { api, extractError } from "@/lib/api";
 import { useWorkspaceRefreshEffect } from "@/lib/workspaceRefresh";
@@ -7,23 +7,35 @@ import { formatDate, formatMoney, NO_DUE_DATE_LABEL } from "@/components/LedgerC
 import { pastDueDaysLabel, pastDueQuestion, watchingSubtitle } from "@/lib/invoiceCopy";
 import { ClientMergePrompts } from "@/components/ClientMergePrompts";
 
-const SECTIONS = [
+/** Priority order — most urgent first. Actionable sections render as full rows. */
+const ACTION_SECTIONS = [
     { key: "due_overdue", label: "Past due", icon: Wallet, tone: "red", testid: "digest-due", actionable: "past_due" },
-    { key: "broken_promises", label: "Broken promises", icon: AlertTriangle, tone: "amber", testid: "digest-broken", actionable: "draft" },
+    { key: "broken_promises", label: "Broken promise", icon: AlertTriangle, tone: "amber", testid: "digest-broken", actionable: "draft" },
     { key: "confirm_prompts", label: "Confirm payment", icon: HelpCircle, tone: "violet", testid: "digest-confirm", actionable: "confirm" },
     { key: "stale_prompts", label: "Gone quiet", icon: Clock, tone: "stone", testid: "digest-stale", actionable: "stale" },
-    { key: "needs_reply", label: "Needs reply", icon: MessageSquareWarning, tone: "slate", testid: "digest-reply", actionable: false },
-    { key: "watching", label: "Watching", icon: Eye, tone: "slate", testid: "digest-watching", actionable: false },
-    { key: "resolved", label: "Resolved", icon: CheckCircle2, tone: "green", testid: "digest-resolved", actionable: false },
+    { key: "needs_reply", label: "Needs your reply", icon: MessageSquareWarning, tone: "slate", testid: "digest-reply", actionable: "reply" },
 ];
 
-const TONE = {
-    red: "border-red-200 bg-red-50 text-red-800",
-    amber: "border-amber-200 bg-amber-50 text-amber-800",
-    violet: "border-violet-200 bg-violet-50 text-violet-900",
-    stone: "border-stone-300 bg-stone-50 text-stone-800",
-    slate: "border-border bg-muted/40 text-foreground",
-    green: "border-emerald-200 bg-emerald-50 text-emerald-800",
+/** Quiet sections — collapsed strip at the bottom. */
+const QUIET_SECTIONS = [
+    { key: "watching", label: "Watching", icon: Eye, testid: "digest-watching" },
+    { key: "resolved", label: "Resolved", icon: CheckCircle2, testid: "digest-resolved" },
+];
+
+const TONE_BADGE = {
+    red: "bg-red-50 text-red-700 border-red-200",
+    amber: "bg-amber-50 text-amber-700 border-amber-200",
+    violet: "bg-violet-50 text-violet-700 border-violet-200",
+    stone: "bg-stone-100 text-stone-700 border-stone-300",
+    slate: "bg-muted text-muted-foreground border-border",
+};
+
+const TONE_ICON = {
+    red: "text-red-600",
+    amber: "text-amber-600",
+    violet: "text-violet-600",
+    stone: "text-stone-600",
+    slate: "text-muted-foreground",
 };
 
 function rowSubtitle(r, key) {
@@ -44,11 +56,32 @@ function rowSubtitle(r, key) {
     if (key === "stale_prompts") {
         return "No email activity in 120+ days — still chasing?";
     }
+    if (key === "broken_promises") {
+        return r.promise_date ? `Promised ${formatDate(r.promise_date)} — didn't arrive` : "Promise date passed";
+    }
     return null;
+}
+
+function ActionButton({ children, primary = false, onClick, testId }) {
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            data-testid={testId}
+            className={
+                primary
+                    ? "rounded-lg bg-primary text-primary-foreground px-3 py-1.5 text-xs font-semibold hover:bg-primary/90 transition-colors whitespace-nowrap"
+                    : "rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted transition-colors whitespace-nowrap"
+            }
+        >
+            {children}
+        </button>
+    );
 }
 
 export function TodayCard({ onDraftChase, onChanged }) {
     const [data, setData] = useState(null);
+    const [quietOpen, setQuietOpen] = useState(false);
 
     const refresh = useCallback(() => {
         api.post("/lifecycle/run").catch(() => {}).finally(() => {
@@ -83,11 +116,12 @@ export function TodayCard({ onDraftChase, onChanged }) {
 
     if (!data) return null;
 
-    const visibleSections = SECTIONS.filter((s) => {
-        const rows = data[s.key] || [];
-        if (rows.length > 0) return true;
-        return s.key === "due_overdue" || s.key === "watching";
-    });
+    const actionSections = ACTION_SECTIONS
+        .map((s) => ({ ...s, rows: data[s.key] || [] }))
+        .filter((s) => s.rows.length > 0);
+    const actionCount = actionSections.reduce((n, s) => n + s.rows.length, 0);
+    const quietSections = QUIET_SECTIONS.map((s) => ({ ...s, rows: data[s.key] || [] }));
+    const quietCount = quietSections.reduce((n, s) => n + s.rows.length, 0);
 
     return (
         <div className="space-y-4" data-testid="today-card-wrapper">
@@ -98,127 +132,174 @@ export function TodayCard({ onDraftChase, onChanged }) {
                     onChanged?.();
                 }}
             />
-        <div className="rounded-2xl border border-border bg-card p-6" data-testid="today-card">
-            <div className="flex items-baseline justify-between mb-4">
-                <div>
-                    <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">Today</div>
-                    <h2 className="font-heading font-bold text-2xl tracking-tight">Your daily surface</h2>
+            <div className="surface-card overflow-hidden" data-testid="today-card">
+                <div className="px-6 py-5 border-b border-border flex items-center justify-between">
+                    <div>
+                        <h2 className="font-heading font-bold text-xl tracking-tight">Needs you today</h2>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                            {actionCount > 0
+                                ? `${actionCount} thing${actionCount === 1 ? "" : "s"} — usually under a minute`
+                                : "You're all caught up"}
+                        </p>
+                    </div>
+                    {actionCount > 0 ? (
+                        <span className="stat-number inline-flex items-center justify-center min-w-[36px] h-9 rounded-full bg-primary text-primary-foreground text-base font-bold px-3">
+                            {actionCount}
+                        </span>
+                    ) : (
+                        <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-3 py-1.5">
+                            <PartyPopper className="w-3.5 h-3.5" /> Clear
+                        </span>
+                    )}
                 </div>
-            </div>
-            <div className="grid md:grid-cols-2 gap-3">
-                {visibleSections.map((s) => {
-                    const rows = data[s.key] || [];
-                    const Icon = s.icon;
-                    return (
-                        <div key={s.key} className={`rounded-xl border p-4 ${TONE[s.tone]}`} data-testid={s.testid}>
-                            <div className="flex items-center justify-between">
-                                <span className="inline-flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-[0.18em]">
-                                    <Icon className="w-3.5 h-3.5" /> {s.label}
-                                </span>
-                                <span className="font-mono tabular-nums text-sm font-semibold" data-testid={`${s.testid}-count`}>
-                                    {rows.length}
-                                </span>
-                            </div>
-                            <ul className="mt-3 space-y-2 text-xs">
-                                {rows.slice(0, 4).map((r) => {
-                                    const sub = rowSubtitle(r, s.key);
-                                    return (
-                                        <li key={r._id} className="flex items-start justify-between gap-2">
-                                            <div className="min-w-0 flex-1">
-                                                <div className="truncate font-medium">
-                                                    {r.counterparty_name || r.counterparty_email || "—"}
+
+                {actionCount === 0 ? (
+                    <div className="px-6 py-10 text-center text-sm text-muted-foreground">
+                        Nothing needs your attention. Scotive keeps watching your sent mail and client replies.
+                    </div>
+                ) : (
+                    <ul className="divide-y divide-border">
+                        {actionSections.map((s) =>
+                            s.rows.map((r, i) => {
+                                const sub = rowSubtitle(r, s.key);
+                                const Icon = s.icon;
+                                return (
+                                    <li
+                                        key={`${s.key}-${r._id}`}
+                                        className="px-6 py-4 flex flex-col sm:flex-row sm:items-center gap-3"
+                                        data-testid={i === 0 ? s.testid : undefined}
+                                    >
+                                        <div className="flex items-start gap-3 flex-1 min-w-0">
+                                            <span className={`mt-0.5 flex-shrink-0 ${TONE_ICON[s.tone]}`}>
+                                                <Icon className="w-4 h-4" />
+                                            </span>
+                                            <div className="min-w-0">
+                                                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                                                    <span className="text-sm font-semibold truncate">
+                                                        {r.counterparty_name || r.counterparty_email || "—"}
+                                                    </span>
+                                                    <span className="font-mono tabular-nums text-sm text-foreground/80">
+                                                        {formatMoney(r.amount, r.currency || "USD")}
+                                                    </span>
+                                                    <span
+                                                        className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border ${TONE_BADGE[s.tone]}`}
+                                                        data-testid={i === 0 ? `${s.testid}-count` : undefined}
+                                                    >
+                                                        {s.label}
+                                                    </span>
                                                 </div>
-                                                <div className="font-mono tabular-nums">{formatMoney(r.amount, r.currency || "USD")}</div>
-                                                {sub ? <div className="text-[10px] opacity-80 mt-0.5 line-clamp-2">{sub}</div> : null}
+                                                {sub ? (
+                                                    <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{sub}</div>
+                                                ) : null}
                                             </div>
+                                        </div>
+                                        <div className="flex items-center gap-2 flex-shrink-0 sm:pl-3 pl-7">
                                             {s.actionable === "past_due" ? (
-                                                <div className="flex flex-col gap-1 flex-shrink-0">
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => invoiceAction(r._id, "mark_paid")}
-                                                        className="rounded-md border border-current/25 bg-white/60 px-2 py-1 text-[10px] font-medium hover:bg-white"
-                                                        data-testid="digest-past-due-paid">
-                                                        Mark paid
-                                                    </button>
+                                                <>
                                                     {onDraftChase ? (
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => onDraftChase(r)}
-                                                            className="inline-flex items-center justify-center gap-1 rounded-md border border-current/20 px-2 py-1 text-[10px] font-medium hover:bg-white/40"
-                                                            data-testid="digest-past-due-draft">
-                                                            <Send className="w-3 h-3" />
-                                                            Follow-up
-                                                        </button>
+                                                        <ActionButton primary onClick={() => onDraftChase(r)} testId="digest-past-due-draft">
+                                                            <span className="inline-flex items-center gap-1.5"><Send className="w-3 h-3" /> Follow up</span>
+                                                        </ActionButton>
                                                     ) : null}
-                                                </div>
+                                                    <ActionButton onClick={() => invoiceAction(r._id, "mark_paid")} testId="digest-past-due-paid">
+                                                        Mark paid
+                                                    </ActionButton>
+                                                </>
                                             ) : null}
                                             {s.actionable === "draft" && onDraftChase ? (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => onDraftChase(r)}
-                                                    className="flex-shrink-0 inline-flex items-center gap-1 rounded-md border border-current/20 px-2 py-1 text-[10px] font-medium hover:bg-white/40 transition-colors"
-                                                    data-testid="digest-draft-btn">
-                                                    <Send className="w-3 h-3" />
-                                                    Draft
-                                                </button>
+                                                <ActionButton primary onClick={() => onDraftChase(r)} testId="digest-draft-btn">
+                                                    <span className="inline-flex items-center gap-1.5"><Send className="w-3 h-3" /> Follow up</span>
+                                                </ActionButton>
+                                            ) : null}
+                                            {s.actionable === "reply" && onDraftChase ? (
+                                                <ActionButton primary onClick={() => onDraftChase(r)} testId="digest-reply-btn">
+                                                    <span className="inline-flex items-center gap-1.5"><Send className="w-3 h-3" /> Reply</span>
+                                                </ActionButton>
                                             ) : null}
                                             {s.actionable === "confirm" ? (
-                                                <div className="flex flex-col gap-1 flex-shrink-0">
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => invoiceAction(r._id, "mark_paid")}
-                                                        className="rounded-md border border-current/25 bg-white/60 px-2 py-1 text-[10px] font-medium hover:bg-white"
-                                                        data-testid="digest-confirm-paid">
+                                                <>
+                                                    <ActionButton primary onClick={() => invoiceAction(r._id, "mark_paid")} testId="digest-confirm-paid">
                                                         Received
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => invoiceAction(r._id, "deny_payment_claim")}
-                                                        className="rounded-md border border-current/15 px-2 py-1 text-[10px] font-medium opacity-80 hover:opacity-100"
-                                                        data-testid="digest-deny-claim">
+                                                    </ActionButton>
+                                                    <ActionButton onClick={() => invoiceAction(r._id, "deny_payment_claim")} testId="digest-deny-claim">
                                                         Not yet
-                                                    </button>
-                                                </div>
+                                                    </ActionButton>
+                                                </>
                                             ) : null}
                                             {s.actionable === "stale" ? (
-                                                <div className="flex flex-col gap-1 flex-shrink-0">
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => invoiceAction(r._id, "mark_paid")}
-                                                        className="rounded-md border border-current/25 bg-white/60 px-2 py-1 text-[10px] font-medium hover:bg-white"
-                                                        data-testid="digest-stale-paid">
+                                                <>
+                                                    <ActionButton primary onClick={() => invoiceAction(r._id, "mark_paid")} testId="digest-stale-paid">
                                                         Received
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => invoiceAction(r._id, "write_off")}
-                                                        className="rounded-md border border-current/20 px-2 py-1 text-[10px] font-medium opacity-90 hover:opacity-100"
-                                                        data-testid="digest-stale-writeoff">
-                                                        Write off
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => invoiceAction(r._id, "dismiss_stale")}
-                                                        className="rounded-md border border-current/15 px-2 py-1 text-[10px] font-medium opacity-80 hover:opacity-100"
-                                                        data-testid="digest-stale-chase">
+                                                    </ActionButton>
+                                                    <ActionButton onClick={() => invoiceAction(r._id, "dismiss_stale")} testId="digest-stale-chase">
                                                         Still chasing
-                                                    </button>
-                                                </div>
+                                                    </ActionButton>
+                                                    <ActionButton onClick={() => invoiceAction(r._id, "write_off")} testId="digest-stale-writeoff">
+                                                        Write off
+                                                    </ActionButton>
+                                                </>
                                             ) : null}
-                                        </li>
-                                    );
-                                })}
-                                {rows.length > 4 ? <li className="text-[11px] opacity-70">+{rows.length - 4} more</li> : null}
-                                {rows.length === 0 ? (
-                                    <li className="text-[11px] opacity-60">
-                                        {s.key === "watching" ? "Nothing being watched yet." : "Nothing here today."}
+                                        </div>
                                     </li>
-                                ) : null}
-                            </ul>
-                        </div>
-                    );
-                })}
-            </div>
+                                );
+                            }),
+                        )}
+                    </ul>
+                )}
+
+                {quietCount > 0 ? (
+                    <div className="border-t border-border bg-muted/30">
+                        <button
+                            type="button"
+                            onClick={() => setQuietOpen((v) => !v)}
+                            className="w-full px-6 py-3 flex items-center justify-between text-xs text-muted-foreground hover:text-foreground transition-colors"
+                            data-testid="digest-quiet-toggle"
+                        >
+                            <span className="inline-flex items-center gap-4">
+                                {quietSections.map((s) => (
+                                    <span key={s.key} className="inline-flex items-center gap-1.5" data-testid={s.testid}>
+                                        <s.icon className="w-3.5 h-3.5" />
+                                        {s.label}
+                                        <span className="font-mono tabular-nums font-semibold" data-testid={`${s.testid}-count`}>{s.rows.length}</span>
+                                    </span>
+                                ))}
+                            </span>
+                            <ChevronDown className={`w-4 h-4 transition-transform ${quietOpen ? "rotate-180" : ""}`} />
+                        </button>
+                        {quietOpen ? (
+                            <div className="px-6 pb-4 grid sm:grid-cols-2 gap-3">
+                                {quietSections.map((s) => (
+                                    <div key={s.key} className="rounded-xl border border-border bg-card p-3.5">
+                                        <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-2 inline-flex items-center gap-1.5">
+                                            <s.icon className="w-3.5 h-3.5" /> {s.label}
+                                        </div>
+                                        <ul className="space-y-1.5 text-xs">
+                                            {s.rows.slice(0, 5).map((r) => (
+                                                <li key={r._id} className="flex items-baseline justify-between gap-2">
+                                                    <div className="min-w-0">
+                                                        <span className="font-medium truncate block">
+                                                            {r.counterparty_name || r.counterparty_email || "—"}
+                                                        </span>
+                                                        {rowSubtitle(r, s.key) ? (
+                                                            <span className="text-[10px] text-muted-foreground line-clamp-1">{rowSubtitle(r, s.key)}</span>
+                                                        ) : null}
+                                                    </div>
+                                                    <span className="font-mono tabular-nums flex-shrink-0">{formatMoney(r.amount, r.currency || "USD")}</span>
+                                                </li>
+                                            ))}
+                                            {s.rows.length > 5 ? <li className="text-[10px] text-muted-foreground">+{s.rows.length - 5} more</li> : null}
+                                            {s.rows.length === 0 ? (
+                                                <li className="text-[10px] text-muted-foreground">
+                                                    {s.key === "watching" ? "Nothing being watched yet." : "Nothing here today."}
+                                                </li>
+                                            ) : null}
+                                        </ul>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : null}
+                    </div>
+                ) : null}
             </div>
         </div>
     );

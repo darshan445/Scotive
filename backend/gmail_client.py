@@ -262,6 +262,27 @@ async def get_message_metadata(access_token: str, message_id: str) -> Optional[d
         return _parse_metadata_message(r.json())
 
 
+async def get_thread_message_ids(access_token: str, thread_id: str) -> list[str]:
+    """List message ids in a Gmail thread (chronological order)."""
+    async with httpx.AsyncClient(timeout=30.0) as c:
+        r = await c.get(
+            f"{GMAIL_API}/users/me/threads/{thread_id}",
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={"format": "minimal"},
+        )
+        if r.status_code != 200:
+            return []
+        return [m["id"] for m in (r.json().get("messages") or []) if m.get("id")]
+
+
+async def get_thread_messages(access_token: str, thread_id: str) -> list[dict]:
+    """Fetch every message in a thread (full bodies), chronological."""
+    ids = await get_thread_message_ids(access_token, thread_id)
+    if not ids:
+        return []
+    return await get_messages_batch(access_token, ids)
+
+
 async def get_thread_latest_metadata(access_token: str, thread_id: str) -> Optional[dict]:
     """Latest message in a thread — reply target for in-thread chases."""
     async with httpx.AsyncClient(timeout=20.0) as c:

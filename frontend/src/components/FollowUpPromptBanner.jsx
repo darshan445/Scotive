@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { MessageSquare, X } from "lucide-react";
-import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { api, extractError } from "@/lib/api";
 import { formatMoney } from "@/components/LedgerCard";
@@ -14,7 +13,7 @@ const STEP_LABEL_UI = {
     promise_broken: "Broken promise",
 };
 
-export function FollowUpPromptBanner({ prompt, onDismiss, onChanged }) {
+export function FollowUpPromptBanner({ prompt, onDismiss, onChanged, onReview }) {
     const [busy, setBusy] = useState(false);
     if (!prompt) return null;
 
@@ -86,10 +85,8 @@ export function FollowUpPromptBanner({ prompt, onDismiss, onChanged }) {
                 </button>
             </div>
             <div className="flex flex-wrap items-center gap-2 pl-12">
-                <Button size="sm" asChild disabled={busy} data-testid="followup-prompt-review">
-                    <Link to="/" onClick={() => onDismiss?.()}>
-                        Review &amp; send
-                    </Link>
+                <Button size="sm" onClick={() => onReview?.(prompt)} disabled={busy} data-testid="followup-prompt-review">
+                    Review &amp; send
                 </Button>
                 <Button size="sm" variant="ghost" onClick={skip} disabled={busy} data-testid="followup-prompt-skip">
                     Skip

@@ -365,6 +365,17 @@ async def run_gmail_sync(
                 for c in candidates:
                     c["job_id"] = job_id
                 await db.seed_candidates.insert_many(candidates)
+
+            if candidates and os.environ.get("OPENROUTER_API_KEY"):
+                await _set_job_phase("conversation_enrichment", counts)
+                try:
+                    from post_track_enrichment import run_pre_curation_enrichment
+                    enrich_stats = await run_pre_curation_enrichment(db, user_id, job_id)
+                    counts["conversation_enrichment"] = enrich_stats
+                except Exception as e:
+                    logger.exception("sync pre_curation enrichment FAILED user=%s err=%s", user_id, e)
+                    counts["conversation_enrichment_error"] = str(e)[:200]
+
             await db.seed_jobs.update_one(
                 {"_id": job_id},
                 {"$set": {

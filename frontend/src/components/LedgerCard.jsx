@@ -160,12 +160,12 @@ export function LedgerCard({ ledger, onChanged }) {
     }
     return (
         <div className="space-y-6" data-testid="ledger-card">
-            <div className="rounded-2xl border border-border bg-card p-6 md:p-8">
+            <div className="surface-card p-6 md:p-7">
                 <div className="flex items-start justify-between gap-4 flex-wrap">
                     <div>
-                        <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">You&apos;re owed</div>
+                        <div className="eyebrow">You&apos;re owed</div>
                         <div className="mt-1 flex items-baseline gap-4 flex-wrap">
-                            <span className="font-heading font-black text-4xl md:text-5xl tracking-tight tabular-nums" data-testid="ledger-total">
+                            <span className="stat-number font-bold text-4xl md:text-[2.75rem] tracking-tight" data-testid="ledger-total">
                                 {formatOpenTotals(openTotals)}
                             </span>
                             <span className="text-muted-foreground text-sm" data-testid="ledger-client-count">
@@ -175,7 +175,7 @@ export function LedgerCard({ ledger, onChanged }) {
                     </div>
                     <button
                         onClick={() => setManualOpen(true)}
-                        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-3 py-1.5 text-sm font-medium hover:bg-muted transition-colors"
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3.5 py-2 text-sm font-medium hover:bg-muted transition-colors"
                         data-testid="track-manual-button-header">
                         <PlusCircle className="w-4 h-4" /> Track manually
                     </button>
@@ -278,7 +278,7 @@ export function LedgerCard({ ledger, onChanged }) {
                                                         <MoreHorizontal className="w-4 h-4" />
                                                     </DropdownMenuTrigger>
                                                     <DropdownMenuContent align="end">
-                                                        <DropdownMenuItem onClick={() => setChaseInvoice(inv)} data-testid="row-draft-chase"><Send className="w-3.5 h-3.5 mr-2" />Draft chase</DropdownMenuItem>
+                                                        <DropdownMenuItem onClick={() => setChaseInvoice(inv)} data-testid="row-draft-chase"><Send className="w-3.5 h-3.5 mr-2" />Follow up</DropdownMenuItem>
                                                         <DropdownMenuItem onClick={() => openDueDateEditor(inv)} data-testid="row-set-due-date">
                                                             <Calendar className="w-3.5 h-3.5 mr-2" />{inv.due_date ? "Edit due date" : "Add due date"}
                                                         </DropdownMenuItem>

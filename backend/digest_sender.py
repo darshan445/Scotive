@@ -84,11 +84,24 @@ async def collect_today_sections(db, user_id) -> dict:
         elif s == "invoiced" and inv.get("due_date"):
             d = _parse_date(inv.get("due_date"))
             if d and d < today:
-                due_overdue.append(inv)
+                if inv.get("watching_for_reply"):
+                    watching.append(inv)
+                else:
+                    due_overdue.append(inv)
         elif s == "promise_broken":
-            broken.append(inv)
+            if inv.get("watching_for_reply") or inv.get("ladder_exhausted"):
+                watching.append(inv)
+            else:
+                broken.append(inv)
         elif s == "disputed":
-            needs_reply.append(inv)
+            if inv.get("watching_for_reply"):
+                watching.append(inv)
+            else:
+                needs_reply.append(inv)
+        elif s in ("promised", "partially_paid"):
+            watching.append(inv)
+        elif s == "invoiced" and not inv.get("due_date"):
+            watching.append(inv)
         elif s == "paid":
             d = _parse_date(inv.get("paid_at"))
             if d and (today - d).days <= 1:

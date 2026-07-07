@@ -102,8 +102,8 @@ export function CurationScreen({ candidates, onConfirm, busy }) {
     return (
         <div className="rounded-2xl border border-border bg-card overflow-hidden" data-testid="curation-screen">
             <div className="p-6 md:p-8 border-b border-border">
-                <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground mb-2">Your last 90 days</div>
-                <h2 className="font-heading font-black text-2xl md:text-3xl tracking-tight">
+                <div className="eyebrow mb-2">Your last 90 days</div>
+                <h2 className="font-heading font-bold text-2xl md:text-3xl tracking-tight">
                     We found {n} invoice{n === 1 ? "" : "s"} you sent. Which are still unpaid?
                 </h2>
                 <p className="mt-2 text-sm text-muted-foreground">

@@ -43,7 +43,22 @@ export function PaymentsCard({ receipts, ledger, onChanged }) {
         ["matched", "user_confirmed"].includes(r.match_status),
     );
 
-    if (!confirmInvoices.length && !unmatched.length && !ambiguous.length) return null;
+    if (!confirmInvoices.length && !unmatched.length && !ambiguous.length) {
+        return (
+            <div className="surface-card px-6 py-10 text-center" data-testid="payments-card">
+                <Wallet className="w-5 h-5 mx-auto text-muted-foreground mb-3" />
+                <div className="font-heading font-semibold text-base">No payments to review</div>
+                <p className="text-sm text-muted-foreground mt-1 max-w-sm mx-auto">
+                    Stripe and PayPal receipts are matched to open invoices automatically. Anything that needs a decision shows up here.
+                </p>
+                {recent.length > 0 ? (
+                    <div className="mt-4 inline-block text-left">
+                        <RecentActivity receipts={recent.slice(0, 4)} />
+                    </div>
+                ) : null}
+            </div>
+        );
+    }
 
     return (
         <div className="space-y-4" data-testid="payments-card">

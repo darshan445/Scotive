@@ -290,6 +290,7 @@ async def confirm_seed_curation(
     selected_set = set(candidate_ids) if not track_none else set()
     tracked = 0
     ignored_ids: list[str] = []
+    tracked_invoice_ids: list[Any] = []
 
     state = await db.gmail_sync_state.find_one({"user_id": user_id}) or {}
     anchor_map: dict[str, list[str]] = dict(state.get("anchor_map") or {})
@@ -304,40 +305,60 @@ async def confirm_seed_curation(
                 due_date = due_overrides[cid] or None
             else:
                 due_date = doc.get("due_date")
-            status = "invoiced"
-            due_dt = _parse_date(due_date)
-            if due_dt and due_dt < today:
-                status = "overdue"
-            inv_doc = enrich_invoice_doc({
-                "user_id": user_id,
-                "counterparty_email": doc["counterparty_email"],
-                "counterparty_name": doc.get("counterparty_name"),
-                "client_identity_key": doc.get("client_identity_key"),
-                "amount": doc["amount"],
-                "balance_remaining": float(doc["amount"]),
-                "paid_amount": 0.0,
-                "currency": doc.get("currency") or "USD",
-                "invoice_ref": doc.get("invoice_ref"),
-                "invoice_ref_normalized": doc.get("invoice_ref_normalized"),
-                "due_date": due_date,
-                "due_date_assumed": False,
-                "promise_date": None,
-                "status": status,
-                "kind": "invoice_sent",
-                "escalation_step_floor": int(doc.get("escalation_step_floor") or 0),
-                "prior_chase_count": int(doc.get("prior_chase_count") or 0),
-                "source_message_id": mid,
-                "source_thread_id": doc.get("source_thread_id"),
-                "source_subject": doc.get("source_subject"),
-                "source_from": doc.get("source_from"),
-                "source_date": doc.get("source_date"),
-                "evidence_sentence": None,
-                "confidence": float(doc.get("confidence") or 1.0),
-                "created_at": now_iso,
-            }, doc["counterparty_email"])
-            outcome, _ = await upsert_sweep_invoice(db, user_id, inv_doc, now_iso=now_iso)
-            if outcome == "created":
-                tracked += 1
+
+            staging_id = doc.get("staging_invoice_id")
+            if staging_id:
+                from post_track_enrichment import promote_staging_invoice
+                inv_id = await promote_staging_invoice(
+                    db, user_id, staging_id,
+                    due_date=due_date,
+                    now_iso=now_iso,
+                    today=today,
+                )
+                if inv_id:
+                    tracked += 1
+                    tracked_invoice_ids.append(inv_id)
+            else:
+                status = doc.get("enriched_status") or "invoiced"
+                due_dt = _parse_date(due_date)
+                if due_dt and due_dt < today and status in ("invoiced", "overdue"):
+                    status = "overdue"
+                elif due_dt and due_dt >= today and status == "overdue":
+                    status = "invoiced"
+                bal = float(doc.get("balance_remaining") if doc.get("balance_remaining") is not None else doc.get("amount") or 0)
+                inv_doc = enrich_invoice_doc({
+                    "user_id": user_id,
+                    "counterparty_email": doc["counterparty_email"],
+                    "counterparty_name": doc.get("counterparty_name"),
+                    "client_identity_key": doc.get("client_identity_key"),
+                    "amount": doc["amount"],
+                    "balance_remaining": bal,
+                    "paid_amount": float(doc.get("paid_amount") or 0),
+                    "currency": doc.get("currency") or "USD",
+                    "invoice_ref": doc.get("invoice_ref"),
+                    "invoice_ref_normalized": doc.get("invoice_ref_normalized"),
+                    "due_date": due_date,
+                    "due_date_assumed": False,
+                    "promise_date": doc.get("promise_date"),
+                    "status": status,
+                    "kind": "invoice_sent",
+                    "escalation_step_floor": int(doc.get("escalation_step_floor") or 0),
+                    "prior_chase_count": int(doc.get("prior_chase_count") or 0),
+                    "source_message_id": mid,
+                    "source_thread_id": doc.get("source_thread_id"),
+                    "source_subject": doc.get("source_subject"),
+                    "source_from": doc.get("source_from"),
+                    "source_date": doc.get("source_date"),
+                    "evidence_sentence": None,
+                    "confidence": float(doc.get("confidence") or 1.0),
+                    "created_at": now_iso,
+                }, doc["counterparty_email"])
+                outcome, inv_id = await upsert_sweep_invoice(db, user_id, inv_doc, now_iso=now_iso)
+                if inv_id:
+                    tracked_invoice_ids.append(inv_id)
+                if outcome == "created":
+                    tracked += 1
+
             email = doc["counterparty_email"].lower()
             if mid and mid not in (anchor_map.get(email) or []):
                 anchor_map.setdefault(email, []).append(mid)
@@ -350,6 +371,9 @@ async def confirm_seed_curation(
             )
         else:
             ignored_ids.append(mid)
+            if doc.get("staging_invoice_id"):
+                from post_track_enrichment import delete_staging_invoice
+                await delete_staging_invoice(db, user_id, doc["staging_invoice_id"])
             await db.seed_candidates.update_one(
                 {"_id": doc["_id"]},
                 {"$set": {"status": "ignored", "updated_at": now_iso}},
@@ -378,24 +402,22 @@ async def confirm_seed_curation(
     # Safety pass — any invoiced rows with past due dates flip immediately
     past_due_flipped = await apply_past_due_transitions(db, user_id)
 
-    enrichment: dict[str, Any] = {}
-    if tracked > 0 and not track_none:
-        enrichment = await run_post_curation_enrichment(db, user_id)
+    from post_track_enrichment import delete_staging_for_job
+    await delete_staging_for_job(db, user_id, job["_id"])
 
     return {
         "tracked": tracked,
         "ignored": len(ignored_ids),
         "past_due_flipped": past_due_flipped,
         "watching": track_none or len(selected_set) == 0,
-        **enrichment,
     }
 
 
-async def run_post_curation_enrichment(db, user_id) -> dict[str, Any]:
-    """Apply client reply intelligence (promises, disputes, etc.) after curation."""
-    from reply_sync import run_reply_intelligence_tick
-    from invoice_event_idempotency import dedupe_stored_invoice_events
-
-    reply = await run_reply_intelligence_tick(db, user_id)
-    deduped = await dedupe_stored_invoice_events(db, user_id)
-    return {"reply_sync": reply, "events_deduped": deduped}
+async def run_post_curation_enrichment(
+    db,
+    user_id,
+    tracked_invoice_ids: list[Any] | None = None,
+) -> dict[str, Any]:
+    """Legacy hook — enrichment now runs before curation. No-op on confirm."""
+    _ = (db, user_id, tracked_invoice_ids)
+    return {"skipped": "enrichment_runs_before_curation"}

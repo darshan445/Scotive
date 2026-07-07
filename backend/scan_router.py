@@ -851,10 +851,8 @@ def build_router(db, get_current_user):
             elif s == "invoiced" and inv.get("due_date"):
                 try:
                     due = datetime.fromisoformat(inv["due_date"]).date()
-                    if due < today:
+                    if due < today and not inv.get("watching_for_reply"):
                         due_overdue.append(row)
-                    elif due == today:
-                        watching.append(row)
                     else:
                         watching.append(row)
                 except Exception:
@@ -862,9 +860,19 @@ def build_router(db, get_current_user):
             elif s == "invoiced" and not inv.get("due_date"):
                 watching.append(row)
             elif s == "promise_broken":
-                broken.append(row)
+                # After the user sends a follow-up we watch the thread instead
+                # of re-surfacing the row as an action item.
+                if inv.get("watching_for_reply") or inv.get("ladder_exhausted"):
+                    watching.append(row)
+                else:
+                    broken.append(row)
             elif s == "disputed":
-                needs_reply.append(row)
+                if inv.get("watching_for_reply"):
+                    watching.append(row)
+                else:
+                    needs_reply.append(row)
+            elif s in ("promised", "partially_paid"):
+                watching.append(row)
             elif s == "paid":
                 paid_at = inv.get("paid_at")
                 try:
@@ -904,11 +912,25 @@ def build_router(db, get_current_user):
             raise HTTPException(status_code=404, detail="Invoice not found")
         tone = payload.tone or _tone_for(inv)
         thread_subject = inv.get("source_subject") or ""
+        is_dispute = inv.get("status") == "disputed"
+        dispute_quote = None
+        if is_dispute:
+            ev = await db.invoice_events.find_one(
+                {"user_id": user["_id"], "invoice_id": inv["_id"], "action": "dispute"},
+                sort=[("at", -1)],
+            )
+            dispute_quote = ((ev or {}).get("meta") or {}).get("quote")
         sys = (
             "You draft short, professional payment follow-up emails for a small business owner. "
             "Under 120 words. Plain professional tone. No 'hope this finds you well'. "
             "Always include invoice ref (if any), amount, due date. On a broken promise, quote the client's own stated date verbatim. "
-            "Never sound templated or AI-written. "
+            + (
+                "The client has DISPUTED this invoice — do not demand payment. Acknowledge their concern, "
+                "reference what they said, and propose resolving it (a quick call or clarification). "
+                if is_dispute
+                else ""
+            )
+            + "Never sound templated or AI-written. "
             "This is a REPLY in an existing email thread — subject must be 'Re: <original subject>' matching the thread. "
             "Output STRICT JSON: {\"subject\": string, \"body\": string}."
         )
@@ -921,7 +943,7 @@ def build_router(db, get_current_user):
             f"Promise date: {inv.get('promise_date') or 'n/a'}\n"
             f"Status: {inv.get('status')}\n"
             f"Tone: {tone}\n"
-            f"Client's own words (if broken promise): {inv.get('evidence_sentence') or ''}\n"
+            f"Client's own words (broken promise or dispute): {dispute_quote or inv.get('evidence_sentence') or ''}\n"
             f"User extra note: {payload.note or ''}"
         )
         api_key = os.environ.get("OPENROUTER_API_KEY")

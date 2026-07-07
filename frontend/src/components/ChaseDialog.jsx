@@ -33,7 +33,7 @@ export function ChaseDialog({ invoice, open, onOpenChange, onSent }) {
         setSending(true);
         try {
             await api.post(`/invoices/${invoice._id}/send-chase`, { subject, body });
-            toast.success("Chase sent from your Gmail");
+            toast.success("Sent from your Gmail");
             await onSent?.();
             onOpenChange(false);
         } catch (e) { toast.error(extractError(e)); }
@@ -44,7 +44,10 @@ export function ChaseDialog({ invoice, open, onOpenChange, onSent }) {
         <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent className="max-w-2xl" data-testid="chase-dialog">
                 <DialogHeader>
-                    <DialogTitle className="font-heading">Draft chase to {invoice?.counterparty_name || invoice?.counterparty_email}</DialogTitle>
+                    <DialogTitle className="font-heading">
+                        {invoice?.status === "disputed" ? "Reply to" : "Follow up with"}{" "}
+                        {invoice?.counterparty_name || invoice?.counterparty_email}
+                    </DialogTitle>
                 </DialogHeader>
                 {loading ? (
                     <div className="py-16 flex items-center justify-center text-muted-foreground text-sm"><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Drafting…</div>

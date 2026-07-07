@@ -138,7 +138,26 @@ EVENT_KIND_MAP = {
     "partial_payment": "partial_payment",
     "dispute": "dispute",
     "payment_claimed": "payment_claim",
+    "correction": "invoice_corrected",
+    "approved": "payment_approved",
 }
+
+# partial_payment must run before promise on the same message (T7: partial + implicit promise).
+_EVENT_APPLY_ORDER = {
+    "partial_payment": 0,
+    "promise": 1,
+    "dispute": 2,
+    "payment_claimed": 3,
+    "correction": 4,
+    "approved": 5,
+}
+
+# Client-only events must come from the client (Gmail From), not the user.
+_CLIENT_ONLY_EVENT_TYPES = frozenset({
+    "promise", "partial_payment", "dispute", "payment_claimed", "approved",
+})
+# Corrections are issued by the user revising their own invoice.
+_USER_ONLY_EVENT_TYPES = frozenset({"correction"})
 
 CLIENT_SWEEP_PROMPT = """You analyse email threads between a small business owner (USER) and ONE client to build accounts-receivable records.
 
@@ -158,7 +177,7 @@ Return STRICT JSON only. Schema:
   }],
   "events": [{
     "invoice_ref": string|null,
-    "type": "promise"|"partial_payment"|"dispute"|"payment_claimed",
+    "type": "promise"|"partial_payment"|"dispute"|"payment_claimed"|"correction",
     "date": "YYYY-MM-DD"|null,
     "quote": string,
     "message_id": string,
@@ -181,11 +200,14 @@ Rules:
 - Re: / Fwd: replies about an EXISTING invoice are NOT new invoices — attach as events only.
 - Extract amounts from the NEW message body only, never from quoted history below "On ... wrote:".
 - One row per distinct invoice_number per client. Same invoice_number = same invoice.
-- Chronological thread messages may contain promises, partial payments, disputes, payment claims.
+- Chronological thread messages may contain promises, partial payments, disputes, payment claims, corrections.
+- SENDER DIRECTION (critical): each thread line is labelled "YOU →" (user sent) or "{client} → YOU" (client sent). promise, partial_payment, dispute, payment_claimed, and approved events MUST cite a message where the client sent to the user — never from "YOU →" lines. Reminders, payment chasers, and follow-ups the USER sent are NEVER payment_claimed, promise, dispute, or partial_payment. "correction" MUST cite a "YOU →" message only.
+- "correction": the USER later revises an existing invoice's amount (e.g. "corrected: $300", "revised invoice, should be…", "my mistake — it's actually…"). Set amount to the NEW corrected amount and invoice_ref to the invoice being corrected. A correction is NEVER a new invoice row — do not add it to invoices[]. If a corrected due date is stated, put it in date.
+- A message can produce MULTIPLE events: e.g. "sent $1,200 (ref TXN...), rest coming next week" = one partial_payment (with amount + reference) AND one promise (for the remainder, date resolved from the message date).
 - For promise events, date must be ISO YYYY-MM-DD. Resolve relative phrases using the MESSAGE DATE shown in the thread (not sync time): "this Friday" → that week's Friday on or after the message date; "next Friday" → the Friday after; "tomorrow", "day after tomorrow", "end of this week", "next week", "this weekend", etc. Never copy due dates from quoted invoice text below — only the client's new words count.
 - Do not invent amounts. Use null for amounts when unsure.
 - If history was truncated, note it in truncated_note and lower confidence.
-- Every event must include message_id and a verbatim quote from that message.
+- Every event must include message_id (use the id= value from the thread line) and a verbatim quote from that message.
 """
 
 
@@ -196,6 +218,78 @@ def _extract_email_addr(from_header: str) -> str:
 
 def _sender_domain(email: str) -> str:
     return email.split("@")[-1].lower() if "@" in email else ""
+
+
+def _client_identity_emails(
+    primary_email: str,
+    result: dict | None = None,
+    email_to_primary: dict[str, str] | None = None,
+    counterparty_email: str | None = None,
+) -> set[str]:
+    emails: set[str] = set()
+    for raw in (primary_email, counterparty_email):
+        if raw:
+            emails.add(raw.lower())
+    if result:
+        for raw in (result.get("client") or {}).get("identities") or []:
+            if raw:
+                emails.add(raw.lower())
+    etp = email_to_primary or {}
+    expanded = set(emails)
+    for alias, primary in etp.items():
+        a, p = alias.lower(), primary.lower()
+        if a in expanded or p in expanded:
+            expanded.add(a)
+            expanded.add(p)
+    return expanded
+
+
+def _domains_for_clients(client_emails: set[str]) -> set[str]:
+    return {
+        _sender_domain(e)
+        for e in client_emails
+        if "@" in e and _sender_domain(e) not in CONSUMER_DOMAINS
+    }
+
+
+def _resolve_event_message(ev: dict, messages_by_id: dict[str, dict]) -> dict:
+    """Map an AI event to the Gmail message it cites (by id, then quote)."""
+    mid = (ev.get("message_id") or "").strip()
+    if mid and mid in messages_by_id:
+        return messages_by_id[mid]
+    quote = (ev.get("quote") or "").strip()
+    if len(quote) >= 12:
+        q = quote.lower()
+        for m in messages_by_id.values():
+            hay = (m.get("body") or m.get("snippet") or "").lower()
+            if q in hay or (len(q) >= 20 and q[:40] in hay):
+                return m
+    return {}
+
+
+def event_sender_allows_apply(
+    ev_type: str,
+    msg: dict,
+    my_email: str,
+    client_emails: set[str] | None = None,
+    domains: set[str] | None = None,
+    email_to_primary: dict[str, str] | None = None,
+) -> bool:
+    """Enforce Gmail From direction before applying AI timeline events."""
+    if ev_type not in _CLIENT_ONLY_EVENT_TYPES and ev_type not in _USER_ONLY_EVENT_TYPES:
+        return True
+    if not msg:
+        # Can't verify sender — don't block (AI message_id may be wrong).
+        return True
+
+    sender = _extract_email_addr(msg.get("from", ""))
+    my = my_email.lower()
+
+    if ev_type in _USER_ONLY_EVENT_TYPES:
+        return sender == my
+
+    # Client events: reject only when Gmail From is the user (chase/reminder/invoice).
+    return sender != my
 
 
 def window_clause(months: int) -> str:
@@ -299,7 +393,9 @@ def format_msg_line(msg: dict, my_email: str) -> str:
     subj = normalize_subject(msg.get("subject") or "")
     thread_note = f', thread "{subj[:60]}"' if subj else ""
     body = preprocess_body(msg.get("body") or msg.get("snippet") or "")
-    return f"[{date_label}, {direction}{thread_note}]: {body}"
+    mid = msg.get("id") or ""
+    id_note = f"id={mid}, " if mid else ""
+    return f"[{date_label}, {id_note}{direction}{thread_note}]: {body}"
 
 
 async def load_blocklist(db, user_id) -> set[str]:
@@ -547,6 +643,9 @@ async def extract_client_with_ai(
     anchor_ids: list[str],
     my_email: str,
     truncated: bool,
+    *,
+    system_prompt: str | None = None,
+    extra_context: str | None = None,
 ) -> Optional[dict]:
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
@@ -564,10 +663,13 @@ async def extract_client_with_ai(
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     user_content = (
         f"USER_EMAIL: {my_email}\nCLIENT_EMAIL: {client_email}\nTODAY: {today}\n"
-        f"TRUNCATED: {truncated}\n\n"
-        f"=== ANCHOR INVOICE(S) ===\n" + "\n---\n".join(anchor_texts) + "\n\n"
+        f"TRUNCATED: {truncated}\n"
+        + (f"{extra_context}\n" if extra_context else "")
+        + f"\n=== ANCHOR INVOICE(S) ===\n" + "\n---\n".join(anchor_texts) + "\n\n"
         f"=== THREAD (chronological) ===\n" + "\n".join(thread_lines)
     )
+
+    prompt = system_prompt or CLIENT_SWEEP_PROMPT
 
     try:
         async with httpx.AsyncClient(timeout=90.0) as c:
@@ -582,7 +684,7 @@ async def extract_client_with_ai(
                 json={
                     "model": OPENROUTER_MODEL,
                     "messages": [
-                        {"role": "system", "content": CLIENT_SWEEP_PROMPT},
+                        {"role": "system", "content": prompt},
                         {"role": "user", "content": user_content[:14000]},
                     ],
                     "temperature": 0,
@@ -751,9 +853,15 @@ async def apply_client_result(
     now_iso: str,
     email_to_primary: dict[str, str] | None = None,
     pass1_anchor_ids: list[str] | None = None,
+    *,
+    events_only: bool = False,
+    scoped_invoice_id: Any | None = None,
 ) -> tuple[int, int]:
     """Returns (invoices_created, review_created)."""
-    if not result.get("is_receivable_client"):
+    if events_only:
+        if not result.get("events"):
+            return (0, 0)
+    elif not result.get("is_receivable_client"):
         logger.info("sweep.write DISCARD client=%s reason=not_receivable", client_email)
         return (0, 0)
 
@@ -768,110 +876,133 @@ async def apply_client_result(
 
     invoice_ids_by_ref: dict[str, Any] = await _load_open_invoice_ids_by_ref(db, user_id, client_key)
 
-    for inv in collapse_ai_invoices(result.get("invoices") or [], messages_by_id):
-        amount = inv.get("amount")
-        if amount in (None, 0):
-            continue
-        anchor_id, src = _resolve_invoice_source(inv, messages_by_id, my_email, pass1_anchor_ids)
-        if src and is_invoice_followup(src.get("subject")):
-            related = await find_related_invoice(
-                db, user_id, client_key,
-                norm_ref=normalize_invoice_ref(inv.get("invoice_number"), src.get("subject")),
-                thread_id=src.get("thread_id"),
-                amount=float(amount),
-                subject=normalize_subject(src.get("subject")),
-            )
-            if related:
-                await _record_thread_evidence(
-                    db, user_id, related["_id"],
-                    now_iso=now_iso,
-                    message_id=anchor_id,
+    if not events_only:
+        for inv in collapse_ai_invoices(result.get("invoices") or [], messages_by_id):
+            amount = inv.get("amount")
+            if amount in (None, 0):
+                continue
+            anchor_id, src = _resolve_invoice_source(inv, messages_by_id, my_email, pass1_anchor_ids)
+            if src and is_invoice_followup(src.get("subject")):
+                related = await find_related_invoice(
+                    db, user_id, client_key,
+                    norm_ref=normalize_invoice_ref(inv.get("invoice_number"), src.get("subject")),
+                    thread_id=src.get("thread_id"),
+                    amount=float(amount),
                     subject=normalize_subject(src.get("subject")),
                 )
-                ref = related.get("invoice_ref_normalized")
-                if ref:
-                    invoice_ids_by_ref[ref] = related["_id"]
-                logger.info(
-                    "sweep.write SKIP_FOLLOWUP client=%s ref=%s msg=%s",
-                    client_email, ref, anchor_id,
-                )
-                continue
-        status_raw = (inv.get("status_suggestion") or "INVOICED").upper()
-        status = STATUS_MAP.get(status_raw, "invoiced")
-        balance = inv.get("balance_remaining")
-        if balance is None:
-            balance = float(amount)
-        inv_num = inv.get("invoice_number")
-        norm_ref = normalize_invoice_ref(inv_num, (src or {}).get("subject"))
-        if not norm_ref and src:
-            norm_ref = normalize_invoice_ref(None, src.get("subject"))
-        doc = {
-            "user_id": user_id,
-            "counterparty_email": primary_email,
-            "client_identity_key": client_key,
-            "counterparty_name": cp_name,
-            "amount": float(amount),
-            "balance_remaining": float(balance),
-            "paid_amount": max(0.0, float(amount) - float(balance)),
-            "currency": (inv.get("currency") or "USD").upper(),
-            "invoice_ref": (inv_num if is_plausible_invoice_ref(inv_num) else None) or norm_ref,
-            "invoice_ref_normalized": norm_ref,
-            "issue_date": inv.get("issue_date"),
-            "due_date": inv.get("due_date"),
-            "promise_date": None,
-            "status": status,
-            "kind": "invoice_sent",
-            "source_message_id": anchor_id or f"sweep-{primary_email}-{norm_ref or amount}",
-            "source_thread_id": (src or {}).get("thread_id"),
-            "source_subject": normalize_subject((src or {}).get("subject")),
-            "source_from": (src or {}).get("from"),
-            "source_date": (src or {}).get("date"),
-            "evidence_sentence": None,
-            "confidence": conf,
-            "created_at": now_iso,
-        }
-
-        needs_review = conf < CONFIDENCE_WRITE or not src
-        if needs_review:
-            if norm_ref:
-                existing = await find_invoice_by_key(db, user_id, client_key, norm_ref)
-                if existing and amounts_close(float(amount), float(existing.get("amount") or 0)):
-                    logger.info(
-                        "sweep.write SKIP_REVIEW client=%s ref=%s reason=already_in_ledger",
-                        client_email, norm_ref,
+                if related:
+                    await _record_thread_evidence(
+                        db, user_id, related["_id"],
+                        now_iso=now_iso,
+                        message_id=anchor_id,
+                        subject=normalize_subject(src.get("subject")),
                     )
-                    if norm_ref:
-                        invoice_ids_by_ref[norm_ref] = existing["_id"]
+                    ref = related.get("invoice_ref_normalized")
+                    if ref:
+                        invoice_ids_by_ref[ref] = related["_id"]
+                    logger.info(
+                        "sweep.write SKIP_FOLLOWUP client=%s ref=%s msg=%s",
+                        client_email, ref, anchor_id,
+                    )
                     continue
-            reason = "sweep_low_conf" if conf < CONFIDENCE_WRITE else "missing_anchor"
-            existing_r = await db.review_items.find_one({"user_id": user_id, "source_message_id": doc["source_message_id"]})
-            if not existing_r:
-                await db.review_items.insert_one({**doc, "review_status": "pending", "review_reason": reason})
+            status_raw = (inv.get("status_suggestion") or "INVOICED").upper()
+            status = STATUS_MAP.get(status_raw, "invoiced")
+            balance = inv.get("balance_remaining")
+            if balance is None:
+                balance = float(amount)
+            inv_num = inv.get("invoice_number")
+            norm_ref = normalize_invoice_ref(inv_num, (src or {}).get("subject"))
+            if not norm_ref and src:
+                norm_ref = normalize_invoice_ref(None, src.get("subject"))
+            doc = {
+                "user_id": user_id,
+                "counterparty_email": primary_email,
+                "client_identity_key": client_key,
+                "counterparty_name": cp_name,
+                "amount": float(amount),
+                "balance_remaining": float(balance),
+                "paid_amount": max(0.0, float(amount) - float(balance)),
+                "currency": (inv.get("currency") or "USD").upper(),
+                "invoice_ref": (inv_num if is_plausible_invoice_ref(inv_num) else None) or norm_ref,
+                "invoice_ref_normalized": norm_ref,
+                "issue_date": inv.get("issue_date"),
+                "due_date": inv.get("due_date"),
+                "promise_date": None,
+                "status": status,
+                "kind": "invoice_sent",
+                "source_message_id": anchor_id or f"sweep-{primary_email}-{norm_ref or amount}",
+                "source_thread_id": (src or {}).get("thread_id"),
+                "source_subject": normalize_subject((src or {}).get("subject")),
+                "source_from": (src or {}).get("from"),
+                "source_date": (src or {}).get("date"),
+                "evidence_sentence": None,
+                "confidence": conf,
+                "created_at": now_iso,
+            }
+
+            needs_review = conf < CONFIDENCE_WRITE or not src
+            if needs_review:
+                if norm_ref:
+                    existing = await find_invoice_by_key(db, user_id, client_key, norm_ref)
+                    if existing and amounts_close(float(amount), float(existing.get("amount") or 0)):
+                        logger.info(
+                            "sweep.write SKIP_REVIEW client=%s ref=%s reason=already_in_ledger",
+                            client_email, norm_ref,
+                        )
+                        if norm_ref:
+                            invoice_ids_by_ref[norm_ref] = existing["_id"]
+                        continue
+                reason = "sweep_low_conf" if conf < CONFIDENCE_WRITE else "missing_anchor"
+                existing_r = await db.review_items.find_one({"user_id": user_id, "source_message_id": doc["source_message_id"]})
+                if not existing_r:
+                    await db.review_items.insert_one({**doc, "review_status": "pending", "review_reason": reason})
+                    review_created += 1
+                    logger.info(
+                        "sweep.write REVIEW client=%s ref=%s reason=%s conf=%.2f has_src=%s",
+                        client_email, norm_ref, reason, conf, bool(src),
+                    )
+                continue
+
+            outcome, inv_id = await upsert_sweep_invoice(db, user_id, doc, now_iso=now_iso)
+            if outcome == "created":
+                invoices_created += 1
+            elif outcome == "review":
                 review_created += 1
-                logger.info(
-                    "sweep.write REVIEW client=%s ref=%s reason=%s conf=%.2f has_src=%s",
-                    client_email, norm_ref, reason, conf, bool(src),
-                )
-            continue
+            if inv_id and norm_ref:
+                invoice_ids_by_ref[norm_ref] = inv_id
+            elif inv_id:
+                invoice_ids_by_ref[f"__{inv_id}"] = inv_id
 
-        outcome, inv_id = await upsert_sweep_invoice(db, user_id, doc, now_iso=now_iso)
-        if outcome == "created":
-            invoices_created += 1
-        elif outcome == "review":
-            review_created += 1
-        if inv_id and norm_ref:
-            invoice_ids_by_ref[norm_ref] = inv_id
-        elif inv_id:
-            invoice_ids_by_ref[f"__{inv_id}"] = inv_id
+    if scoped_invoice_id is not None:
+        scoped = await db.invoices.find_one({"_id": scoped_invoice_id, "user_id": user_id})
+        if scoped:
+            ref = scoped.get("invoice_ref_normalized")
+            if ref:
+                invoice_ids_by_ref[ref] = scoped["_id"]
+            invoice_ids_by_ref[f"__{scoped['_id']}"] = scoped["_id"]
 
-    for ev in dedupe_ai_events(result.get("events") or []):
+    sorted_events = sorted(
+        dedupe_ai_events(result.get("events") or []),
+        key=lambda e: (_EVENT_APPLY_ORDER.get(e.get("type") or "", 99), e.get("message_id") or ""),
+    )
+    client_emails = _client_identity_emails(primary_email, result, email_to_primary)
+    domains = _domains_for_clients(client_emails)
+    for ev in sorted_events:
         ev_conf = float(ev.get("confidence") or 0)
         ev_ref = normalize_invoice_ref(ev.get("invoice_ref"))
-        inv_id = invoice_ids_by_ref.get(ev_ref) if ev_ref else None
-        if not inv_id and invoice_ids_by_ref:
+        inv_id = scoped_invoice_id if scoped_invoice_id is not None else None
+        if not inv_id:
+            inv_id = invoice_ids_by_ref.get(ev_ref) if ev_ref else None
+        if not inv_id and len(invoice_ids_by_ref) == 1:
             inv_id = next(iter(invoice_ids_by_ref.values()))
         if inv_id and ev_conf >= CONFIDENCE_REVIEW:
-            await _write_event(db, user_id, inv_id, ev, messages_by_id, now_iso)
+            await _write_event(
+                db, user_id, inv_id, ev, messages_by_id, now_iso,
+                my_email=my_email,
+                client_emails=client_emails,
+                domains=domains,
+                email_to_primary=email_to_primary,
+            )
         elif ev_conf < CONFIDENCE_REVIEW:
             review_created += await _event_to_review(db, user_id, primary_email, ev, messages_by_id, now_iso, result)
 
@@ -881,7 +1012,20 @@ async def apply_client_result(
     return invoices_created, review_created
 
 
-async def _write_event(db, user_id, invoice_id, ev: dict, messages_by_id: dict, now_iso: str, force_review: bool = False):
+async def _write_event(
+    db,
+    user_id,
+    invoice_id,
+    ev: dict,
+    messages_by_id: dict,
+    now_iso: str,
+    force_review: bool = False,
+    *,
+    my_email: str = "",
+    client_emails: set[str] | None = None,
+    domains: set[str] | None = None,
+    email_to_primary: dict[str, str] | None = None,
+):
     from invoice_lifecycle import effective_prior_status
     from post_chase import clear_watching_on_client_event
     from promise_dates import resolve_stated_date
@@ -895,7 +1039,25 @@ async def _write_event(db, user_id, invoice_id, ev: dict, messages_by_id: dict, 
         return
 
     ev_type = ev.get("type")
-    msg = messages_by_id.get(msg_id or "") or {}
+    msg = _resolve_event_message(ev, messages_by_id)
+
+    inv = await db.invoices.find_one({"_id": invoice_id})
+    if inv and not client_emails:
+        client_emails = _client_identity_emails(
+            (inv.get("counterparty_email") or "").lower(),
+            counterparty_email=inv.get("counterparty_email"),
+        )
+
+    if my_email and not event_sender_allows_apply(
+        ev_type, msg, my_email, client_emails, domains, email_to_primary,
+    ):
+        sender = _extract_email_addr(msg.get("from", "")) if msg else ""
+        logger.info(
+            "sweep.event REJECT inv=%s type=%s reason=wrong_sender from=%s msg=%s",
+            invoice_id, ev_type, sender, msg_id,
+        )
+        return
+
     if ev_type == "promise":
         ev = dict(ev)
         ev["date"] = resolve_stated_date(
@@ -905,13 +1067,23 @@ async def _write_event(db, user_id, invoice_id, ev: dict, messages_by_id: dict, 
             message=msg,
         )
 
-    inv = await db.invoices.find_one({"_id": invoice_id})
     activity = {"last_activity_at": now_iso, "status_updated_at": now_iso}
     if ev_type == "promise":
-        await db.invoices.update_one(
-            {"_id": invoice_id},
-            {"$set": {"status": "promised", "promise_date": ev.get("date"), "chasing_paused": True, **activity}},
+        bal = float(
+            inv.get("balance_remaining")
+            if inv and inv.get("balance_remaining") is not None
+            else (inv or {}).get("amount") or 0
         )
+        # Partial payment + promise on remainder stays partially_paid (T7).
+        keep_partial = inv and inv.get("status") == "partially_paid" and bal > 0.005
+        patch: dict[str, Any] = {
+            "promise_date": ev.get("date"),
+            "chasing_paused": True,
+            **activity,
+        }
+        if not keep_partial:
+            patch["status"] = "promised"
+        await db.invoices.update_one({"_id": invoice_id}, {"$set": patch})
         await clear_watching_on_client_event(db, invoice_id, now_iso)
     elif ev_type == "dispute":
         await db.invoices.update_one(
@@ -949,6 +1121,20 @@ async def _write_event(db, user_id, invoice_id, ev: dict, messages_by_id: dict, 
             }},
         )
         await clear_watching_on_client_event(db, invoice_id, now_iso)
+    elif ev_type == "correction" and inv and ev.get("amount") is not None:
+        from ledger_reconcile import apply_invoice_correction
+        await apply_invoice_correction(
+            db, user_id, inv, float(ev["amount"]),
+            now_iso=now_iso,
+            due_date=ev.get("date"),
+            message_id=msg_id,
+            subject=msg.get("subject"),
+            quote=ev.get("quote"),
+            record_event=False,
+        )
+        activity = {"last_activity_at": now_iso, "status_updated_at": now_iso}
+    elif ev_type == "approved":
+        await db.invoices.update_one({"_id": invoice_id}, {"$set": activity})
     else:
         await db.invoices.update_one({"_id": invoice_id}, {"$set": {"last_activity_at": now_iso}})
     await db.invoice_events.insert_one({

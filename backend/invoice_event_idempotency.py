@@ -12,6 +12,7 @@ EVENT_ACTION_MAP = {
     "partial_payment": "partial_payment",
     "dispute": "dispute",
     "payment_claimed": "payment_claim",
+    "approved": "payment_approved",
 }
 
 
@@ -36,7 +37,7 @@ def dedupe_ai_events(events: list[dict]) -> list[dict]:
 
         keys: list[tuple] = []
         if mid:
-            keys.append(("mid", mid))
+            keys.append(("mid", mid, ev_type))
         if q:
             keys.append(("quote", ev_type, q))
         if not keys:
@@ -78,16 +79,17 @@ async def event_already_recorded(
     quote: str | None = None,
 ) -> bool:
     """True when this client event is already on the invoice timeline."""
+    action = event_action(ev_type)
     if message_id:
         existing = await db.invoice_events.find_one({
             "user_id": user_id,
             "invoice_id": invoice_id,
             "meta.message_id": message_id,
+            "action": action,
         })
         if existing:
             return True
 
-    action = event_action(ev_type)
     norm_q = normalize_event_quote(quote)
     if norm_q and action:
         async for row in db.invoice_events.find({
@@ -125,7 +127,7 @@ async def dedupe_stored_invoice_events(
         q = normalize_event_quote(meta.get("quote"))
 
         if mid:
-            key = ("mid", mid)
+            key = ("mid", mid, action)
             if key in seen_mid:
                 continue
             seen_mid.add(key)

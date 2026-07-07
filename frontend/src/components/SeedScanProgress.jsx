@@ -5,6 +5,7 @@ const PHASE_COPY = {
     filtering: "Filtering out promos, ads, and unrelated mail…",
     enriching: "Reading invoice PDF attachments…",
     ai: "AI is identifying your clients and invoices…",
+    conversation_enrichment: "Reading full threads with each client to determine invoice status…",
 };
 
 export function SeedScanProgress({ scanPhase, counts }) {

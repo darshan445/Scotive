@@ -21,8 +21,8 @@ export default function ClientsPage() {
             <TopNav />
             <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 md:py-14 space-y-8">
                 <div>
-                    <div className="text-xs font-mono uppercase tracking-[0.2em] text-muted-foreground mb-3">Clients</div>
-                    <h1 className="font-heading font-black text-3xl md:text-4xl tracking-tight">Everyone who owes you</h1>
+                    <div className="eyebrow mb-2">Clients</div>
+                    <h1 className="font-heading font-bold text-3xl md:text-4xl tracking-tight">Everyone who owes you</h1>
                 </div>
                 {err ? <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{err}</div> : null}
                 {clients === null ? (

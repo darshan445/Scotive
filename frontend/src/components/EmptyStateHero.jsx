@@ -13,13 +13,13 @@ export function EmptyStateHero() {
             className="pt-8 md:pt-16 pb-16 max-w-2xl mx-auto text-center"
             data-testid="empty-state-hero"
         >
-            <div className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-[11px] font-mono uppercase tracking-[0.18em] text-muted-foreground mb-6">
+            <div className="pill mb-6">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                 One last step
             </div>
 
             <h1
-                className="font-heading font-black text-3xl sm:text-4xl leading-tight tracking-tight text-foreground"
+                className="font-heading font-bold text-3xl sm:text-4xl leading-tight tracking-tight text-foreground"
                 data-testid="empty-state-headline"
             >
                 Chase every invoice — automatically.

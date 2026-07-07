@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { AlertTriangle, ArrowUpRight, CalendarClock, Eye, Loader2, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { TopNav } from "@/components/TopNav";
 import { EmptyStateHero } from "@/components/EmptyStateHero";
@@ -9,7 +9,6 @@ import { LedgerCard } from "@/components/LedgerCard";
 import { PaymentsCard } from "@/components/PaymentsCard";
 import { TodayCard } from "@/components/TodayCard";
 import { SyncStatusBar } from "@/components/SyncStatusBar";
-import { ChaseQueueCard } from "@/components/ChaseQueueCard";
 import { SeedScanProgress } from "@/components/SeedScanProgress";
 import { CurationScreen } from "@/components/CurationScreen";
 import { WatchingEmptyState } from "@/components/WatchingEmptyState";
@@ -17,7 +16,8 @@ import { InvoiceDetectedBanner } from "@/components/InvoiceDetectedBanner";
 import { DueDatePromptBanner } from "@/components/DueDatePromptBanner";
 import { FollowUpPromptBanner } from "@/components/FollowUpPromptBanner";
 import { ChaseDialog } from "@/components/ChaseDialog";
-import { formatMoney } from "@/components/LedgerCard";
+import { formatMoney, formatOpenTotals } from "@/components/LedgerCard";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 import { useGmailCallbackToast } from "@/hooks/useGmailCallbackToast";
 import { useLedger } from "@/hooks/useScan";
@@ -25,6 +25,90 @@ import { useReceipts } from "@/hooks/useReceipts";
 import { useOnboarding } from "@/hooks/useOnboarding";
 import { useLiveDetection } from "@/hooks/useLiveDetection";
 import { useWorkspaceRefresh } from "@/hooks/useWorkspaceRefresh";
+
+const OPEN_STATUSES = new Set(["invoiced", "overdue", "promised", "partially_paid", "promise_broken", "disputed"]);
+
+function greeting() {
+    const h = new Date().getHours();
+    if (h < 12) return "Good morning";
+    if (h < 17) return "Good afternoon";
+    return "Good evening";
+}
+
+function StatTile({ label, value, sub, icon: Icon, tone = "default", testId }) {
+    const toneCls =
+        tone === "red"
+            ? "text-red-600"
+            : tone === "amber"
+              ? "text-amber-600"
+              : tone === "green"
+                ? "text-emerald-600"
+                : "text-foreground";
+    return (
+        <div className="surface-card p-5 flex flex-col gap-1 min-w-0" data-testid={testId}>
+            <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                {Icon ? <Icon className="w-3.5 h-3.5" /> : null}
+                {label}
+            </div>
+            <div className={`stat-number font-bold text-2xl md:text-[1.7rem] truncate ${toneCls}`}>{value}</div>
+            {sub ? <div className="text-xs text-muted-foreground truncate">{sub}</div> : null}
+        </div>
+    );
+}
+
+function StatsStrip({ ledger }) {
+    const stats = useMemo(() => {
+        const invoices = ledger?.invoices || [];
+        const open = invoices.filter((i) => OPEN_STATUSES.has(i.status));
+        const pastDue = invoices.filter((i) => i.status === "overdue" || i.status === "promise_broken");
+        const promised = invoices.filter((i) => i.status === "promised");
+        const watching = invoices.filter((i) => i.watching_for_reply || i.ladder_exhausted);
+        const pastDueByCur = {};
+        for (const i of pastDue) {
+            const cur = (i.currency || "USD").toUpperCase();
+            pastDueByCur[cur] = (pastDueByCur[cur] || 0) + Number(i.balance_remaining ?? i.amount ?? 0);
+        }
+        return { open, pastDue, promised, watching, pastDueByCur };
+    }, [ledger]);
+
+    if (!ledger) return null;
+    const openTotals = ledger.totals_by_currency ?? ledger.total_open;
+
+    return (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3" data-testid="dashboard-stats">
+            <StatTile
+                label="Outstanding"
+                value={formatOpenTotals(openTotals)}
+                sub={`${stats.open.length} open invoice${stats.open.length === 1 ? "" : "s"}`}
+                icon={Wallet}
+                testId="stat-outstanding"
+            />
+            <StatTile
+                label="Past due"
+                value={stats.pastDue.length ? formatOpenTotals(stats.pastDueByCur) : "—"}
+                sub={stats.pastDue.length ? `${stats.pastDue.length} need${stats.pastDue.length === 1 ? "s" : ""} action` : "Nothing late. Nice."}
+                icon={AlertTriangle}
+                tone={stats.pastDue.length ? "red" : "green"}
+                testId="stat-past-due"
+            />
+            <StatTile
+                label="Promised"
+                value={String(stats.promised.length)}
+                sub={stats.promised.length ? "Payment dates being watched" : "No open promises"}
+                icon={CalendarClock}
+                tone={stats.promised.length ? "amber" : "default"}
+                testId="stat-promised"
+            />
+            <StatTile
+                label="Watching"
+                value={String(stats.watching.length)}
+                sub="Threads read for replies"
+                icon={Eye}
+                testId="stat-watching"
+            />
+        </div>
+    );
+}
 
 export default function DashboardPage() {
     const { status, refresh } = useGmailConnection();
@@ -140,25 +224,28 @@ export default function DashboardPage() {
                         Loading your workspace…
                     </div>
                 ) : connected ? (
-                    <div className="py-10 md:py-14 space-y-8" data-testid="connected-dashboard">
-                        <div className="animate-fade-up">
-                            <div className="text-xs font-mono uppercase tracking-[0.2em] text-muted-foreground mb-3">
-                                {pastOnboarding ? "Today" : "Setup"}
+                    <div className="py-8 md:py-12 space-y-6" data-testid="connected-dashboard">
+                        <div className="animate-fade-up flex flex-wrap items-end justify-between gap-4">
+                            <div>
+                                <div className="eyebrow mb-2">
+                                    {pastOnboarding
+                                        ? new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })
+                                        : "Setup"}
+                                </div>
+                                <h1 className="font-heading font-bold text-3xl md:text-4xl tracking-tight text-foreground">
+                                    {pastOnboarding ? greeting() : "Let's find what you're still owed"}
+                                </h1>
+                                <p className="mt-1.5 text-base text-muted-foreground">
+                                    {onboarding?.phase === "scanning"
+                                        ? "Scanning sent invoices from the last 90 days…"
+                                        : onboarding?.phase === "curating"
+                                          ? "You know your last 90 days — pick what's still unpaid."
+                                          : pastOnboarding
+                                            ? "Here's what needs you. Everything else is being watched."
+                                            : "Forward-tracking from here — not inbox archaeology."}
+                                </p>
                             </div>
-                            <h1 className="font-heading font-black text-3xl md:text-4xl tracking-tight text-foreground">
-                                {pastOnboarding
-                                    ? "Chase every invoice — automatically"
-                                    : "Let's find what you're still owed"}
-                            </h1>
-                            <p className="mt-2 text-base text-muted-foreground">
-                                {onboarding?.phase === "scanning"
-                                    ? "Scanning sent invoices from the last 90 days…"
-                                    : onboarding?.phase === "curating"
-                                      ? "You know your last 90 days — pick what's still unpaid."
-                                      : pastOnboarding
-                                        ? "Approve follow-up drafts with one tap. Nothing sends without you."
-                                        : "Forward-tracking from here — not inbox archaeology."}
-                            </p>
+                            {pastOnboarding ? <SyncStatusBar watching onSynced={handleSyncDetected} /> : null}
                         </div>
 
                         {onboarding?.phase === "scanning" ? (
@@ -184,7 +271,7 @@ export default function DashboardPage() {
 
                         {onboarding?.phase === "needs_seed" ? (
                             <div
-                                className="rounded-2xl border border-border bg-card p-8 flex items-center gap-3 text-sm text-muted-foreground"
+                                className="surface-card p-8 flex items-center gap-3 text-sm text-muted-foreground"
                                 data-testid="seed-preparing">
                                 <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
                                 Preparing your invoice scan…
@@ -197,8 +284,6 @@ export default function DashboardPage() {
 
                         {pastOnboarding ? (
                             <>
-                                <SyncStatusBar watching onSynced={handleSyncDetected} />
-
                                 <InvoiceDetectedBanner detection={latestDetection} onDismiss={dismissDetection} />
 
                                 <DueDatePromptBanner
@@ -211,29 +296,43 @@ export default function DashboardPage() {
                                     prompt={followUpPrompt}
                                     onDismiss={() => setFollowUpPrompt(null)}
                                     onChanged={refreshAll}
+                                    onReview={(prompt) => {
+                                        const inv = (ledger?.invoices || []).find((i) => i._id === prompt.invoice_id);
+                                        if (inv) {
+                                            setChaseInvoice(inv);
+                                            setFollowUpPrompt(null);
+                                        }
+                                    }}
                                 />
+
+                                {hasOpenInvoices ? <StatsStrip ledger={ledger} /> : null}
 
                                 {onboarding?.phase === "watching" && !hasOpenInvoices ? (
                                     <WatchingEmptyState onChanged={refreshAll} />
                                 ) : (
-                                    <>
-                                        <TodayCard onDraftChase={setChaseInvoice} onChanged={refreshAll} />
-                                        <ChaseQueueCard onSent={refreshAll} />
-                                    </>
+                                    <TodayCard onDraftChase={setChaseInvoice} onChanged={refreshAll} />
                                 )}
 
-                                <PaymentsCard
-                                    receipts={receipts}
-                                    ledger={ledger}
-                                    onChanged={refreshAll}
-                                />
-
-                                {hasOpenInvoices ? (
-                                    <section>
-                                        <h2 className="font-heading font-bold text-lg mb-3 text-muted-foreground">All tracked invoices</h2>
+                                <Tabs defaultValue="ledger" className="w-full" data-testid="dashboard-tabs">
+                                    <TabsList className="bg-muted/60 rounded-full h-auto p-1">
+                                        <TabsTrigger value="ledger" className="rounded-full px-4 py-2 text-sm data-[state=active]:shadow-sm" data-testid="tab-ledger">
+                                            All invoices
+                                        </TabsTrigger>
+                                        <TabsTrigger value="payments" className="rounded-full px-4 py-2 text-sm data-[state=active]:shadow-sm" data-testid="tab-payments">
+                                            Payments
+                                        </TabsTrigger>
+                                    </TabsList>
+                                    <TabsContent value="payments" className="mt-4">
+                                        <PaymentsCard
+                                            receipts={receipts}
+                                            ledger={ledger}
+                                            onChanged={refreshAll}
+                                        />
+                                    </TabsContent>
+                                    <TabsContent value="ledger" className="mt-4">
                                         <LedgerCard ledger={ledger} onChanged={refreshAll} />
-                                    </section>
-                                ) : null}
+                                    </TabsContent>
+                                </Tabs>
                             </>
                         ) : null}
                     </div>
@@ -250,7 +349,7 @@ export default function DashboardPage() {
             />
 
             <footer className="border-t border-border">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-wrap justify-between items-center gap-3 text-[11px] font-mono uppercase tracking-[0.2em] text-muted-foreground">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-wrap justify-between items-center gap-3 text-xs text-muted-foreground">
                     <span>© {new Date().getFullYear()} Scotive</span>
                     <span>Payment ops · Inside Gmail</span>
                 </div>
@@ -263,7 +362,7 @@ function GmailIssueBanner({ status }) {
     const revoked = status?.status === "revoked";
     return (
         <div
-            className="rounded-xl border border-amber-200 bg-amber-50 p-5 flex flex-col sm:flex-row sm:items-center gap-4"
+            className="rounded-2xl border border-amber-200 bg-amber-50 p-5 flex flex-col sm:flex-row sm:items-center gap-4"
             data-testid={revoked ? "connection-panel-revoked" : "connection-panel-send-missing"}>
             <div className="flex items-start gap-3 flex-1 min-w-0">
                 <AlertTriangle className="w-5 h-5 text-amber-700 mt-0.5 flex-shrink-0" />
@@ -287,13 +386,13 @@ function GmailIssueBanner({ status }) {
                     </div>
                     <Link
                         to="/settings"
-                        className="inline-block mt-2 text-[11px] font-mono uppercase tracking-widest text-amber-900 underline underline-offset-2 hover:text-amber-950">
-                        Gmail settings
+                        className="inline-flex items-center gap-1 mt-2 text-xs font-semibold text-amber-900 underline underline-offset-2 hover:text-amber-950">
+                        Gmail settings <ArrowUpRight className="w-3 h-3" />
                     </Link>
                 </div>
             </div>
             <ConnectGmailButton
-                label={revoked ? "Reconnect Gmail" : "Reconnect Gmail"}
+                label="Reconnect Gmail"
                 testId="reconnect-gmail-button"
                 variant={revoked ? "default" : "secondary"}
             />

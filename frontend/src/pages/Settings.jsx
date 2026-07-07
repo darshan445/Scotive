@@ -131,10 +131,10 @@ export default function SettingsPage() {
             <TopNav />
             <main className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-10 md:py-14 space-y-10">
                 <div>
-                    <div className="text-xs font-mono uppercase tracking-[0.2em] text-muted-foreground mb-3">
+                    <div className="eyebrow mb-2">
                         Workspace
                     </div>
-                    <h1 className="font-heading font-black text-3xl md:text-4xl tracking-tight">
+                    <h1 className="font-heading font-bold text-3xl md:text-4xl tracking-tight">
                         Settings
                     </h1>
                     <p className="mt-2 text-sm text-muted-foreground">

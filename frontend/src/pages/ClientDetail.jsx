@@ -101,14 +101,14 @@ export default function ClientDetailPage() {
                 {data ? (
                     <>
                         <div>
-                            <div className="text-xs font-mono uppercase tracking-[0.2em] text-muted-foreground mb-3">Client</div>
-                            <h1 className="font-heading font-black text-3xl md:text-4xl tracking-tight" data-testid="client-name">
+                            <div className="eyebrow mb-2">Client</div>
+                            <h1 className="font-heading font-bold text-3xl md:text-4xl tracking-tight" data-testid="client-name">
                                 {data.name || data.email}
                             </h1>
                             <div className="mt-1 text-sm text-muted-foreground font-mono">{data.email}</div>
-                            <div className="mt-6 rounded-2xl border border-border bg-card p-6">
-                                <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">Open balance</div>
-                                <div className="mt-1 font-heading font-black text-3xl md:text-4xl tracking-tight tabular-nums" data-testid="client-open-balance">
+                            <div className="mt-6 surface-card p-6">
+                                <div className="eyebrow">Open balance</div>
+                                <div className="mt-1 stat-number font-bold text-3xl md:text-4xl tracking-tight" data-testid="client-open-balance">
                                     {formatOpenTotals(data.totals_by_currency ?? data.total_open)}
                                 </div>
                             </div>

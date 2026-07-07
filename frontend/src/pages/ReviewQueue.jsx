@@ -310,8 +310,8 @@ export default function ReviewQueuePage() {
             <TopNav />
             <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-10 md:py-14 space-y-8">
                 <div>
-                    <div className="text-xs font-mono uppercase tracking-[0.2em] text-muted-foreground mb-3">Review queue</div>
-                    <h1 className="font-heading font-black text-3xl md:text-4xl tracking-tight">Check before it hits the ledger</h1>
+                    <div className="eyebrow mb-2">Review queue</div>
+                    <h1 className="font-heading font-bold text-3xl md:text-4xl tracking-tight">Check before it hits the ledger</h1>
                     <p className="mt-2 text-base text-muted-foreground max-w-2xl">
                         Low-confidence reads and ambiguous mappings land here with the exact quote and source email.
                         Nothing is tracked until you confirm — edit the fields if something looks off, or dismiss if it&apos;s not payment-related.

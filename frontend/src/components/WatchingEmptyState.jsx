@@ -10,7 +10,7 @@ export function WatchingEmptyState({ onChanged }) {
             <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-emerald-50 text-emerald-700 mb-4">
                 <Eye className="w-6 h-6" />
             </div>
-            <h2 className="font-heading font-black text-2xl md:text-3xl tracking-tight">
+            <h2 className="font-heading font-bold text-2xl md:text-3xl tracking-tight">
                 Scotive is watching
             </h2>
             <p className="mt-3 text-muted-foreground max-w-md mx-auto leading-relaxed">

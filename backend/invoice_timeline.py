@@ -7,7 +7,7 @@ from ledger_reconcile import parse_email_date
 from invoice_event_idempotency import normalize_event_quote
 
 _CLIENT_KINDS = frozenset({
-    "payment_promise", "payment_claim", "dispute", "partial_payment",
+    "payment_promise", "payment_claim", "dispute", "partial_payment", "payment_approved",
 })
 _YOU_KINDS = frozenset({"invoice_sent", "chase_sent", "chase_drafted"})
 _KIND_RANK = {
@@ -18,6 +18,7 @@ _KIND_RANK = {
     "payment_promise": 80,
     "payment_claim": 75,
     "partial_payment": 70,
+    "payment_approved": 68,
     "dispute": 65,
     "went_stale": 50,
     "manual_add": 40,
