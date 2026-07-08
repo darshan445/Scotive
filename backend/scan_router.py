@@ -750,9 +750,15 @@ def build_router(db, get_current_user):
             patch["last_activity_at"] = now
             await ack_followup_prompts(db, user["_id"], [invoice_id])
         elif action == "deny_payment_claim":
-            prev = inv.get("status_before_claim") or "overdue"
+            prev = inv.get("status_before_claim") or ""
             if prev == "stale":
-                prev = inv.get("status_before_stale") or "overdue"
+                prev = inv.get("status_before_stale") or ""
+            # Seed-stamped claims have no pre-claim snapshot, and a stored
+            # invoiced/overdue may predate a due-date change — resolve by date.
+            if prev in ("", "paid_unconfirmed", "invoiced", "overdue"):
+                due = _parse_date(inv.get("due_date"))
+                today = datetime.now(timezone.utc).date()
+                prev = "overdue" if (due and due < today) else "invoiced"
             patch["status"] = prev
             patch["chasing_paused"] = False
             patch["payment_claim_quote"] = None
@@ -842,6 +848,9 @@ def build_router(db, get_current_user):
                 confirm_prompts.append(row)
             elif s == "stale" and inv.get("stale_prompt_pending"):
                 stale_prompts.append(row)
+            elif inv.get("needs_reply") and s in ("invoiced", "overdue"):
+                # Client asked a question — answering beats chasing.
+                needs_reply.append(row)
             elif s in ("overdue",):
                 if inv.get("watching_for_reply"):
                     watching.append(row)

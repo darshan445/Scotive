@@ -252,15 +252,22 @@ export default function DashboardPage() {
                             {pastOnboarding ? <SyncStatusBar watching onSynced={handleSyncDetected} /> : null}
                         </div>
 
-                        {onboarding?.phase === "scanning" ? (
-                            <SeedScanProgress
-                                scanPhase={onboarding?.scan_phase}
-                                counts={onboarding?.counts}
-                            />
-                        ) : null}
-
-                        {onboarding?.phase === "curating" ? (
-                            candidates === null ? (
+                        {onboarding?.phase === "scanning" || onboarding?.phase === "curating" ? (
+                            candidates?.length ? (
+                                // One mount across scanning → curating so streamed rows and
+                                // the user's un-ticks survive the phase flip.
+                                <CurationScreen
+                                    candidates={candidates}
+                                    busy={confirmBusy}
+                                    onConfirm={handleConfirm}
+                                    scanning={onboarding?.phase === "scanning"}
+                                />
+                            ) : onboarding?.phase === "scanning" ? (
+                                <SeedScanProgress
+                                    scanPhase={onboarding?.scan_phase}
+                                    counts={onboarding?.counts}
+                                />
+                            ) : candidates === null ? (
                                 <div className="flex items-center gap-2 text-sm text-muted-foreground py-8 justify-center">
                                     <Loader2 className="w-4 h-4 animate-spin" /> Loading invoices…
                                 </div>

@@ -18,8 +18,17 @@ WEEKDAY_NAMES = (
 DAY_AFTER_TOMORROW_RE = re.compile(r"\bday\s+after\s+tomorrow\b", re.I)
 TOMORROW_RE = re.compile(r"\btomorrow\b", re.I)
 TODAY_RE = re.compile(r"\btoday\b", re.I)
-IN_DAYS_RE = re.compile(r"\b(?:in|within)\s+(\d{1,3})\s+days?\b", re.I)
+# "within 15 days of deployment" is anchored on the deliverable, not the send date —
+# the trailing of/after/from guard keeps those out of send-date resolution.
+IN_DAYS_RE = re.compile(r"\b(?:in|within)\s+(\d{1,3})\s+days?\b(?!\s+(?:of|after|from|following)\b)", re.I)
 DAYS_FROM_NOW_RE = re.compile(r"\b(\d{1,3})\s+days?\s+(?:from\s+now|out)\b", re.I)
+WEEK_OR_TWO_RE = re.compile(r"\b(?:another\s+)?week\s+or\s+two\b|\ba\s+couple\s+(?:of\s+)?weeks\b", re.I)
+IN_WEEKS_RE = re.compile(
+    r"\b(?:in|within)\s+(a|one|two|three|four|\d{1,2})\s+weeks?\b(?!\s+(?:of|after|from|following)\b)",
+    re.I,
+)
+WITHIN_THE_WEEK_RE = re.compile(r"\bwithin\s+the\s+week\b", re.I)
+_WORD_WEEK_COUNTS = {"a": 1, "one": 1, "two": 2, "three": 3, "four": 4}
 NEXT_WEEKDAY_RE = re.compile(
     r"\bnext\s+(?P<day>monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
     re.I,
@@ -48,6 +57,8 @@ END_OF_MONTH_RE = re.compile(r"\bend\s+of\s+(?:the\s+)?month\b", re.I)
 RELATIVE_HINT_RE = re.compile(
     r"\b(?:tomorrow|today|day\s+after\s+tomorrow|next\s+week|this\s+week|end\s+of|"
     r"beginning\s+of|weekend|next\s+month|end\s+of\s+month|"
+    r"week\s+or\s+two|couple\s+(?:of\s+)?weeks|within\s+the\s+week|"
+    r"(?:in|within)\s+\w+\s+weeks?|"
     r"in\s+\d+\s+days?|within\s+\d+\s+days?|"
     r"(?:this|coming|next)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|"
     r"(?:by|on|until|before)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|"
@@ -235,6 +246,20 @@ def resolve_relative_date(text: str, anchor: date | None = None) -> Optional[str
         return (base + timedelta(days=2)).isoformat()
     if TOMORROW_RE.search(hay):
         return (base + timedelta(days=1)).isoformat()
+
+    # Week-count phrases before "today": "paying today, need another week or two"
+    # in one sentence must not collapse to today for the week-anchored part.
+    if WEEK_OR_TWO_RE.search(hay):
+        return (base + timedelta(days=14)).isoformat()
+    m = IN_WEEKS_RE.search(hay)
+    if m:
+        raw = m.group(1).lower()
+        n = _WORD_WEEK_COUNTS.get(raw) or int(raw)
+        return (base + timedelta(days=n * 7)).isoformat()
+    if WITHIN_THE_WEEK_RE.search(hay):
+        eow = _friday_of_week(base)
+        return (eow if eow > base else base + timedelta(days=7)).isoformat()
+
     if TODAY_RE.search(hay):
         return base.isoformat()
 
@@ -305,6 +330,15 @@ def resolve_stated_date(
 ) -> Optional[str]:
     """Resolve a due/promise date: fresh relative text first, then AI, then explicit."""
     anchor = anchor_from_message(message) if message else anchor_from_dt(message_dt)
+
+    # The event's own quote first — one reply can carry different dates for
+    # different invoices ("paying #77 today, need another week or two on #81").
+    fresh_quote = fresh_message_text(quote)
+    if fresh_quote and has_relative_date_language(fresh_quote):
+        rel = resolve_relative_date(fresh_quote, anchor)
+        if rel:
+            return rel
+
     fresh = fresh_message_text(quote, message_body)
 
     if fresh and has_relative_date_language(fresh):

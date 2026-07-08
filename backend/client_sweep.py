@@ -140,6 +140,8 @@ EVENT_KIND_MAP = {
     "payment_claimed": "payment_claim",
     "correction": "invoice_corrected",
     "approved": "payment_approved",
+    "question": "client_question",
+    "due_date_adjusted": "due_date_adjusted",
 }
 
 # partial_payment must run before promise on the same message (T7: partial + implicit promise).
@@ -150,11 +152,14 @@ _EVENT_APPLY_ORDER = {
     "payment_claimed": 3,
     "correction": 4,
     "approved": 5,
+    "due_date_adjusted": 6,
+    "question": 7,
 }
 
 # Client-only events must come from the client (Gmail From), not the user.
 _CLIENT_ONLY_EVENT_TYPES = frozenset({
     "promise", "partial_payment", "dispute", "payment_claimed", "approved",
+    "question", "due_date_adjusted",
 })
 # Corrections are issued by the user revising their own invoice.
 _USER_ONLY_EVENT_TYPES = frozenset({"correction"})
@@ -177,14 +182,14 @@ Return STRICT JSON only. Schema:
   }],
   "events": [{
     "invoice_ref": string|null,
-    "type": "promise"|"partial_payment"|"dispute"|"payment_claimed"|"correction",
+    "type": "promise"|"partial_payment"|"dispute"|"payment_claimed"|"correction"|"approved"|"question"|"due_date_adjusted",
     "date": "YYYY-MM-DD"|null,
     "quote": string,
     "message_id": string,
     "confidence": number,
     "amount": number|null,
     "reference": string|null,
-    "dispute_kind": string|null
+    "dispute_kind": "wrong_amount"|"scope"|"quality"|"terms"|"other"|null
   }],
   "unmatched_mentions": [{"text": string, "message_id": string}],
   "confidence_overall": number,
@@ -204,6 +209,12 @@ Rules:
 - SENDER DIRECTION (critical): each thread line is labelled "YOU →" (user sent) or "{client} → YOU" (client sent). promise, partial_payment, dispute, payment_claimed, and approved events MUST cite a message where the client sent to the user — never from "YOU →" lines. Reminders, payment chasers, and follow-ups the USER sent are NEVER payment_claimed, promise, dispute, or partial_payment. "correction" MUST cite a "YOU →" message only.
 - "correction": the USER later revises an existing invoice's amount (e.g. "corrected: $300", "revised invoice, should be…", "my mistake — it's actually…"). Set amount to the NEW corrected amount and invoice_ref to the invoice being corrected. A correction is NEVER a new invoice row — do not add it to invoices[]. If a corrected due date is stated, put it in date. If the CLIENT later rejects a USER downward correction (e.g. "retain the bill as is", "don't reduce") and asks to keep the original total, do NOT apply the reduction — emit a correction event reverting to the pre-reduction amount, or omit the downward correction event.
 - A message can produce MULTIPLE events: e.g. "sent $1,200 (ref TXN...), rest coming next week" = one partial_payment (with amount + reference) AND one promise (for the remainder, date resolved from the message date).
+- One client reply can map DIFFERENT events to DIFFERENT invoices — set invoice_ref per event ("paying #77 today, need another week or two on #81" = payment_claimed on #77 AND promise on #81, each with its own quote).
+- payment_claimed vs promise: money already sent or being sent the SAME DAY ("just paid", "sent it over on venmo", "paying it today", "sending the other $600 today") = payment_claimed. A FUTURE commitment ("will pay next week", "expect it processed by end of month", "need another week or two") = promise with date resolved from the message date.
+- "approved": the client acknowledges/approves the invoice or routes it for payment WITHOUT committing a specific payment date and WITHOUT claiming money was sent ("approved on our end", "forwarded to AP", "routing to finance for processing"). Hedged arrival guesses ("should hit your account within the week") stay approved — NOT a promise. A reference that "will be issued" later (e.g. "reference will be PO-88123 once issued") is NOT a payment reference — emit approved, never payment_claimed, and leave reference null until the real reference appears.
+- "question": the client asks the USER something that needs an answer — a clarification request ("can you break down the QA line item?"), a logistics question, or UNCERTAINTY about payment ("can you check if this was already paid? I thought we cleared this"). Uncertainty is NEVER payment_claimed; a clarification request is NOT a dispute. Emit question with the quote.
+- "due_date_adjusted": the client corrects the payment window's anchor or the due date itself ("QA held it until July 6th, so count the payment window from there") — set date to the NEW resolved due date (new anchor + the invoice's stated payment window). This is not a promise and not a dispute.
+- dispute_kind: wrong_amount (they say a different figure was agreed), scope, quality, terms, other.
 - For promise events, date must be ISO YYYY-MM-DD. Resolve relative phrases using the MESSAGE DATE shown in the thread (not sync time): "this Friday" → that week's Friday on or after the message date; "next Friday" → the Friday after; "tomorrow", "day after tomorrow", "end of this week", "next week", "this weekend", etc. Never copy due dates from quoted invoice text below — only the client's new words count.
 - Do not invent amounts. Use null for amounts when unsure.
 - If history was truncated, note it in truncated_note and lower confidence.
@@ -1134,7 +1145,49 @@ async def _write_event(
         )
         activity = {"last_activity_at": now_iso, "status_updated_at": now_iso}
     elif ev_type == "approved":
-        await db.invoices.update_one({"_id": invoice_id}, {"$set": activity})
+        # Soft signal: invoice acknowledged / routed for payment. Status unchanged;
+        # the flag softens future chase tone and is cleared on payment/confirm.
+        await db.invoices.update_one(
+            {"_id": invoice_id},
+            {"$set": {
+                "client_approved": True,
+                "approved_at": now_iso,
+                "approval_quote": ev.get("quote"),
+                **activity,
+            }},
+        )
+        await clear_watching_on_client_event(db, invoice_id, now_iso)
+    elif ev_type == "question":
+        # Client asked something (clarification / uncertainty) — surface as
+        # needs-reply, never a payment-state change.
+        await db.invoices.update_one(
+            {"_id": invoice_id},
+            {"$set": {
+                "needs_reply": True,
+                "needs_reply_quote": ev.get("quote"),
+                "needs_reply_at": now_iso,
+                **activity,
+            }},
+        )
+        await clear_watching_on_client_event(db, invoice_id, now_iso)
+    elif ev_type == "due_date_adjusted" and inv:
+        from ledger_reconcile import parse_iso_date as _parse_iso
+        new_due = resolve_stated_date(
+            ev.get("date"),
+            quote=ev.get("quote"),
+            message_body=msg.get("body") or msg.get("snippet"),
+            message=msg,
+        )
+        if new_due:
+            patch = {"due_date": new_due, "due_date_assumed": False, **activity}
+            due_dt = _parse_iso(new_due)
+            if due_dt and inv.get("status") in ("invoiced", "overdue"):
+                today = datetime.now(timezone.utc).date()
+                patch["status"] = "overdue" if due_dt.date() < today else "invoiced"
+            await db.invoices.update_one({"_id": invoice_id}, {"$set": patch})
+            ev = {**ev, "date": new_due}
+        else:
+            await db.invoices.update_one({"_id": invoice_id}, {"$set": activity})
     else:
         await db.invoices.update_one({"_id": invoice_id}, {"$set": {"last_activity_at": now_iso}})
     await db.invoice_events.insert_one({

@@ -69,6 +69,7 @@ async def mark_chase_sent(
         "last_activity_at": now_iso,
         "watching_for_reply": True,
         "ladder_exhausted": False,
+        "needs_reply": False,
     }
     if step_index is not None:
         patch["current_escalation_step"] = int(step_index)

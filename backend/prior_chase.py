@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from email.utils import parseaddr
 from typing import Optional
 
 from ledger_reconcile import is_invoice_followup, parse_email_date
@@ -22,6 +23,9 @@ def _is_user_chase(msg: dict, invoice_msg: dict, my_email: str) -> bool:
     """Sent mail from the user after the invoice anchor that looks like a follow-up."""
     if msg.get("id") == invoice_msg.get("id"):
         return False
+    sender = (parseaddr(msg.get("from") or "")[1] or "").lower()
+    if sender != my_email.lower():
+        return False
     inv_dt = parse_email_date(invoice_msg.get("source_date") or invoice_msg.get("date"))
     msg_dt = parse_email_date(msg.get("source_date") or msg.get("date"))
     if inv_dt and msg_dt and msg_dt <= inv_dt:
@@ -40,11 +44,22 @@ def _is_user_chase(msg: dict, invoice_msg: dict, my_email: str) -> bool:
 def _related(msg: dict, invoice: dict) -> bool:
     if invoice.get("source_thread_id") and msg.get("thread_id") == invoice.get("source_thread_id"):
         return True
+    # Cross-thread: being addressed to the same client is not enough — with several
+    # invoices to one client that marks every later send as a chase of every earlier
+    # invoice. Require an explicit mention of this invoice's reference.
     inv_client = (invoice.get("counterparty_email") or "").lower()
     msg_to = (msg.get("to") or "").lower()
-    if inv_client and inv_client in msg_to:
-        return True
-    return False
+    if not inv_client or inv_client not in msg_to:
+        return False
+    ref = invoice.get("invoice_ref_normalized") or invoice.get("invoice_ref")
+    if not ref:
+        return False
+    hay = " ".join([
+        msg.get("subject") or "",
+        msg.get("snippet") or "",
+        msg.get("body") or "",
+    ]).upper()
+    return str(ref).upper() in hay
 
 
 def infer_escalation_floor(chase_msgs: list[dict]) -> int:
@@ -77,6 +92,9 @@ def enrich_candidates_with_prior_chases(
 ) -> None:
     """Annotate seed candidates in-place with prior-chase signals."""
     by_id = {m["id"]: m for m in messages}
+    # A message that anchors another tracked invoice is a fresh invoice send,
+    # never a chase of a different invoice to the same client.
+    anchor_ids = {c.get("message_id") for c in candidates if c.get("message_id")}
     for cand in candidates:
         anchor = by_id.get(cand.get("message_id") or "")
         if not anchor:
@@ -86,7 +104,9 @@ def enrich_candidates_with_prior_chases(
             continue
         chases = [
             m for m in messages
-            if _related(m, cand) and _is_user_chase(m, anchor, my_email)
+            if m.get("id") not in anchor_ids
+            and _related(m, cand)
+            and _is_user_chase(m, anchor, my_email)
         ]
         chases.sort(key=lambda m: (parse_email_date(m.get("date")) or parse_email_date("1970-01-01")).timestamp())
         floor = infer_escalation_floor(chases)

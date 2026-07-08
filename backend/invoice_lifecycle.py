@@ -91,6 +91,27 @@ async def apply_past_due_transitions(db, user_id) -> int:
             }},
         )
         updated += 1
+
+    # Self-heal the reverse: overdue rows whose due date is today or later
+    # (bad revert fallbacks, due-date edits) flip back to invoiced.
+    async for inv in db.invoices.find({
+        "user_id": user_id,
+        "status": "overdue",
+        "due_date": {"$nin": [None, ""]},
+    }):
+        due = _parse_date(inv.get("due_date"))
+        if not due or due < today:
+            continue
+        await db.invoices.update_one(
+            {"_id": inv["_id"]},
+            {"$set": {
+                "status": "invoiced",
+                "status_updated_at": now_iso,
+                "last_activity_at": now_iso,
+            }},
+        )
+        updated += 1
+
     if updated:
         logger.info("past_due transitions user=%s count=%s", user_id, updated)
     return updated

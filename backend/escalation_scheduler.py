@@ -114,6 +114,13 @@ async def generate_draft(inv: dict, tone: str, step_label: str,
         f"Tone: {tone}",
         f"Client's own words (if broken promise): {inv.get('evidence_sentence') or ''}",
     ]
+    if inv.get("client_approved"):
+        quote = inv.get("approval_quote")
+        lines.append(
+            "Client already approved/routed this invoice for payment"
+            + (f' — their words: "{quote}"' if quote else "")
+            + ". Keep the tone a gentle status check on processing, not an escalation."
+        )
     if late_fee_text and step_label == "final_notice":
         lines.append(f"Late-fee wording (may reference verbatim): {late_fee_text}")
     if note:

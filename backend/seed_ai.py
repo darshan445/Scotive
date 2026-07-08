@@ -74,13 +74,7 @@ VALID_ENRICHED_STATUSES = frozenset({
     "promise_broken",
 })
 
-SEED_CLIENT_PROMPT = """You analyse invoice-related email between a small business owner (USER) and ONE client.
-Context includes:
-- USER sent invoice anchors (with PDF text when available)
-- FULL threads for those invoices (every reply in-thread)
-- OUT-OF-THREAD client mail (separate threads mentioning the same invoices)
-
-Return STRICT JSON only:
+_SEED_SCHEMA_AND_RULES = """Return STRICT JSON only:
 {
   "client_name": string|null,
   "invoices": [{
@@ -95,7 +89,12 @@ Return STRICT JSON only:
     "promise_date": "YYYY-MM-DD"|null,
     "balance_remaining": number|null,
     "paid_amount": number|null,
-    "status_evidence": string|null
+    "status_evidence": string|null,
+    "client_approved": true|false|null,
+    "approval_quote": string|null,
+    "needs_reply": true|false|null,
+    "needs_reply_quote": string|null,
+    "dispute_kind": "wrong_amount"|"scope"|"quality"|"terms"|"other"|null
   }],
   "discarded_message_ids": [string]
 }
@@ -112,12 +111,16 @@ Rules:
   - Client explicit approval of a specific revised total → use that revised amount.
 - balance_remaining / paid_amount: set when client partial payment or remaining balance is clear; else null.
 - enriched_status (only when clearly supported by CLIENT messages, never from USER reminders alone):
-  - promised: client committed to pay by a date → set promise_date
+  - promised: client committed to pay by a FUTURE date or timeframe ("will pay next week", "expect it processed by end of month", "need another week or two") → set promise_date, resolved from the REPLY's message date: "end of month" = last day of that month; "next week" = +7 days; "a week or two" = +14 days
   - partially_paid: client paid part, balance remains
-  - disputed: client disputes amount/terms
-  - paid_unconfirmed: client says they paid / processed payment (no bank receipt)
+  - disputed: client disputes amount/terms → set dispute_kind (wrong_amount when they say a different figure was agreed, e.g. "we agreed on $750, can you resend?")
+  - paid_unconfirmed: client says money was ALREADY sent or is being sent the SAME DAY, no bank receipt ("just paid through the link", "sent it over on venmo", "sending the other $600 today"). If part was already received, keep balance_remaining at the outstanding portion.
   - overdue: only when due_date is in the past relative to today AND no stronger status applies
   - null / invoiced: open invoice with no client status signal yet
+- client_approved: true when the client acknowledges/approves the invoice or routes it for payment WITHOUT committing a specific pay date and WITHOUT claiming money was sent ("approved on our end", "forwarded to AP", "routing to finance"). Hedged arrival guesses ("should hit your account within the week") are approval, NOT a promise and NOT paid_unconfirmed. A reference that "will be issued" later ("reference will be PO-88123 once issued") is NOT a payment reference — status stays invoiced/null with client_approved true. Set approval_quote to the client's sentence.
+- needs_reply: true when the client asks the USER something needing an answer — clarification ("can you break down the QA line item?") or UNCERTAINTY about payment ("can you check if this was already paid?"). Uncertainty is NEVER paid_unconfirmed; a clarification request is NOT a dispute. Status stays unchanged. Set needs_reply_quote.
+- If the CLIENT corrects the payment-window anchor or due date ("QA held it until July 6th, count from there"), recompute due_date from the NEW anchor plus the invoice's stated window — status stays invoiced, not promised.
+- One client reply can set DIFFERENT statuses on DIFFERENT invoice rows — map by invoice number ("paying #77 today, need another week or two on #81" = #77 paid_unconfirmed AND #81 promised with its own promise_date).
 - SENDER DIRECTION: lines labelled "YOU →" are user-sent; "{client} → YOU" are client-sent.
   Status signals (promise, dispute, paid_unconfirmed, partial) MUST come from client-sent lines only.
 - due_date: when explicitly stated in the invoice (e.g. "due is 3 jul 2026", "due July 3", "due 07/03/2026"). Return ISO YYYY-MM-DD. Resolve relative phrases from the MESSAGE DATE. null only if truly not stated.
@@ -126,6 +129,40 @@ Rules:
 - Do not invent amounts or dates. Omit uncertain rows instead of guessing.
 - confidence 0.0-1.0 for each invoice row.
 """
+
+SEED_CLIENT_PROMPT = (
+    """You analyse invoice-related email between a small business owner (USER) and ONE client.
+Context includes:
+- USER sent invoice anchors (with PDF text when available)
+- FULL threads for those invoices (every reply in-thread)
+- OUT-OF-THREAD client mail (separate threads mentioning the same invoices)
+
+"""
+    + _SEED_SCHEMA_AND_RULES
+)
+
+# Per-conversation variant: ONE invoice email + its thread + related out-of-thread
+# mail. Focused context so the model decides one invoice at a time.
+SEED_INVOICE_PROMPT = (
+    """You analyse ONE invoice conversation between a small business owner (USER) and their client.
+Context (chronological, oldest first):
+- The USER's invoice email(s) that anchor this conversation (with PDF text when available)
+- Every reply in the thread
+- Out-of-thread client emails that reference the same invoice
+
+Most conversations contain exactly ONE invoice — return one row for it. A single
+email can state MULTIPLE distinct invoices (e.g. "Invoice #77: $600, Invoice #81: $600")
+— then return one row per distinct invoice, each with the same message_id.
+
+"""
+    + _SEED_SCHEMA_AND_RULES
+)
+
+SEED_GATE_PROMPT = """You classify ONE email that the USER sent. Decide whether it is the USER billing or requesting payment from a client: an invoice, a payment request with an amount, a retainer bill, a deal recap stating an owed amount, or an invoice notification the USER sent via accounting software (QuickBooks, FreshBooks, Stripe, Wave, Zoho).
+
+NOT invoices: marketing/newsletters, receipts for things the USER bought, vendor bills the USER pays, meeting notes, proposals/quotes with no billing intent, personal mail.
+
+Return STRICT JSON: {"is_invoice": true|false, "confidence": 0.0-1.0}"""
 
 
 def _format_message_block(msg: dict, *, my_email: str) -> str:
@@ -378,28 +415,6 @@ async def enrich_message_pdfs(access: str, msg: dict) -> None:
     msg["pdf_text"] = "\n\n".join(texts)[:8000]
 
 
-async def enrich_messages_pdfs(access: str, messages: list[dict]) -> None:
-    for msg in messages:
-        await enrich_message_pdfs(access, msg)
-
-
-def group_messages_by_client(messages: list[dict], my_email: str) -> dict[str, list[dict]]:
-    from client_sweep import anchor_recipients
-
-    groups: dict[str, list[dict]] = {}
-    for msg in messages:
-        recipients = anchor_recipients(msg, my_email)
-        if not recipients:
-            continue
-        client = recipients[0].lower()
-        groups.setdefault(client, []).append(msg)
-    for client in groups:
-        groups[client].sort(key=lambda m: m.get("date") or "")
-        if len(groups[client]) > MAX_MESSAGES_PER_CLIENT:
-            groups[client] = groups[client][-MAX_MESSAGES_PER_CLIENT:]
-    return groups
-
-
 def _normalize_enriched_status(raw: str | None) -> str | None:
     if not raw:
         return None
@@ -411,12 +426,62 @@ def _normalize_enriched_status(raw: str | None) -> str | None:
     return None
 
 
+async def ai_invoice_gate(msg: dict, my_email: str) -> bool:
+    """Single-email LLM check: is this the user billing a client? Fails open."""
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
+        return True
+    atts = ", ".join(msg.get("attachment_names") or []) or "(none)"
+    body = preprocess_body(msg.get("body") or msg.get("snippet") or "", 1500)
+    content = (
+        f"FROM: {my_email} (the USER)\n"
+        f"TO: {msg.get('to', '')}\n"
+        f"SUBJECT: {msg.get('subject', '')}\n"
+        f"ATTACHMENTS: {atts}\n"
+        f"BODY:\n{body}"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as c:
+            r = await c.post(
+                OPENROUTER_URL,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": os.environ.get("FRONTEND_URL", "https://scotive.app"),
+                    "X-Title": "Scotive",
+                },
+                json={
+                    "model": OPENROUTER_MODEL,
+                    "messages": [
+                        {"role": "system", "content": SEED_GATE_PROMPT},
+                        {"role": "user", "content": content},
+                    ],
+                    "temperature": 0,
+                    "response_format": {"type": "json_object"},
+                    "max_tokens": 60,
+                },
+            )
+            if r.status_code != 200:
+                return True
+            parsed = json.loads(r.json()["choices"][0]["message"]["content"])
+            is_inv = parsed.get("is_invoice")
+            conf = float(parsed.get("confidence") or 0)
+            if is_inv is False and conf >= 0.5:
+                logger.info("seed.gate DROP msg=%s subj=%r conf=%.2f", msg.get("id"), (msg.get("subject") or "")[:60], conf)
+                return False
+            return True
+    except Exception as e:
+        logger.warning("seed.gate ERROR msg=%s err=%s (fail open)", msg.get("id"), e)
+        return True
+
+
 async def extract_client_invoices_with_ai(
     client_email: str,
     messages: list[dict],
     my_email: str,
     *,
     anchor_ids: list[str] | None = None,
+    system_prompt: str | None = None,
 ) -> Optional[dict[str, Any]]:
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
@@ -447,12 +512,12 @@ async def extract_client_invoices_with_ai(
                 json={
                     "model": OPENROUTER_MODEL,
                     "messages": [
-                        {"role": "system", "content": SEED_CLIENT_PROMPT},
+                        {"role": "system", "content": system_prompt or SEED_CLIENT_PROMPT},
                         {"role": "user", "content": user_content},
                     ],
                     "temperature": 0,
                     "response_format": {"type": "json_object"},
-                    "max_tokens": 2000,
+                    "max_tokens": 3000,
                 },
             )
             if r.status_code != 200:
@@ -469,6 +534,32 @@ async def extract_client_invoices_with_ai(
     except Exception as e:
         logger.warning("seed.ai ERROR client=%s err=%s", client_email, e)
         return None
+
+
+def _has_earlier_original_send(src: dict, messages_by_id: dict[str, dict], my_email: str) -> bool:
+    """True when the same thread holds an earlier user-sent message that is not a chaser.
+
+    A reminder-style subject alone must not drop a candidate — accounting tools
+    (FreshBooks etc.) send first invoices with subjects like "Reminder: Invoice #X is due".
+    """
+    tid = src.get("thread_id")
+    if not tid:
+        return False
+    src_dt = parse_email_date(src.get("date"))
+    if not src_dt:
+        return False
+    my = my_email.lower()
+    for m in messages_by_id.values():
+        if m.get("id") == src.get("id") or m.get("thread_id") != tid:
+            continue
+        if _extract_email_addr(m.get("from", "")) != my:
+            continue
+        if is_invoice_followup(m.get("subject")):
+            continue
+        m_dt = parse_email_date(m.get("date"))
+        if m_dt and m_dt < src_dt:
+            return True
+    return False
 
 
 def invoices_to_candidates(
@@ -504,7 +595,7 @@ def invoices_to_candidates(
         src = messages_by_id.get(mid or "")
         if not src:
             continue
-        if is_invoice_followup(src.get("subject")):
+        if is_invoice_followup(src.get("subject")) and _has_earlier_original_send(src, messages_by_id, my_email):
             continue
 
         amount = resolve_negotiated_amount(
@@ -599,6 +690,18 @@ def invoices_to_candidates(
         evidence = (inv.get("status_evidence") or "").strip()
         if evidence:
             row["status_evidence"] = evidence[:500]
+        if inv.get("client_approved"):
+            row["client_approved"] = True
+            quote = (inv.get("approval_quote") or "").strip()
+            if quote:
+                row["approval_quote"] = quote[:500]
+        if inv.get("needs_reply"):
+            row["needs_reply"] = True
+            quote = (inv.get("needs_reply_quote") or "").strip()
+            if quote:
+                row["needs_reply_quote"] = quote[:500]
+        if inv.get("dispute_kind"):
+            row["dispute_kind"] = str(inv["dispute_kind"]).strip()[:40]
         out.append(row)
     return out
 
@@ -612,40 +715,75 @@ async def run_seed_ai_extraction(
     job_id,
     now_iso: str,
     confidence_min: float | None = None,
+    on_unit=None,
 ) -> tuple[list[dict], dict[str, int]]:
-    """Enrich PDFs, expand threads + out-of-thread per client, AI extract, return candidates."""
-    await enrich_messages_pdfs(access, messages)
-    by_client = group_messages_by_client(messages, my_email)
+    """Per-invoice pipeline: AI gate each sent email, then one focused AI decision
+    per invoice conversation (thread + out-of-thread mail), streamed via on_unit.
 
+    on_unit(rows) is awaited as each conversation finalizes so results can be
+    written to the DB (and shown in the UI) without waiting for the whole scan.
+    """
     sem = asyncio.Semaphore(SEED_AI_CONCURRENCY)
-    all_candidates: list[dict] = []
     stats = {
-        "clients": len(by_client),
+        "messages_in": len(messages),
+        "gate_dropped": 0,
+        "clients": 0,
         "ai_ok": 0,
         "ai_fail": 0,
-        "messages_in": len(messages),
         "threads_fetched": 0,
         "oot_kept": 0,
     }
 
-    async def _one(client: str, sent_msgs: list[dict]):
-        thread_msgs = await _fetch_client_threads(access, sent_msgs)
-        stats["threads_fetched"] += len({m.get("thread_id") for m in thread_msgs if m.get("thread_id")})
-
-        draft_invoices = _draft_invoices_from_sent(sent_msgs)
-        excluded = {m.get("thread_id") for m in sent_msgs if m.get("thread_id")}
-        oot_msgs = await _fetch_out_of_thread_client_mail(
-            access, client, draft_invoices, excluded, my_email,
-        )
-        stats["oot_kept"] += len(oot_msgs)
-
-        combined = _merge_client_messages(sent_msgs, thread_msgs, oot_msgs)
-        messages_by_id = {m["id"]: m for m in combined}
-        anchor_ids = [m["id"] for m in sent_msgs if m.get("id")]
-
+    # Stage 1 — single-email AI gate: is this actually the user billing a client?
+    async def _gate(m: dict) -> bool:
         async with sem:
+            return await ai_invoice_gate(m, my_email)
+
+    verdicts = await asyncio.gather(*[_gate(m) for m in messages])
+    anchors = [m for m, ok in zip(messages, verdicts) if ok]
+    stats["gate_dropped"] = len(messages) - len(anchors)
+
+    # Stage 2 — unit = the invoice email's thread (same-thread sends share one conversation)
+    units: dict[str, list[dict]] = {}
+    for m in anchors:
+        units.setdefault(m.get("thread_id") or f"_solo_{m['id']}", []).append(m)
+
+    from client_sweep import anchor_recipients
+    stats["clients"] = len({
+        (anchor_recipients(m, my_email) or [""])[0].lower() for m in anchors
+    } - {""})
+
+    all_candidates: list[dict] = []
+
+    async def _one_unit(tid: str, sent_msgs: list[dict]):
+        async with sem:
+            recipients = anchor_recipients(sent_msgs[0], my_email)
+            if not recipients:
+                return
+            client = recipients[0].lower()
+
+            for m in sent_msgs:
+                await enrich_message_pdfs(access, m)
+
+            thread_msgs = await _fetch_client_threads(access, sent_msgs)
+            stats["threads_fetched"] += 1 if thread_msgs else 0
+
+            # Out-of-thread client mail from the invoice date forward
+            draft_invoices = _draft_invoices_from_sent(sent_msgs)
+            oot_msgs = await _fetch_out_of_thread_client_mail(
+                access, client, draft_invoices, {tid}, my_email,
+            )
+            stats["oot_kept"] += len(oot_msgs)
+
+            # Chronological (oldest → newest) user↔client conversation
+            combined = _merge_client_messages(sent_msgs, thread_msgs, oot_msgs)
+            messages_by_id = {m["id"]: m for m in combined}
+            anchor_ids = [m["id"] for m in sent_msgs if m.get("id")]
+
             result = await extract_client_invoices_with_ai(
-                client, combined, my_email, anchor_ids=anchor_ids,
+                client, combined, my_email,
+                anchor_ids=anchor_ids,
+                system_prompt=SEED_INVOICE_PROMPT,
             )
         if not result:
             stats["ai_fail"] += 1
@@ -657,7 +795,11 @@ async def run_seed_ai_extraction(
             my_email=my_email,
             confidence_min=confidence_min,
         )
+        if not rows:
+            return
         all_candidates.extend(rows)
+        if on_unit:
+            await on_unit(rows)
 
-    await asyncio.gather(*[_one(c, m) for c, m in by_client.items()])
+    await asyncio.gather(*[_one_unit(t, ms) for t, ms in units.items()])
     return all_candidates, stats

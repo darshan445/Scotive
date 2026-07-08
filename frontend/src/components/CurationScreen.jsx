@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { formatDate, formatMoney } from "@/components/LedgerCard";
@@ -22,11 +22,25 @@ function initialSelected(candidates) {
     return new Set(candidates.map((c) => c._id));
 }
 
-export function CurationScreen({ candidates, onConfirm, busy }) {
+export function CurationScreen({ candidates, onConfirm, busy, scanning = false }) {
     const [selected, setSelected] = useState(() => initialSelected(candidates));
     const [dueDates, setDueDates] = useState({});
+    const seenRef = useRef(new Set(candidates.map((c) => c._id)));
     const groups = useMemo(() => groupByClient(candidates), [candidates]);
     const n = candidates.length;
+
+    // Rows stream in while the scan runs — auto-select newcomers without
+    // touching rows the user already unticked.
+    useEffect(() => {
+        const fresh = candidates.filter((c) => !seenRef.current.has(c._id));
+        if (!fresh.length) return;
+        for (const c of fresh) seenRef.current.add(c._id);
+        setSelected((prev) => {
+            const next = new Set(prev);
+            for (const c of fresh) next.add(c._id);
+            return next;
+        });
+    }, [candidates]);
 
     function effectiveDueDate(c) {
         if (dueDates[c._id] !== undefined) return dueDates[c._id];
@@ -105,10 +119,14 @@ export function CurationScreen({ candidates, onConfirm, busy }) {
             <div className="p-6 md:p-8 border-b border-border">
                 <div className="eyebrow mb-2">Your last 90 days</div>
                 <h2 className="font-heading font-bold text-2xl md:text-3xl tracking-tight">
-                    We found {n} invoice{n === 1 ? "" : "s"} you sent. Which are still unpaid?
+                    {scanning
+                        ? `${n} invoice${n === 1 ? "" : "s"} found so far — still scanning…`
+                        : `We found ${n} invoice${n === 1 ? "" : "s"} you sent. Which are still unpaid?`}
                 </h2>
                 <p className="mt-2 text-sm text-muted-foreground">
-                    Set due dates inline where needed — Scotive never guesses.
+                    {scanning
+                        ? "Each invoice appears here the moment its conversation is read — more may still arrive."
+                        : "Set due dates inline where needed — Scotive never guesses."}
                 </p>
             </div>
 
@@ -204,14 +222,25 @@ export function CurationScreen({ candidates, onConfirm, busy }) {
                         </div>
                     );
                 })}
+                {scanning ? (
+                    <div className="p-4 md:px-6 flex items-center gap-2 text-sm text-muted-foreground" data-testid="curation-scanning-row">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Reading more conversations…
+                    </div>
+                ) : null}
             </div>
 
             <div className="p-4 md:p-6 border-t border-border flex flex-wrap gap-3 justify-end bg-muted/20">
-                <Button variant="outline" onClick={startFresh} disabled={busy} data-testid="curation-none">
+                {scanning ? (
+                    <span className="text-xs text-muted-foreground self-center mr-auto">
+                        You can curate once the scan finishes.
+                    </span>
+                ) : null}
+                <Button variant="outline" onClick={startFresh} disabled={busy || scanning} data-testid="curation-none">
                     {busy ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
                     None — start fresh
                 </Button>
-                <Button onClick={trackSelected} disabled={busy} data-testid="curation-track" className="bg-foreground text-background hover:bg-foreground/90">
+                <Button onClick={trackSelected} disabled={busy || scanning} data-testid="curation-track" className="bg-foreground text-background hover:bg-foreground/90">
                     {busy ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
                     Track selected ({selected.size})
                 </Button>

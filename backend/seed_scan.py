@@ -22,6 +22,7 @@ from prior_chase import prior_followup_fields
 from ledger_reconcile import (
     client_identity_key,
     enrich_invoice_doc,
+    is_invoice_followup,
     normalize_invoice_ref,
     normalize_source_date,
     normalize_subject,
@@ -167,7 +168,7 @@ def build_ledger_invoice_from_candidate(
         else doc.get("amount") or 0
     )
 
-    return enrich_invoice_doc({
+    base = {
         "user_id": user_id,
         "counterparty_email": doc["counterparty_email"],
         "counterparty_name": doc.get("counterparty_name"),
@@ -194,7 +195,26 @@ def build_ledger_invoice_from_candidate(
         "evidence_sentence": doc.get("status_evidence"),
         "confidence": float(doc.get("confidence") or 1.0),
         "created_at": now_iso,
-    }, doc["counterparty_email"])
+    }
+
+    if doc.get("client_approved"):
+        base["client_approved"] = True
+        if doc.get("approval_quote"):
+            base["approval_quote"] = doc["approval_quote"]
+    if doc.get("needs_reply"):
+        base["needs_reply"] = True
+        if doc.get("needs_reply_quote"):
+            base["needs_reply_quote"] = doc["needs_reply_quote"]
+    if doc.get("dispute_kind"):
+        base["dispute_kind"] = doc["dispute_kind"]
+    # PRD §8: promise and dispute pause chasing; a payment claim awaits confirmation.
+    if status in ("promised", "disputed", "paid_unconfirmed"):
+        base["chasing_paused"] = True
+    if status == "paid_unconfirmed":
+        # Pre-claim state for "Not yet" reverts — date-driven, never assume overdue.
+        base["status_before_claim"] = "overdue" if (due_dt and due_dt < today) else "invoiced"
+
+    return enrich_invoice_doc(base, doc["counterparty_email"])
 
 
 async def _ignored_ids(db, user_id) -> set[str]:
@@ -202,10 +222,13 @@ async def _ignored_ids(db, user_id) -> set[str]:
     return set(state.get("seed_ignored_message_ids") or [])
 
 
-def _collapse_seed_followups(candidates: list[dict]) -> list[dict]:
-    """Drop reminder/chaser sends that belong to an earlier candidate for the same invoice."""
+def collapse_followups_incremental(index: dict, candidates: list[dict]) -> list[dict]:
+    """Drop reminder/chaser sends that belong to an earlier candidate for the same invoice.
+
+    `index` carries seen (ref/thread, client) keys across calls so streamed units
+    dedupe against everything already written.
+    """
     ordered = sorted(candidates, key=lambda c: c.get("source_date") or "")
-    index: dict[tuple, dict] = {}
     kept: list[dict] = []
 
     for c in ordered:
@@ -240,6 +263,10 @@ def _collapse_seed_followups(candidates: list[dict]) -> list[dict]:
     return kept
 
 
+def _collapse_seed_followups(candidates: list[dict]) -> list[dict]:
+    return collapse_followups_incremental({}, candidates)
+
+
 async def run_seed_scan(db, user_id, job_id) -> None:
     """Onboarding: 90-day sent-mail scan → curation candidates."""
     from gmail_sync import run_onboarding_sync
@@ -271,6 +298,9 @@ async def get_onboarding_state(db, user_id) -> dict[str, Any]:
 
     if job.get("status") in ("queued", "running"):
         phase = job.get("phase") or "fetching"
+        pending = await db.seed_candidates.count_documents({
+            "user_id": user_id, "job_id": job["_id"], "status": "pending",
+        })
         return {
             "phase": "scanning",
             "scan_phase": phase,
@@ -278,6 +308,7 @@ async def get_onboarding_state(db, user_id) -> dict[str, Any]:
             "job_id": str(job["_id"]),
             "status": job.get("status"),
             "counts": job.get("counts", {}),
+            "candidate_count": pending,
         }
 
     if job.get("status") == "error":
@@ -302,10 +333,17 @@ async def get_onboarding_state(db, user_id) -> dict[str, Any]:
 
 
 async def list_seed_candidates(db, user_id) -> list[dict]:
+    # Prefer a running job's partial results (streamed per invoice) so the UI
+    # fills in live; otherwise the latest completed scan.
     job = await db.seed_jobs.find_one(
-        {"user_id": user_id, "status": "complete"},
-        sort=[("finished_at", -1)],
+        {"user_id": user_id, "status": {"$in": ["queued", "running"]}},
+        sort=[("started_at", -1)],
     )
+    if not job:
+        job = await db.seed_jobs.find_one(
+            {"user_id": user_id, "status": "complete"},
+            sort=[("finished_at", -1)],
+        )
     if not job:
         return []
     cursor = db.seed_candidates.find({

@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from gmail_client import GmailAuthError, get_access_token, get_messages_batch, list_message_ids
@@ -27,6 +28,7 @@ from ledger_reconcile import (
     normalize_invoice_ref,
     normalize_source_date,
     normalize_subject,
+    parse_email_date,
     upsert_sweep_invoice,
 )
 from prior_chase import enrich_candidates_with_prior_chases
@@ -34,10 +36,10 @@ from seed_ai import run_seed_ai_extraction
 from seed_scan import (
     SEED_DAYS,
     _client_display_name,
-    _collapse_seed_followups,
     _ignored_ids,
     _parse_msg_date,
     build_ledger_invoice_from_candidate,
+    collapse_followups_incremental,
     extract_amount_currency,
     extract_due_date,
 )
@@ -52,14 +54,35 @@ MAX_LIST_PAGES_ONBOARDING = 8
 MAX_LIST_PAGES_INCREMENTAL = 2
 
 
-def sync_window_clause(mode: SyncMode) -> str:
+_LOOKBACK_UNIT_SECONDS = {"h": 3600, "d": 86400, "w": 604800, "m": 2592000, "y": 31536000}
+
+
+def _lookback_seconds(raw: str) -> int:
+    m = re.fullmatch(r"(\d+)\s*([hdwmy]?)", (raw or "").strip().lower())
+    if not m:
+        return 3600
+    return int(m.group(1)) * _LOOKBACK_UNIT_SECONDS[m.group(2) or "h"]
+
+
+def sync_window_clause(mode: SyncMode, *, last_synced_at: str | None = None) -> str:
     if mode == "onboarding":
         return f"newer_than:{SEED_DAYS}d"
-    return f"newer_than:{INCREMENTAL_LOOKBACK}"
+    # Gmail's newer_than: only accepts d/m/y units — "newer_than:1h" is invalid and
+    # silently matches nothing. Use after:<epoch>, anchored on the last successful
+    # sync (with overlap) so gaps between runs never skip mail.
+    now = datetime.now(timezone.utc)
+    start = now - timedelta(seconds=_lookback_seconds(INCREMENTAL_LOOKBACK))
+    last = parse_email_date(last_synced_at) if last_synced_at else None
+    if last:
+        start = min(start, last - timedelta(minutes=15))
+    else:
+        start = min(start, now - timedelta(hours=24))
+    start = max(start, now - timedelta(days=7))
+    return f"after:{int(start.timestamp())}"
 
 
-def sent_mail_queries(mode: SyncMode) -> list[str]:
-    w = sync_window_clause(mode)
+def sent_mail_queries(mode: SyncMode, window: str | None = None) -> list[str]:
+    w = window or sync_window_clause(mode)
     return [
         f"in:sent {w} has:attachment (invoice OR payment OR bill OR \"amount due\")",
         f'in:sent {w} subject:(invoice OR payment OR "amount due" OR outstanding OR "balance due")',
@@ -71,7 +94,10 @@ def sent_mail_queries(mode: SyncMode) -> list[str]:
             f'in:sent {w} ("transfer" OR "work done" OR "as discussed" OR "completed the" OR '
             f'"please transfer" OR "kindly transfer" OR "send payment" OR "payment for")'
         ),
-        f'in:sent {w} ($ OR USD OR INR OR EUR OR "Rs." OR "Rs ")',
+        # body-language catch-all: invoices with plain subjects and no attachment
+        # ("Retainer — August" with the amount only in the body). Cheap filter prunes noise.
+        f"in:sent {w} (invoice OR retainer OR \"due on\" OR \"amount owed\")",
+        f'in:sent {w} (USD OR INR OR EUR OR "Rs." OR "Rs ")',
     ]
 
 
@@ -89,13 +115,14 @@ async def fetch_filtered_sent_mail(
     blocklist: set[str],
     ignored: set[str],
     mode: SyncMode,
+    window: str | None = None,
 ) -> tuple[list[dict], dict[str, int]]:
     seen: set[str] = set()
     candidate_ids: list[str] = []
     stats = {"fetched": 0, "kept": 0, "dropped": 0}
     max_pages = MAX_LIST_PAGES_ONBOARDING if mode == "onboarding" else MAX_LIST_PAGES_INCREMENTAL
 
-    for q in sent_mail_queries(mode):
+    for q in sent_mail_queries(mode, window):
         ids = await list_message_ids(access, q, max_pages=max_pages)
         logger.info("sync QUERY mode=%s %r ids=%s", mode, q[:80], len(ids))
         for mid in ids:
@@ -309,8 +336,9 @@ async def run_gmail_sync(
         ignored = await _ignored_ids(db, user_id)
         blocklist = await load_blocklist(db, user_id)
 
+        window = sync_window_clause(mode, last_synced_at=state.get("last_synced_at"))
         messages, filter_stats = await fetch_filtered_sent_mail(
-            access, my_email, blocklist, ignored, mode,
+            access, my_email, blocklist, ignored, mode, window,
         )
         counts.update(filter_stats)
         await _set_job_phase("filtering", counts)
@@ -341,12 +369,49 @@ async def run_gmail_sync(
             return counts
 
         await _set_job_phase("enriching", counts)
-        candidates: list[dict] = []
         ai_stats: dict[str, int] = {}
+
+        if mode == "onboarding":
+            if not job_id:
+                raise ValueError("onboarding sync requires job_id")
+            await db.seed_candidates.delete_many({"user_id": user_id, "job_id": job_id})
+
+        # Streaming write: each finalized invoice conversation lands in the DB
+        # immediately so the UI can show it while the scan keeps running.
+        collapse_index: dict = {}
+        stream = {"candidates": 0, "created": 0}
+        new_invoices: list[dict] = []
+        due_prompts: list[dict] = []
+
+        async def _write_unit(rows: list[dict]) -> None:
+            enrich_candidates_with_prior_chases(rows, messages, my_email)
+            rows = collapse_followups_incremental(collapse_index, rows)
+            if not rows:
+                return
+            if mode == "onboarding":
+                for c in rows:
+                    c["job_id"] = job_id
+                await db.seed_candidates.insert_many(rows)
+                stream["candidates"] += len(rows)
+                await db.seed_jobs.update_one(
+                    {"_id": job_id},
+                    {"$set": {
+                        "counts.candidates": stream["candidates"],
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                )
+            else:
+                stream["candidates"] += len(rows)
+                created, unit_new, unit_prompts = await _candidates_to_ledger(
+                    db, user_id, rows, now_iso,
+                )
+                stream["created"] += created
+                new_invoices.extend(unit_new)
+                due_prompts.extend(unit_prompts)
 
         if os.environ.get("OPENROUTER_API_KEY"):
             await _set_job_phase("ai", counts)
-            candidates, ai_stats = await run_seed_ai_extraction(
+            _, ai_stats = await run_seed_ai_extraction(
                 access,
                 messages,
                 my_email,
@@ -354,29 +419,22 @@ async def run_gmail_sync(
                 job_id=job_id or user_id,
                 now_iso=now_iso,
                 confidence_min=confidence_min,
+                on_unit=_write_unit,
             )
         else:
             logger.warning("sync FALLBACK mode=%s reason=no_openrouter_key", mode)
-            candidates = _regex_fallback_candidates(
+            fallback = _regex_fallback_candidates(
                 messages, my_email,
                 user_id=user_id, job_id=job_id or user_id,
                 now_iso=now_iso,
             )
+            if fallback:
+                await _write_unit(fallback)
 
-        candidates = _collapse_seed_followups(candidates)
-        enrich_candidates_with_prior_chases(candidates, messages, my_email)
         counts.update(ai_stats)
-        counts["candidates"] = len(candidates)
+        counts["candidates"] = stream["candidates"]
 
         if mode == "onboarding":
-            if not job_id:
-                raise ValueError("onboarding sync requires job_id")
-            await db.seed_candidates.delete_many({"user_id": user_id, "job_id": job_id})
-            if candidates:
-                for c in candidates:
-                    c["job_id"] = job_id
-                await db.seed_candidates.insert_many(candidates)
-
             await db.seed_jobs.update_one(
                 {"_id": job_id},
                 {"$set": {
@@ -388,12 +446,9 @@ async def run_gmail_sync(
                 }},
             )
         else:
-            created, new_invoices, due_prompts = await _candidates_to_ledger(
-                db, user_id, candidates, now_iso,
-            )
-            counts["invoices_created"] = created
+            counts["invoices_created"] = stream["created"]
             counts["new_invoices"] = new_invoices
-            counts["live_detected"] = created
+            counts["live_detected"] = stream["created"]
 
             await dedupe_existing_invoices(db, user_id, now_iso)
 

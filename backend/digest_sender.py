@@ -76,6 +76,9 @@ async def collect_today_sections(db, user_id) -> dict:
             confirm_prompts.append(inv)
         elif s == "stale" and inv.get("stale_prompt_pending"):
             stale_prompts.append(inv)
+        elif inv.get("needs_reply") and s in ("invoiced", "overdue"):
+            # Client asked a question — answering beats chasing.
+            needs_reply.append(inv)
         elif s == "overdue":
             if inv.get("watching_for_reply") or inv.get("ladder_exhausted"):
                 watching.append(inv)

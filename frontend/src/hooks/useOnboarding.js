@@ -27,14 +27,32 @@ export function useOnboarding({ enabled = true } = {}) {
         }
     }, []);
 
-    // Keep polling callback on latest refresh without re-creating interval each render
+    const fetchCandidates = useCallback(async () => {
+        try {
+            const { data } = await api.get("/seed/candidates");
+            setCandidates(data.candidates || []);
+            return data.candidates || [];
+        } catch (e) {
+            setError(extractError(e));
+            return [];
+        }
+    }, []);
+
+    // Keep polling callbacks on latest refs without re-creating interval each render
     const refreshRef = useRef(refresh);
     refreshRef.current = refresh;
+    const fetchCandidatesRef = useRef(fetchCandidates);
+    fetchCandidatesRef.current = fetchCandidates;
 
     const startPollingStable = useCallback(() => {
         stopPolling();
-        pollRef.current = setInterval(() => {
-            refreshRef.current();
+        pollRef.current = setInterval(async () => {
+            const data = await refreshRef.current();
+            // Candidates stream in per invoice while the scan runs — keep the
+            // curation list filling live instead of waiting for completion.
+            if (data?.phase === "scanning" || data?.phase === "curating") {
+                fetchCandidatesRef.current();
+            }
         }, POLL_MS);
     }, [stopPolling]);
 
@@ -65,17 +83,6 @@ export function useOnboarding({ enabled = true } = {}) {
             return { ok: false, error: extractError(e) };
         }
     }, [refresh, stopPolling]);
-
-    const fetchCandidates = useCallback(async () => {
-        try {
-            const { data } = await api.get("/seed/candidates");
-            setCandidates(data.candidates || []);
-            return data.candidates || [];
-        } catch (e) {
-            setError(extractError(e));
-            return [];
-        }
-    }, []);
 
     // Load state when Gmail becomes connected
     useEffect(() => {
