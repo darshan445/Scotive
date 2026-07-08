@@ -56,7 +56,24 @@ RELATIVE_HINT_RE = re.compile(
 )
 
 EXPLICIT_DATE_RE = re.compile(
-    r"\b(\d{1,2}[/\-\.]\d{1,2}(?:[/\-\.]\d{2,4})?|\d{1,2}[/\-\.][A-Za-z]{3,9}(?:[/\-\.]\d{2,4})?)\b",
+    r"\b(\d{1,2}[/\-\.]\d{1,2}(?:[/\-\.]\d{2,4})?|"
+    r"\d{1,2}[/\-\.][A-Za-z]{3,9}(?:[/\-\.]\d{2,4})?|"
+    r"\d{1,2}\s+[A-Za-z]{3,9}\s+\d{2,4}|"
+    r"[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})\b",
+    re.I,
+)
+DUE_DAY_MON_YEAR_RE = re.compile(
+    r"(?:due\s*(?:date|on|by|is)?|payment\s+due|due\s+will\s+be\s+on)\s*[:\s]*"
+    r"(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{2,4})",
+    re.I,
+)
+DAY_MON_YEAR_RE = re.compile(
+    r"\b(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{2,4})\b",
+    re.I,
+)
+MON_DAY_YEAR_RE = re.compile(
+    r"\b([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{2,4})\b",
+    re.I,
 )
 
 
@@ -131,7 +148,44 @@ def _saturday_this_week(anchor: date) -> date:
     return anchor + timedelta(days=days_to_sat)
 
 
+def _parse_day_mon_year(day: str, mon: str, year: str) -> Optional[str]:
+    y = int(year)
+    if y < 100:
+        y += 2000
+    token = f"{int(day)}-{mon}-{y}"
+    for fmt in ("%d-%b-%Y", "%d-%B-%Y"):
+        try:
+            return datetime.strptime(token, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_mon_day_year(mon: str, day: str, year: str) -> Optional[str]:
+    y = int(year)
+    if y < 100:
+        y += 2000
+    token = f"{day}-{mon}-{y}"
+    for fmt in ("%d-%b-%Y", "%d-%B-%Y"):
+        try:
+            return datetime.strptime(token, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return None
+
+
 def _parse_explicit_token(token: str, anchor: date) -> Optional[str]:
+    token = token.strip()
+    m = DAY_MON_YEAR_RE.search(token)
+    if m:
+        parsed = _parse_day_mon_year(m.group(1), m.group(2), m.group(3))
+        if parsed:
+            return parsed
+    m = MON_DAY_YEAR_RE.search(token)
+    if m:
+        parsed = _parse_mon_day_year(m.group(1), m.group(2), m.group(3))
+        if parsed:
+            return parsed
     dt = parse_iso_date(token)
     if dt:
         return dt.date().isoformat()
@@ -142,6 +196,24 @@ def _parse_explicit_token(token: str, anchor: date) -> Optional[str]:
             return datetime.strptime(s.replace(".", "-"), fmt_use).date().isoformat()
         except ValueError:
             continue
+    return None
+
+
+def extract_explicit_due_from_text(text: str, anchor: date | None = None) -> Optional[str]:
+    """Parse due dates like 'due is 3 jul 2026' or 'due on 07/03/2026'."""
+    if not text or not text.strip():
+        return None
+    base = anchor or datetime.now(timezone.utc).date()
+
+    m = DUE_DAY_MON_YEAR_RE.search(text)
+    if m:
+        parsed = _parse_day_mon_year(m.group(1), m.group(2), m.group(3))
+        if parsed:
+            return parsed
+
+    parsed = _parse_explicit_in_text(text, base)
+    if parsed:
+        return parsed
     return None
 
 
@@ -241,6 +313,8 @@ def resolve_stated_date(
             return rel
 
     explicit = normalize_explicit_due_date(ai_date)
+    if not explicit and ai_date:
+        explicit = extract_explicit_due_from_text(str(ai_date), anchor)
     if explicit:
         return explicit
 
@@ -248,6 +322,9 @@ def resolve_stated_date(
         rel = resolve_relative_date(fresh, anchor)
         if rel:
             return rel
+        explicit_fresh = extract_explicit_due_from_text(fresh, anchor)
+        if explicit_fresh:
+            return explicit_fresh
         return _parse_explicit_in_text(fresh, anchor)
 
     return None

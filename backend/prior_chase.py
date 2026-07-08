@@ -62,6 +62,14 @@ def infer_escalation_floor(chase_msgs: list[dict]) -> int:
     return 1
 
 
+def prior_followup_fields(candidate: dict) -> dict:
+    """Map inferred pre-Scotive chases onto invoice follow-up timestamps."""
+    ts = candidate.get("last_prior_chase_at")
+    if not ts:
+        return {}
+    return {"last_followup_sent_at": ts, "last_chase_at": ts}
+
+
 def enrich_candidates_with_prior_chases(
     candidates: list[dict],
     messages: list[dict],
@@ -85,3 +93,7 @@ def enrich_candidates_with_prior_chases(
         cand["prior_chase_count"] = len(chases)
         cand["escalation_step_floor"] = floor
         cand["likely_still_open"] = len(chases) > 0
+        if chases:
+            last_dt = parse_email_date(chases[-1].get("date"))
+            if last_dt:
+                cand["last_prior_chase_at"] = last_dt.isoformat()

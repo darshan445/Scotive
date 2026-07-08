@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { AlertTriangle, ArrowUpRight, CalendarClock, Eye, Loader2, Wallet } from "lucide-react";
+import { AlertTriangle, ArrowUpRight, CalendarClock, Loader2, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { TopNav } from "@/components/TopNav";
 import { EmptyStateHero } from "@/components/EmptyStateHero";
@@ -25,6 +25,7 @@ import { useReceipts } from "@/hooks/useReceipts";
 import { useOnboarding } from "@/hooks/useOnboarding";
 import { useLiveDetection } from "@/hooks/useLiveDetection";
 import { useWorkspaceRefresh } from "@/hooks/useWorkspaceRefresh";
+import { openLedgerInvoices, historyLedgerInvoices } from "@/lib/ledgerInvoices";
 
 const OPEN_STATUSES = new Set(["invoiced", "overdue", "promised", "partially_paid", "promise_broken", "disputed"]);
 
@@ -62,20 +63,19 @@ function StatsStrip({ ledger }) {
         const open = invoices.filter((i) => OPEN_STATUSES.has(i.status));
         const pastDue = invoices.filter((i) => i.status === "overdue" || i.status === "promise_broken");
         const promised = invoices.filter((i) => i.status === "promised");
-        const watching = invoices.filter((i) => i.watching_for_reply || i.ladder_exhausted);
         const pastDueByCur = {};
         for (const i of pastDue) {
             const cur = (i.currency || "USD").toUpperCase();
             pastDueByCur[cur] = (pastDueByCur[cur] || 0) + Number(i.balance_remaining ?? i.amount ?? 0);
         }
-        return { open, pastDue, promised, watching, pastDueByCur };
+        return { open, pastDue, promised, pastDueByCur };
     }, [ledger]);
 
     if (!ledger) return null;
     const openTotals = ledger.totals_by_currency ?? ledger.total_open;
 
     return (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3" data-testid="dashboard-stats">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3" data-testid="dashboard-stats">
             <StatTile
                 label="Outstanding"
                 value={formatOpenTotals(openTotals)}
@@ -84,7 +84,7 @@ function StatsStrip({ ledger }) {
                 testId="stat-outstanding"
             />
             <StatTile
-                label="Past due"
+                label="Past due / Broken promises"
                 value={stats.pastDue.length ? formatOpenTotals(stats.pastDueByCur) : "—"}
                 sub={stats.pastDue.length ? `${stats.pastDue.length} need${stats.pastDue.length === 1 ? "s" : ""} action` : "Nothing late. Nice."}
                 icon={AlertTriangle}
@@ -98,13 +98,6 @@ function StatsStrip({ ledger }) {
                 icon={CalendarClock}
                 tone={stats.promised.length ? "amber" : "default"}
                 testId="stat-promised"
-            />
-            <StatTile
-                label="Watching"
-                value={String(stats.watching.length)}
-                sub="Threads read for replies"
-                icon={Eye}
-                testId="stat-watching"
             />
         </div>
     );
@@ -147,7 +140,18 @@ export default function DashboardPage() {
     const [dueDatePrompt, setDueDatePrompt] = useState(null);
     const [followUpPrompt, setFollowUpPrompt] = useState(null);
 
-    const hasOpenInvoices = (ledger?.invoices?.length ?? 0) > 0;
+    const hasOpenInvoices = useMemo(
+        () => openLedgerInvoices(ledger?.invoices).length > 0,
+        [ledger?.invoices],
+    );
+    const openInvoiceCount = useMemo(
+        () => openLedgerInvoices(ledger?.invoices).length,
+        [ledger?.invoices],
+    );
+    const paidInvoiceCount = useMemo(
+        () => historyLedgerInvoices(ledger?.invoices).length,
+        [ledger?.invoices],
+    );
 
     const handleInvoiceDetected = useCallback(async (inv) => {
         setLatestDetection(inv);
@@ -241,7 +245,7 @@ export default function DashboardPage() {
                                         : onboarding?.phase === "curating"
                                           ? "You know your last 90 days — pick what's still unpaid."
                                           : pastOnboarding
-                                            ? "Here's what needs you. Everything else is being watched."
+                                            ? "Open invoices sorted by what's due next."
                                             : "Forward-tracking from here — not inbox archaeology."}
                                 </p>
                             </div>
@@ -316,7 +320,10 @@ export default function DashboardPage() {
                                 <Tabs defaultValue="ledger" className="w-full" data-testid="dashboard-tabs">
                                     <TabsList className="bg-muted/60 rounded-full h-auto p-1">
                                         <TabsTrigger value="ledger" className="rounded-full px-4 py-2 text-sm data-[state=active]:shadow-sm" data-testid="tab-ledger">
-                                            All invoices
+                                            Open{openInvoiceCount ? ` (${openInvoiceCount})` : ""}
+                                        </TabsTrigger>
+                                        <TabsTrigger value="paid" className="rounded-full px-4 py-2 text-sm data-[state=active]:shadow-sm" data-testid="tab-paid">
+                                            Paid{paidInvoiceCount ? ` (${paidInvoiceCount})` : ""}
                                         </TabsTrigger>
                                         <TabsTrigger value="payments" className="rounded-full px-4 py-2 text-sm data-[state=active]:shadow-sm" data-testid="tab-payments">
                                             Payments
@@ -329,8 +336,11 @@ export default function DashboardPage() {
                                             onChanged={refreshAll}
                                         />
                                     </TabsContent>
+                                    <TabsContent value="paid" className="mt-4">
+                                        <LedgerCard ledger={ledger} onChanged={refreshAll} variant="paid" />
+                                    </TabsContent>
                                     <TabsContent value="ledger" className="mt-4">
-                                        <LedgerCard ledger={ledger} onChanged={refreshAll} />
+                                        <LedgerCard ledger={ledger} onChanged={refreshAll} variant="open" />
                                     </TabsContent>
                                 </Tabs>
                             </>

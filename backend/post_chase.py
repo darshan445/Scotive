@@ -64,6 +64,7 @@ async def mark_chase_sent(
     if not inv:
         return
     patch: dict[str, Any] = {
+        "last_followup_sent_at": now_iso,
         "last_chase_at": now_iso,
         "last_activity_at": now_iso,
         "watching_for_reply": True,
@@ -129,7 +130,7 @@ async def run_post_chase_tick(db, user_id) -> dict[str, Any]:
         "status": {"$in": ["overdue", "promise_broken", "invoiced", "partially_paid"]},
     }):
         inv_id = inv["_id"]
-        last_chase = _parse_dt(inv.get("last_chase_at"))
+        last_chase = _parse_dt(inv.get("last_followup_sent_at") or inv.get("last_chase_at"))
         if not last_chase:
             counts["skipped"] += 1
             continue

@@ -34,6 +34,31 @@ export function watchingSubtitle(inv) {
     return null;
 }
 
+/** When the user last sent a follow-up chase (app or inferred from sent mail). */
+export function formatLastFollowUp(iso) {
+    const raw = iso || null;
+    if (!raw) return null;
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) return null;
+
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfThatDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const dayDiff = Math.round((startOfToday - startOfThatDay) / (1000 * 60 * 60 * 24));
+
+    if (dayDiff === 0) {
+        const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+        return `Followed up today, ${time}`;
+    }
+    if (dayDiff === 1) return "Followed up yesterday";
+    if (dayDiff > 1) return `Followed up ${dayDiff} days ago`;
+    return null;
+}
+
+export function lastFollowUpSentAt(inv) {
+    return inv?.last_followup_sent_at || inv?.last_chase_at || null;
+}
+
 const JUNK_INVOICE_REFS = new Set([
     "FOR", "THE", "A", "AN", "TO", "OF", "AND", "OR", "YOUR", "MY", "OUR", "THIS", "THAT",
 ]);

@@ -1,7 +1,7 @@
 """Conversation enrichment — Phase A (in-thread) + Phase B (out-of-thread).
 
-Runs before curation (staging invoices) so the user sees real state before Track.
-On confirm, staging invoices are promoted to the ledger — no second enrichment pass.
+Used for incremental/post-track enrichment on ledger invoices.
+Onboarding now folds thread + out-of-thread context into seed_ai (one pass per client).
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from typing import Any
 
 from bson import ObjectId
 
-from gmail_client import GmailAuthError, get_access_token, get_message, get_thread_messages, list_message_ids
+from gmail_client import GmailAuthError, get_access_token, get_message, get_messages_batch, get_thread_messages, list_message_ids
 from client_sweep import (
     AI_CONCURRENCY,
     AMOUNT_TOKEN_RE,
@@ -28,6 +28,7 @@ from client_sweep import (
     preprocess_body,
     CONSUMER_DOMAINS,
 )
+from prior_chase import prior_followup_fields
 from ledger_reconcile import amounts_close, enrich_invoice_doc, normalize_invoice_ref
 
 logger = logging.getLogger("scotive.conversation_enrichment")
@@ -250,10 +251,8 @@ async def _phase_b_out_of_thread(
 
     client_emails = {primary}
     kept_msgs: list[dict] = []
-    for mid in candidate_ids:
-        msg = await get_message(access, mid)
-        if not msg:
-            continue
+    batch = await get_messages_batch(access, candidate_ids)
+    for msg in batch:
         tid = msg.get("thread_id") or ""
         if tid and tid in excluded_thread_ids:
             continue
@@ -454,6 +453,7 @@ async def _create_staging_invoice(
         "source_from": candidate.get("source_from"),
         "source_date": candidate.get("source_date"),
         "confidence": float(candidate.get("confidence") or 1.0),
+        **prior_followup_fields(candidate),
         "created_at": now_iso,
     }, candidate["counterparty_email"])
     try:

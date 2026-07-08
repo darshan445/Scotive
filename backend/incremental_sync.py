@@ -1,8 +1,9 @@
 """Hourly + manual incremental Gmail sync (last ~1 hour → ledger, no curation).
 
-Same pipeline as onboarding but writes directly to the ledger — recent sent mail
-is treated as the user's invoice without a confirmation step.
-Also runs date-driven status transitions (past due, promise broken).
+Uses the same run_gmail_sync pipeline as onboarding: batch fetch, seed_ai
+(thread + out-of-thread enrichment, negotiated amounts, due dates), then
+writes enriched candidates directly to the ledger via build_ledger_invoice_from_candidate.
+Also runs date-driven status transitions (past due, promise broken) and reply/chase ticks.
 """
 from __future__ import annotations
 

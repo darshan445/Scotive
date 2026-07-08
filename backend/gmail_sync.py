@@ -12,17 +12,24 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from gmail_client import GmailAuthError, get_access_token, get_message, list_message_ids
-from client_sweep import anchor_recipients, load_blocklist
+from gmail_client import GmailAuthError, get_access_token, get_messages_batch, list_message_ids
+from client_sweep import (
+    CONSUMER_DOMAINS,
+    _sender_domain,
+    anchor_recipients,
+    load_blocklist,
+    merge_candidates_by_domain,
+    persist_client_state,
+)
 from ledger_reconcile import (
     client_identity_key,
     dedupe_existing_invoices,
-    enrich_invoice_doc,
     normalize_invoice_ref,
     normalize_source_date,
     normalize_subject,
     upsert_sweep_invoice,
 )
+from prior_chase import enrich_candidates_with_prior_chases
 from seed_ai import run_seed_ai_extraction
 from seed_scan import (
     SEED_DAYS,
@@ -30,6 +37,7 @@ from seed_scan import (
     _collapse_seed_followups,
     _ignored_ids,
     _parse_msg_date,
+    build_ledger_invoice_from_candidate,
     extract_amount_currency,
     extract_due_date,
 )
@@ -83,7 +91,7 @@ async def fetch_filtered_sent_mail(
     mode: SyncMode,
 ) -> tuple[list[dict], dict[str, int]]:
     seen: set[str] = set()
-    messages: list[dict] = []
+    candidate_ids: list[str] = []
     stats = {"fetched": 0, "kept": 0, "dropped": 0}
     max_pages = MAX_LIST_PAGES_ONBOARDING if mode == "onboarding" else MAX_LIST_PAGES_INCREMENTAL
 
@@ -94,17 +102,27 @@ async def fetch_filtered_sent_mail(
             if mid in seen or mid in ignored:
                 continue
             seen.add(mid)
-            stats["fetched"] += 1
-            msg = await get_message(access, mid)
-            if not msg:
-                continue
-            keep, reason, _client = seed_cheap_filter(msg, my_email, blocklist)
-            if not keep:
-                stats["dropped"] += 1
-                logger.debug("sync FILTER DROP id=%s reason=%s", mid, reason)
-                continue
-            stats["kept"] += 1
-            messages.append(msg)
+            candidate_ids.append(mid)
+
+    stats["fetched"] = len(candidate_ids)
+    if not candidate_ids:
+        return [], stats
+
+    batch = await get_messages_batch(access, candidate_ids)
+    by_id = {m["id"]: m for m in batch}
+
+    messages: list[dict] = []
+    for mid in candidate_ids:
+        msg = by_id.get(mid)
+        if not msg:
+            continue
+        keep, reason, _client = seed_cheap_filter(msg, my_email, blocklist)
+        if not keep:
+            stats["dropped"] += 1
+            logger.debug("sync FILTER DROP id=%s reason=%s", mid, reason)
+            continue
+        stats["kept"] += 1
+        messages.append(msg)
     return messages, stats
 
 
@@ -162,48 +180,29 @@ async def _candidates_to_ledger(
     candidates: list[dict],
     now_iso: str,
 ) -> tuple[int, list[dict], list[dict]]:
-    """Write candidate-shaped rows to the ledger. Returns (created_count, new_invoices, due_date_prompts)."""
-    from invoice_lifecycle import _parse_date
-
+    """Write enriched candidate rows to the ledger (same fields as curation confirm)."""
     today = datetime.now(timezone.utc).date()
     created = 0
     new_invoices: list[dict] = []
     due_date_prompts: list[dict] = []
+
+    state = await db.gmail_sync_state.find_one({"user_id": user_id}) or {}
+    anchor_map: dict[str, list[str]] = dict(state.get("anchor_map") or {})
+    domains: set[str] = set(state.get("client_domains") or {})
+    email_to_primary: dict[str, str] = dict(state.get("email_to_primary") or {})
+
     for doc in candidates:
         mid = doc.get("message_id")
         if not mid:
             continue
         due_date = doc.get("due_date")
-        status = "invoiced"
-        due_dt = _parse_date(due_date)
-        if due_dt and due_dt < today:
-            status = "overdue"
-        inv_doc = enrich_invoice_doc({
-            "user_id": user_id,
-            "counterparty_email": doc["counterparty_email"],
-            "counterparty_name": doc.get("counterparty_name"),
-            "client_identity_key": doc.get("client_identity_key"),
-            "amount": doc["amount"],
-            "balance_remaining": float(doc["amount"]),
-            "paid_amount": 0.0,
-            "currency": doc.get("currency") or "USD",
-            "invoice_ref": doc.get("invoice_ref"),
-            "invoice_ref_normalized": doc.get("invoice_ref_normalized"),
-            "due_date": due_date,
-            "due_date_assumed": False,
-            "promise_date": None,
-            "status": status,
-            "kind": "invoice_sent",
-            "escalation_step_floor": int(doc.get("escalation_step_floor") or 0),
-            "source_message_id": mid,
-            "source_thread_id": doc.get("source_thread_id"),
-            "source_subject": doc.get("source_subject"),
-            "source_from": doc.get("source_from"),
-            "source_date": doc.get("source_date"),
-            "evidence_sentence": None,
-            "confidence": float(doc.get("confidence") or 1.0),
-            "created_at": now_iso,
-        }, doc["counterparty_email"])
+        inv_doc = build_ledger_invoice_from_candidate(
+            doc,
+            user_id=user_id,
+            now_iso=now_iso,
+            today=today,
+            due_date=due_date,
+        )
         outcome, inv_id = await upsert_sweep_invoice(
             db, user_id, inv_doc, now_iso=now_iso,
         )
@@ -227,6 +226,19 @@ async def _candidates_to_ledger(
                 new_invoices.append(payload)
                 if not row.get("due_date"):
                     due_date_prompts.append(payload)
+
+        email = (doc.get("counterparty_email") or "").lower()
+        if mid and email:
+            if mid not in (anchor_map.get(email) or []):
+                anchor_map.setdefault(email, []).append(mid)
+            dom = _sender_domain(email)
+            if dom and dom not in CONSUMER_DOMAINS:
+                domains.add(dom)
+
+    if candidates:
+        anchor_map, email_to_primary = merge_candidates_by_domain(anchor_map)
+        await persist_client_state(db, user_id, anchor_map, domains, email_to_primary)
+
     return created, new_invoices, due_date_prompts
 
 
@@ -238,7 +250,7 @@ async def run_gmail_sync(
     job_id=None,
     confidence_min: float | None = None,
 ) -> dict[str, Any]:
-    """Single sync entrypoint. Onboarding → seed candidates; incremental → ledger (auto-track)."""
+    """Single sync entrypoint. Onboarding → seed candidates; incremental → enriched ledger rows."""
     now_iso = datetime.now(timezone.utc).isoformat()
     counts: dict[str, Any] = {
         "mode": mode,
@@ -352,7 +364,6 @@ async def run_gmail_sync(
             )
 
         candidates = _collapse_seed_followups(candidates)
-        from prior_chase import enrich_candidates_with_prior_chases
         enrich_candidates_with_prior_chases(candidates, messages, my_email)
         counts.update(ai_stats)
         counts["candidates"] = len(candidates)
@@ -365,16 +376,6 @@ async def run_gmail_sync(
                 for c in candidates:
                     c["job_id"] = job_id
                 await db.seed_candidates.insert_many(candidates)
-
-            if candidates and os.environ.get("OPENROUTER_API_KEY"):
-                await _set_job_phase("conversation_enrichment", counts)
-                try:
-                    from post_track_enrichment import run_pre_curation_enrichment
-                    enrich_stats = await run_pre_curation_enrichment(db, user_id, job_id)
-                    counts["conversation_enrichment"] = enrich_stats
-                except Exception as e:
-                    logger.exception("sync pre_curation enrichment FAILED user=%s err=%s", user_id, e)
-                    counts["conversation_enrichment_error"] = str(e)[:200]
 
             await db.seed_jobs.update_one(
                 {"_id": job_id},

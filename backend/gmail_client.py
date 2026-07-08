@@ -1,12 +1,17 @@
 """Gmail API client. Handles OAuth token refresh + message list/get."""
 from __future__ import annotations
 
+import asyncio
 import base64
+import json
 import logging
 import os
 import re
+import uuid
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from email import message_from_bytes
+from email import policy
+from typing import Awaitable, Callable, Optional, TypeVar
 
 import httpx
 
@@ -15,10 +20,47 @@ from gmail_oauth import decrypt_token, encrypt_token, GOOGLE_TOKEN_ENDPOINT
 logger = logging.getLogger("scotive.gmail_client")
 
 GMAIL_API = "https://gmail.googleapis.com/gmail/v1"
+GMAIL_BATCH_URL = "https://gmail.googleapis.com/batch/gmail/v1"
+GMAIL_FETCH_CONCURRENCY = int(os.environ.get("GMAIL_FETCH_CONCURRENCY", "18"))
+GMAIL_FETCH_RETRIES = int(os.environ.get("GMAIL_FETCH_RETRIES", "4"))
+GMAIL_BATCH_SIZE = min(100, max(1, int(os.environ.get("GMAIL_BATCH_SIZE", "50"))))
+GMAIL_USE_BATCH = os.environ.get("GMAIL_USE_BATCH", "true").lower() not in ("0", "false", "no")
+RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+
+T = TypeVar("T")
 
 
 class GmailAuthError(Exception):
     """Raised when refresh token is invalid (user revoked)."""
+
+
+async def _retry_gmail(
+    coro_factory: Callable[[], Awaitable[T]],
+    *,
+    attempts: int = GMAIL_FETCH_RETRIES,
+    label: str = "gmail",
+) -> T:
+    """Retry transient transport errors and rate limits."""
+    last_exc: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return await coro_factory()
+        except httpx.TransportError as e:
+            last_exc = e
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code not in RETRYABLE_STATUS:
+                raise
+            last_exc = e
+        if attempt >= attempts - 1:
+            break
+        delay = 0.5 * (2 ** attempt)
+        logger.warning(
+            "%s retry attempt=%s/%s err=%s",
+            label, attempt + 1, attempts, last_exc,
+        )
+        await asyncio.sleep(delay)
+    assert last_exc is not None
+    raise last_exc
 
 
 async def _refresh_access_token(refresh_token: str) -> dict:
@@ -42,7 +84,6 @@ async def get_access_token(db, user_id) -> str:
     conn = await db.gmail_connections.find_one({"user_id": user_id})
     if not conn:
         raise GmailAuthError("No Gmail connection")
-    # Check expiry
     expires_at = conn.get("expires_at")
     if isinstance(expires_at, str):
         expires_at = datetime.fromisoformat(expires_at)
@@ -51,7 +92,6 @@ async def get_access_token(db, user_id) -> str:
     now = datetime.now(timezone.utc)
     if expires_at and expires_at > now + timedelta(seconds=60):
         return decrypt_token(conn["access_token_enc"])
-    # Refresh
     if not conn.get("refresh_token_enc"):
         raise GmailAuthError("Missing refresh token")
     refresh = decrypt_token(conn["refresh_token_enc"])
@@ -74,17 +114,25 @@ async def list_message_ids(access_token: str, query: str, max_pages: int = 20) -
     ids: list[str] = []
     page_token: Optional[str] = None
     pages = 0
+    headers = {"Authorization": f"Bearer {access_token}"}
     async with httpx.AsyncClient(timeout=30.0) as c:
         for _ in range(max_pages):
             pages += 1
             params = {"q": query, "maxResults": 500}
             if page_token:
                 params["pageToken"] = page_token
-            r = await c.get(
-                f"{GMAIL_API}/users/me/messages",
-                headers={"Authorization": f"Bearer {access_token}"},
-                params=params,
-            )
+
+            async def _list_page(p=params):
+                r = await c.get(
+                    f"{GMAIL_API}/users/me/messages",
+                    headers=headers,
+                    params=p,
+                )
+                if r.status_code in RETRYABLE_STATUS:
+                    r.raise_for_status()
+                return r
+
+            r = await _retry_gmail(_list_page, label="gmail.list_messages")
             if r.status_code != 200:
                 logger.warning("list_messages failed: %s %s", r.status_code, r.text[:200])
                 break
@@ -168,17 +216,9 @@ def parse_email_addresses(header_value: str) -> list[str]:
     return [a.lower() for a in found]
 
 
-async def get_message(access_token: str, message_id: str) -> Optional[dict]:
-    async with httpx.AsyncClient(timeout=20.0) as c:
-        r = await c.get(
-            f"{GMAIL_API}/users/me/messages/{message_id}",
-            headers={"Authorization": f"Bearer {access_token}"},
-            params={"format": "full"},
-        )
-        if r.status_code != 200:
-            return None
-        raw = r.json()
-
+def _parse_full_message(raw: dict) -> Optional[dict]:
+    if not raw.get("id"):
+        return None
     payload = raw.get("payload", {})
     headers = {h["name"].lower(): h["value"] for h in payload.get("headers", [])}
     body = _extract_text_from_payload(payload)
@@ -207,28 +247,234 @@ async def get_message(access_token: str, message_id: str) -> Optional[dict]:
     }
 
 
-async def fetch_attachment_bytes(access_token: str, message_id: str, attachment_id: str) -> bytes:
-    async with httpx.AsyncClient(timeout=45.0) as c:
-        r = await c.get(
-            f"{GMAIL_API}/users/me/messages/{message_id}/attachments/{attachment_id}",
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
+async def get_message(
+    access_token: str,
+    message_id: str,
+    *,
+    client: httpx.AsyncClient | None = None,
+) -> Optional[dict]:
+    headers = {"Authorization": f"Bearer {access_token}"}
+    params = {"format": "full"}
+    label = f"gmail.get_message({message_id[:8]})"
+
+    async def _fetch(c: httpx.AsyncClient) -> Optional[dict]:
+        async def _once():
+            r = await c.get(
+                f"{GMAIL_API}/users/me/messages/{message_id}",
+                headers=headers,
+                params=params,
+            )
+            if r.status_code in RETRYABLE_STATUS:
+                r.raise_for_status()
+            return r
+
+        r = await _retry_gmail(_once, label=label)
         if r.status_code != 200:
-            raise RuntimeError(f"attachment fetch failed: {r.status_code}")
-        data = r.json().get("data")
-        if not data:
-            return b""
-        return base64.urlsafe_b64decode(data + "==")
+            return None
+        return _parse_full_message(r.json())
+
+    if client is not None:
+        return await _fetch(client)
+    async with httpx.AsyncClient(timeout=20.0) as c:
+        return await _fetch(c)
 
 
-async def get_messages_batch(access_token: str, message_ids: list[str]) -> list[dict]:
-    """Fetch full messages sequentially (Gmail has no batch get in REST v1)."""
-    out: list[dict] = []
+def _build_batch_request_body(message_ids: list[str], boundary: str) -> bytes:
+    """Google batch: multipart/mixed with nested GET requests."""
+    chunks: list[str] = []
     for mid in message_ids:
-        msg = await get_message(access_token, mid)
-        if msg:
-            out.append(msg)
+        chunks.append(f"--{boundary}\r\n")
+        chunks.append("Content-Type: application/http\r\n")
+        chunks.append(f"Content-ID: <msg-{mid}>\r\n")
+        chunks.append("\r\n")
+        chunks.append(f"GET /gmail/v1/users/me/messages/{mid}?format=full HTTP/1.1\r\n")
+        chunks.append("\r\n")
+    chunks.append(f"--{boundary}--\r\n")
+    return "".join(chunks).encode("utf-8")
+
+
+def _parse_batch_http_part(part_bytes: bytes) -> tuple[int, Optional[dict]]:
+    if b"\r\n\r\n" not in part_bytes:
+        return 0, None
+    header_block, body = part_bytes.split(b"\r\n\r\n", 1)
+    status_line = header_block.split(b"\r\n")[0].decode("utf-8", errors="ignore")
+    parts = status_line.split()
+    status = int(parts[1]) if len(parts) >= 2 and parts[1].isdigit() else 0
+    if status != 200:
+        return status, None
+    body = body.strip()
+    if not body:
+        return status, None
+    try:
+        return status, json.loads(body.decode("utf-8"))
+    except Exception:
+        return status, None
+
+
+def _parse_batch_response(body: bytes, content_type: str) -> list[Optional[dict]]:
+    """Parse multipart batch response; part order matches request order."""
+    if not body:
+        return []
+    envelope = f"Content-Type: {content_type}\r\n\r\n".encode("utf-8") + body
+    try:
+        msg = message_from_bytes(envelope, policy=policy.default)
+    except Exception as e:
+        logger.warning("gmail.batch parse envelope err=%s", e)
+        return []
+    out: list[Optional[dict]] = []
+    for part in msg.iter_parts():
+        payload = part.get_payload(decode=True)
+        if not payload:
+            out.append(None)
+            continue
+        status, raw = _parse_batch_http_part(payload)
+        if status != 200 or not raw:
+            out.append(None)
+            continue
+        out.append(_parse_full_message(raw))
     return out
+
+
+async def _batch_get_messages_chunk(
+    access_token: str,
+    message_ids: list[str],
+    client: httpx.AsyncClient,
+) -> dict[str, dict]:
+    if not message_ids:
+        return {}
+    boundary = f"batch_{uuid.uuid4().hex}"
+    body = _build_batch_request_body(message_ids, boundary)
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": f'multipart/mixed; boundary="{boundary}"',
+    }
+
+    async def _once():
+        r = await client.post(GMAIL_BATCH_URL, headers=headers, content=body)
+        if r.status_code in RETRYABLE_STATUS:
+            r.raise_for_status()
+        return r
+
+    r = await _retry_gmail(_once, label=f"gmail.batch({len(message_ids)})")
+    if r.status_code != 200:
+        logger.warning(
+            "gmail.batch FAIL status=%s body=%s",
+            r.status_code, (r.text or "")[:300],
+        )
+        return {}
+
+    ct = r.headers.get("content-type", "")
+    parsed = _parse_batch_response(r.content, ct)
+    result: dict[str, dict] = {}
+    for mid, msg in zip(message_ids, parsed):
+        if msg:
+            result[mid] = msg
+    if len(result) < len(message_ids):
+        logger.info(
+            "gmail.batch partial ok=%s/%s",
+            len(result), len(message_ids),
+        )
+    return result
+
+
+async def _fetch_messages_concurrent(
+    access_token: str,
+    message_ids: list[str],
+    *,
+    concurrency: int,
+) -> dict[str, dict]:
+    if not message_ids:
+        return {}
+    sem = asyncio.Semaphore(max(1, concurrency))
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        async def one(mid: str) -> tuple[str, Optional[dict]]:
+            async with sem:
+                msg = await get_message(access_token, mid, client=client)
+            return mid, msg
+
+        results = await asyncio.gather(
+            *[one(mid) for mid in message_ids],
+            return_exceptions=True,
+        )
+    out: dict[str, dict] = {}
+    for mid, res in zip(message_ids, results):
+        if isinstance(res, Exception):
+            logger.warning("gmail fetch skip id=%s err=%s", mid, res)
+            continue
+        key, msg = res
+        if msg:
+            out[key] = msg
+    return out
+
+
+async def get_messages_batch(
+    access_token: str,
+    message_ids: list[str],
+    *,
+    concurrency: int = GMAIL_FETCH_CONCURRENCY,
+) -> list[dict]:
+    """Fetch messages via Google batch API (chunks of N) with concurrent fallback."""
+    if not message_ids:
+        return []
+
+    by_id: dict[str, dict] = {}
+    missing = list(message_ids)
+
+    if GMAIL_USE_BATCH and len(message_ids) > 1:
+        chunks = [
+            message_ids[i:i + GMAIL_BATCH_SIZE]
+            for i in range(0, len(message_ids), GMAIL_BATCH_SIZE)
+        ]
+        batch_parallel = max(1, min(4, concurrency // 6 or 1))
+        sem = asyncio.Semaphore(batch_parallel)
+        async with httpx.AsyncClient(timeout=90.0) as client:
+            async def run_chunk(chunk: list[str]) -> dict[str, dict]:
+                async with sem:
+                    try:
+                        return await _batch_get_messages_chunk(access_token, chunk, client)
+                    except Exception as e:
+                        logger.warning("gmail.batch chunk failed n=%s err=%s", len(chunk), e)
+                        return {}
+
+            chunk_maps = await asyncio.gather(*[run_chunk(c) for c in chunks])
+
+        missing = []
+        for chunk, cmap in zip(chunks, chunk_maps):
+            for mid in chunk:
+                if mid in cmap:
+                    by_id[mid] = cmap[mid]
+                else:
+                    missing.append(mid)
+
+    if missing:
+        fallback = await _fetch_messages_concurrent(
+            access_token, missing, concurrency=concurrency,
+        )
+        by_id.update(fallback)
+
+    return [by_id[mid] for mid in message_ids if mid in by_id]
+
+
+async def fetch_attachment_bytes(access_token: str, message_id: str, attachment_id: str) -> bytes:
+    headers = {"Authorization": f"Bearer {access_token}"}
+
+    async def _once():
+        async with httpx.AsyncClient(timeout=45.0) as c:
+            r = await c.get(
+                f"{GMAIL_API}/users/me/messages/{message_id}/attachments/{attachment_id}",
+                headers=headers,
+            )
+            if r.status_code in RETRYABLE_STATUS:
+                r.raise_for_status()
+            return r
+
+    r = await _retry_gmail(_once, label="gmail.attachment")
+    if r.status_code != 200:
+        raise RuntimeError(f"attachment fetch failed: {r.status_code}")
+    data = r.json().get("data")
+    if not data:
+        return b""
+    return base64.urlsafe_b64decode(data + "==")
 
 
 def _parse_metadata_message(raw: dict) -> dict:
@@ -248,58 +494,102 @@ def _parse_metadata_message(raw: dict) -> dict:
 
 async def get_message_metadata(access_token: str, message_id: str) -> Optional[dict]:
     """Lightweight fetch for threading headers (Message-ID, Subject, References)."""
-    async with httpx.AsyncClient(timeout=20.0) as c:
-        r = await c.get(
-            f"{GMAIL_API}/users/me/messages/{message_id}",
-            headers={"Authorization": f"Bearer {access_token}"},
-            params={
-                "format": "metadata",
-                "metadataHeaders": ["Message-ID", "Subject", "References", "In-Reply-To"],
-            },
-        )
-        if r.status_code != 200:
-            return None
-        return _parse_metadata_message(r.json())
+    headers = {"Authorization": f"Bearer {access_token}"}
+    params = {
+        "format": "metadata",
+        "metadataHeaders": ["Message-ID", "Subject", "References", "In-Reply-To"],
+    }
+
+    async def _once():
+        async with httpx.AsyncClient(timeout=20.0) as c:
+            r = await c.get(
+                f"{GMAIL_API}/users/me/messages/{message_id}",
+                headers=headers,
+                params=params,
+            )
+            if r.status_code in RETRYABLE_STATUS:
+                r.raise_for_status()
+            return r
+
+    r = await _retry_gmail(_once, label="gmail.get_metadata")
+    if r.status_code != 200:
+        return None
+    return _parse_metadata_message(r.json())
 
 
 async def get_thread_message_ids(access_token: str, thread_id: str) -> list[str]:
     """List message ids in a Gmail thread (chronological order)."""
-    async with httpx.AsyncClient(timeout=30.0) as c:
-        r = await c.get(
-            f"{GMAIL_API}/users/me/threads/{thread_id}",
-            headers={"Authorization": f"Bearer {access_token}"},
-            params={"format": "minimal"},
-        )
-        if r.status_code != 200:
-            return []
-        return [m["id"] for m in (r.json().get("messages") or []) if m.get("id")]
+    headers = {"Authorization": f"Bearer {access_token}"}
+
+    async def _once():
+        async with httpx.AsyncClient(timeout=30.0) as c:
+            r = await c.get(
+                f"{GMAIL_API}/users/me/threads/{thread_id}",
+                headers=headers,
+                params={"format": "minimal"},
+            )
+            if r.status_code in RETRYABLE_STATUS:
+                r.raise_for_status()
+            return r
+
+    r = await _retry_gmail(_once, label="gmail.thread_ids")
+    if r.status_code != 200:
+        return []
+    return [m["id"] for m in (r.json().get("messages") or []) if m.get("id")]
 
 
 async def get_thread_messages(access_token: str, thread_id: str) -> list[dict]:
-    """Fetch every message in a thread (full bodies), chronological."""
-    ids = await get_thread_message_ids(access_token, thread_id)
-    if not ids:
+    """Fetch every message in a thread (one threads.get?format=full call)."""
+    headers = {"Authorization": f"Bearer {access_token}"}
+
+    async def _once():
+        async with httpx.AsyncClient(timeout=45.0) as c:
+            r = await c.get(
+                f"{GMAIL_API}/users/me/threads/{thread_id}",
+                headers=headers,
+                params={"format": "full"},
+            )
+            if r.status_code in RETRYABLE_STATUS:
+                r.raise_for_status()
+            return r
+
+    r = await _retry_gmail(_once, label=f"gmail.thread_full({thread_id[:8]})")
+    if r.status_code != 200:
         return []
-    return await get_messages_batch(access_token, ids)
+    out: list[dict] = []
+    for raw in r.json().get("messages") or []:
+        msg = _parse_full_message(raw)
+        if msg:
+            out.append(msg)
+    return out
 
 
 async def get_thread_latest_metadata(access_token: str, thread_id: str) -> Optional[dict]:
     """Latest message in a thread — reply target for in-thread chases."""
-    async with httpx.AsyncClient(timeout=20.0) as c:
-        r = await c.get(
-            f"{GMAIL_API}/users/me/threads/{thread_id}",
-            headers={"Authorization": f"Bearer {access_token}"},
-            params={
-                "format": "metadata",
-                "metadataHeaders": ["Message-ID", "Subject", "References", "In-Reply-To"],
-            },
-        )
-        if r.status_code != 200:
-            return None
-        messages = r.json().get("messages") or []
-        if not messages:
-            return None
-        return _parse_metadata_message(messages[-1])
+    headers = {"Authorization": f"Bearer {access_token}"}
+    params = {
+        "format": "metadata",
+        "metadataHeaders": ["Message-ID", "Subject", "References", "In-Reply-To"],
+    }
+
+    async def _once():
+        async with httpx.AsyncClient(timeout=20.0) as c:
+            r = await c.get(
+                f"{GMAIL_API}/users/me/threads/{thread_id}",
+                headers=headers,
+                params=params,
+            )
+            if r.status_code in RETRYABLE_STATUS:
+                r.raise_for_status()
+            return r
+
+    r = await _retry_gmail(_once, label="gmail.thread_metadata")
+    if r.status_code != 200:
+        return None
+    messages = r.json().get("messages") or []
+    if not messages:
+        return None
+    return _parse_metadata_message(messages[-1])
 
 
 async def resolve_thread_reply_context(

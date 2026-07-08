@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { formatDate, formatMoney } from "@/components/LedgerCard";
+import { statusLabel } from "@/lib/invoiceCopy";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -135,6 +136,9 @@ export function CurationScreen({ candidates, onConfirm, busy }) {
                                     const picked = dueDates[c._id];
                                     const showPicker = !extracted;
                                     const displayDue = picked !== undefined ? picked : extracted;
+                                    const knownStatus = c.enriched_status && c.enriched_status !== "invoiced"
+                                        ? statusLabel(c.enriched_status)
+                                        : null;
                                     return (
                                         <li key={c._id}>
                                             <div
@@ -155,6 +159,12 @@ export function CurationScreen({ candidates, onConfirm, busy }) {
                                                             <div className="text-[11px] text-muted-foreground break-words whitespace-normal leading-snug mt-0.5">
                                                                 {c.source_subject || c.invoice_ref || "Invoice"}
                                                             </div>
+                                                            {knownStatus ? (
+                                                                <div className="text-[10px] font-mono uppercase tracking-wide text-amber-800 mt-1">
+                                                                    {knownStatus}
+                                                                    {c.status_evidence ? ` — ${c.status_evidence}` : ""}
+                                                                </div>
+                                                            ) : null}
                                                         </div>
                                                     </button>
                                                     <div className="text-[11px] font-mono text-muted-foreground text-right flex-shrink-0">

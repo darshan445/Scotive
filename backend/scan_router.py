@@ -28,6 +28,7 @@ from ledger_reconcile import (
     enrich_invoice_doc,
     normalize_source_date,
     sort_by_email_date,
+    sort_by_due_promise_date,
 )
 from escalation_scheduler import run_escalation_tick, generate_draft as _gen_escalation_draft
 from digest_sender import send_digest_for_user, build_digest_email, collect_today_sections, _totals as _digest_totals
@@ -375,7 +376,7 @@ def build_router(db, get_current_user):
                 doc["balance_remaining"] = float(doc.get("amount") or 0)
             doc = enrich_invoice_doc(doc, doc.get("counterparty_email") or "")
             raw_docs.append(doc)
-        raw_docs = sort_by_email_date(raw_docs)
+        raw_docs = sort_by_due_promise_date(raw_docs)
         rows = [_serialize(doc) for doc in raw_docs]
         agg = compute_open_totals(raw_docs, _OPEN_STATUSES)
         return {
@@ -610,7 +611,7 @@ def build_router(db, get_current_user):
         if not raw_docs:
             raise HTTPException(status_code=404, detail="Client not found")
 
-        raw_docs = sort_by_email_date(raw_docs)
+        raw_docs = sort_by_due_promise_date(raw_docs)
         invoices = [_serialize(doc) for doc in raw_docs]
 
         agg = compute_open_totals(raw_docs, _OPEN_STATUSES)

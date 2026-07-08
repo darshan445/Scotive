@@ -101,6 +101,29 @@ def sort_by_email_date(items: list[dict]) -> list[dict]:
     return sorted(items, key=email_sort_key, reverse=True)
 
 
+_PROMISE_SORT_STATUSES = frozenset({"promised", "promise_broken"})
+
+
+def invoice_action_date(doc: dict) -> Optional[datetime]:
+    """Date that drives chase priority: promise when promised, else due."""
+    status = doc.get("status") or ""
+    if status in _PROMISE_SORT_STATUSES and doc.get("promise_date"):
+        return parse_email_date(doc.get("promise_date"))
+    return parse_email_date(doc.get("due_date"))
+
+
+def sort_by_due_promise_date(items: list[dict]) -> list[dict]:
+    """Nearest due/promise first; undated rows last (newest sent first among those)."""
+
+    def key(doc: dict) -> tuple:
+        d = invoice_action_date(doc)
+        if d:
+            return (0, d.timestamp(), doc.get("counterparty_email") or "")
+        return (1, -email_sort_key(doc), doc.get("counterparty_email") or "")
+
+    return sorted(items, key=key)
+
+
 def sender_domain(email: str) -> str:
     return email.split("@")[-1].lower() if "@" in email else ""
 
@@ -323,6 +346,9 @@ def enrich_invoice_doc(doc: dict, counterparty_email: str) -> dict:
         normalized = normalize_source_date(doc["source_date"])
         if normalized:
             doc["source_date"] = normalized
+    # Single user-facing follow-up timestamp (chase send via app or inferred prior chase).
+    if not doc.get("last_followup_sent_at") and doc.get("last_chase_at"):
+        doc["last_followup_sent_at"] = doc["last_chase_at"]
     return doc
 
 

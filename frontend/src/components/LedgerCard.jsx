@@ -1,4 +1,4 @@
-import { useEffect, Fragment, useState } from "react";
+import { useMemo, Fragment, useState } from "react";
 import { Link } from "react-router-dom";
 import { ChevronRight, Calendar, MoreHorizontal, PlusCircle, Send } from "lucide-react";
 import { api, extractError } from "@/lib/api";
@@ -20,7 +20,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 
-import { pastDueDaysLabel, invoiceDisplayRef, isJunkInvoiceRef, statusLabel, watchingSubtitle } from "@/lib/invoiceCopy";
+import { invoiceDisplayRef, isJunkInvoiceRef, statusLabel, formatLastFollowUp, lastFollowUpSentAt } from "@/lib/invoiceCopy";
+import { openLedgerInvoices, historyLedgerInvoices, historyLedgerSummary } from "@/lib/ledgerInvoices";
 import { InvoiceTimeline } from "@/components/InvoiceTimeline";
 import { useWorkspaceVersion } from "@/lib/workspaceRefresh";
 
@@ -88,7 +89,7 @@ const CONFIRM_COPY = {
     },
 };
 
-export function LedgerCard({ ledger, onChanged }) {
+export function LedgerCard({ ledger, onChanged, variant = "open" }) {
     const workspaceVersion = useWorkspaceVersion();
     const [expanded, setExpanded] = useState(null);
     const [chaseInvoice, setChaseInvoice] = useState(null);
@@ -97,8 +98,18 @@ export function LedgerCard({ ledger, onChanged }) {
     const [dueDateEdit, setDueDateEdit] = useState(null); // invoice
     const [dueDateValue, setDueDateValue] = useState("");
     const [dueDateBusy, setDueDateBusy] = useState(false);
+    const isHistory = variant === "paid";
+    const allInvoices = ledger?.invoices ?? [];
+    const invoices = useMemo(
+        () => (isHistory ? historyLedgerInvoices(allInvoices) : openLedgerInvoices(allInvoices)),
+        [allInvoices, isHistory],
+    );
+    const historySummary = useMemo(
+        () => historyLedgerSummary(allInvoices),
+        [allInvoices],
+    );
     if (!ledger) return null;
-    const { invoices = [], totals_by_currency, total_open, client_count = 0 } = ledger;
+    const { totals_by_currency, total_open, client_count = 0 } = ledger;
     const openTotals = totals_by_currency ?? total_open;
 
     async function act(id, action) {
@@ -159,41 +170,73 @@ export function LedgerCard({ ledger, onChanged }) {
         }
     }
     return (
-        <div className="space-y-6" data-testid="ledger-card">
+        <div className="space-y-6" data-testid={isHistory ? "ledger-card-paid" : "ledger-card"}>
             <div className="surface-card p-6 md:p-7">
                 <div className="flex items-start justify-between gap-4 flex-wrap">
                     <div>
-                        <div className="eyebrow">You&apos;re owed</div>
-                        <div className="mt-1 flex items-baseline gap-4 flex-wrap">
-                            <span className="stat-number font-bold text-4xl md:text-[2.75rem] tracking-tight" data-testid="ledger-total">
-                                {formatOpenTotals(openTotals)}
-                            </span>
-                            <span className="text-muted-foreground text-sm" data-testid="ledger-client-count">
-                                across {client_count} client{client_count === 1 ? "" : "s"}
-                            </span>
-                        </div>
+                        {isHistory ? (
+                            <>
+                                <div className="eyebrow">Collected</div>
+                                <div className="mt-1 flex items-baseline gap-4 flex-wrap">
+                                    <span className="stat-number font-bold text-4xl md:text-[2.75rem] tracking-tight text-emerald-700" data-testid="ledger-paid-total">
+                                        {formatOpenTotals(historySummary.totalsByCurrency)}
+                                    </span>
+                                    <span className="text-muted-foreground text-sm" data-testid="ledger-paid-meta">
+                                        {historySummary.paidCount > 0
+                                            ? `${historySummary.paidCount} paid invoice${historySummary.paidCount === 1 ? "" : "s"}`
+                                            : "No paid invoices yet"}
+                                        {historySummary.clientCount > 0
+                                            ? ` across ${historySummary.clientCount} client${historySummary.clientCount === 1 ? "" : "s"}`
+                                            : ""}
+                                        {historySummary.writtenOffCount > 0
+                                            ? ` · ${historySummary.writtenOffCount} written off`
+                                            : ""}
+                                    </span>
+                                </div>
+                            </>
+                        ) : (
+                            <>
+                                <div className="eyebrow">You&apos;re owed</div>
+                                <div className="mt-1 flex items-baseline gap-4 flex-wrap">
+                                    <span className="stat-number font-bold text-4xl md:text-[2.75rem] tracking-tight" data-testid="ledger-total">
+                                        {formatOpenTotals(openTotals)}
+                                    </span>
+                                    <span className="text-muted-foreground text-sm" data-testid="ledger-client-count">
+                                        across {client_count} client{client_count === 1 ? "" : "s"}
+                                    </span>
+                                </div>
+                            </>
+                        )}
                     </div>
-                    <button
-                        onClick={() => setManualOpen(true)}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3.5 py-2 text-sm font-medium hover:bg-muted transition-colors"
-                        data-testid="track-manual-button-header">
-                        <PlusCircle className="w-4 h-4" /> Track manually
-                    </button>
+                    {!isHistory ? (
+                        <button
+                            onClick={() => setManualOpen(true)}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3.5 py-2 text-sm font-medium hover:bg-muted transition-colors"
+                            data-testid="track-manual-button-header">
+                            <PlusCircle className="w-4 h-4" /> Track manually
+                        </button>
+                    ) : null}
                 </div>
             </div>
 
             {invoices.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-border bg-card/40 p-10 text-center" data-testid="ledger-empty">
-                    <h3 className="font-heading font-semibold text-lg">No tracked invoices yet.</h3>
+                    <h3 className="font-heading font-semibold text-lg">
+                        {isHistory ? "No paid invoices yet." : "No open invoices."}
+                    </h3>
                     <p className="mt-2 text-sm text-muted-foreground max-w-md mx-auto">
-                        Scotive is watching your sent mail — send your next invoice like you always do and it will appear here.
+                        {isHistory
+                            ? "When you mark invoices paid, they move here for your records."
+                            : "Scotive is watching your sent mail — send your next invoice like you always do and it will appear here."}
                     </p>
-                    <button
-                        onClick={() => setManualOpen(true)}
-                        className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-md border border-border bg-card text-sm font-medium hover:bg-muted transition-colors"
-                        data-testid="track-manual-button">
-                        <PlusCircle className="w-4 h-4" /> Track a payment manually
-                    </button>
+                    {!isHistory ? (
+                        <button
+                            onClick={() => setManualOpen(true)}
+                            className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-md border border-border bg-card text-sm font-medium hover:bg-muted transition-colors"
+                            data-testid="track-manual-button">
+                            <PlusCircle className="w-4 h-4" /> Track a payment manually
+                        </button>
+                    ) : null}
                 </div>
             ) : (
                 <div className="rounded-2xl border border-border bg-card overflow-hidden" data-testid="ledger-table-wrapper">
@@ -205,13 +248,16 @@ export function LedgerCard({ ledger, onChanged }) {
                                 <th className="px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Invoice</th>
                                 <th className="px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider text-right">Amount</th>
                                 <th className="px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Status</th>
-                                <th className="px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Due / Promise</th>
+                                <th className="px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                                    {isHistory ? "Closed" : "Due / Promise"}
+                                </th>
                                 <th className="px-2 py-3 w-8" />
                             </tr>
                         </thead>
                         <tbody>
                             {invoices.map((inv) => {
                                 const isOpen = expanded === inv._id;
+                                const followUpLine = !isHistory ? formatLastFollowUp(lastFollowUpSentAt(inv)) : null;
                                 return (
                                     <Fragment key={inv._id}>
                                         <tr
@@ -246,22 +292,29 @@ export function LedgerCard({ ledger, onChanged }) {
                                                     </div>
                                                 ) : null}
                                             </td>
-                                            <td className="px-4 py-3 align-top"><StatusPill status={inv.status} /></td>
+                                            <td className="px-4 py-3 align-top">
+                                                <StatusPill status={inv.status} />
+                                                {followUpLine ? (
+                                                    <div className="text-[10px] text-muted-foreground mt-1" data-testid="ledger-followup-sent">
+                                                        {followUpLine}
+                                                    </div>
+                                                ) : null}
+                                            </td>
                                             <td className="px-4 py-3 align-top text-sm text-muted-foreground">
-                                                {inv.status === "stale" ? (
+                                                {isHistory ? (
+                                                    <span>
+                                                        {inv.paid_at
+                                                            ? `Paid ${formatDate(inv.paid_at)}`
+                                                            : inv.status === "written_off"
+                                                              ? `Written off ${formatDate(inv.status_updated_at)}`
+                                                              : formatDate(inv.status_updated_at)}
+                                                    </span>
+                                                ) : inv.status === "stale" ? (
                                                     <span>No activity 120+ days</span>
                                                 ) : inv.promise_date ? (
                                                     <span>Promised {formatDate(inv.promise_date)}</span>
                                                 ) : inv.due_date ? (
-                                                    <span>
-                                                        {formatDate(inv.due_date)}
-                                                        {inv.status === "overdue" && pastDueDaysLabel(inv.due_date) ? (
-                                                            <span className="block text-[10px] text-red-700/80">{pastDueDaysLabel(inv.due_date)}</span>
-                                                        ) : null}
-                                                        {watchingSubtitle(inv) ? (
-                                                            <span className="block text-[10px] text-muted-foreground/90">{watchingSubtitle(inv)}</span>
-                                                        ) : null}
-                                                    </span>
+                                                    <span>{formatDate(inv.due_date)}</span>
                                                 ) : (
                                                     <button
                                                         type="button"
@@ -273,6 +326,7 @@ export function LedgerCard({ ledger, onChanged }) {
                                                 )}
                                             </td>
                                             <td className="px-2 py-3 align-top text-right" onClick={(e) => e.stopPropagation()}>
+                                                {!isHistory ? (
                                                 <DropdownMenu>
                                                     <DropdownMenuTrigger className="inline-flex items-center justify-center w-7 h-7 rounded hover:bg-muted" data-testid="row-actions-trigger">
                                                         <MoreHorizontal className="w-4 h-4" />
@@ -293,6 +347,7 @@ export function LedgerCard({ ledger, onChanged }) {
                                                         <DropdownMenuItem onClick={() => setConfirm({ invoice: inv, action: "write_off" })} className="text-red-700" data-testid="row-write-off">Write off</DropdownMenuItem>
                                                     </DropdownMenuContent>
                                                 </DropdownMenu>
+                                                ) : null}
                                             </td>
                                         </tr>
                                         {isOpen ? (

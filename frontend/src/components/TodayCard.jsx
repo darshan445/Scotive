@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, ChevronDown, Clock, Eye, HelpCircle, MessageSquareWarning, PartyPopper, Send, Wallet } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronDown, Clock, Eye, HelpCircle, MessageSquareWarning, Send, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { api, extractError } from "@/lib/api";
 import { useWorkspaceRefreshEffect } from "@/lib/workspaceRefresh";
@@ -120,46 +120,56 @@ export function TodayCard({ onDraftChase, onChanged }) {
         .map((s) => ({ ...s, rows: data[s.key] || [] }))
         .filter((s) => s.rows.length > 0);
     const actionCount = actionSections.reduce((n, s) => n + s.rows.length, 0);
+    const mergePrompts = data.merge_prompts || [];
+    const hasMergePrompts = mergePrompts.length > 0;
+
+    if (actionCount === 0 && !hasMergePrompts) {
+        return null;
+    }
+
     const quietSections = QUIET_SECTIONS.map((s) => ({ ...s, rows: data[s.key] || [] }));
     const quietCount = quietSections.reduce((n, s) => n + s.rows.length, 0);
 
+    if (actionCount === 0) {
+        return (
+            <div className="space-y-4" data-testid="today-card-wrapper">
+                <ClientMergePrompts
+                    prompts={mergePrompts}
+                    onChanged={() => {
+                        refresh();
+                        onChanged?.();
+                    }}
+                />
+            </div>
+        );
+    }
+
     return (
         <div className="space-y-4" data-testid="today-card-wrapper">
-            <ClientMergePrompts
-                prompts={data.merge_prompts}
-                onChanged={() => {
-                    refresh();
-                    onChanged?.();
-                }}
-            />
+            {hasMergePrompts ? (
+                <ClientMergePrompts
+                    prompts={mergePrompts}
+                    onChanged={() => {
+                        refresh();
+                        onChanged?.();
+                    }}
+                />
+            ) : null}
             <div className="surface-card overflow-hidden" data-testid="today-card">
                 <div className="px-6 py-5 border-b border-border flex items-center justify-between">
                     <div>
                         <h2 className="font-heading font-bold text-xl tracking-tight">Needs you today</h2>
                         <p className="text-xs text-muted-foreground mt-0.5">
-                            {actionCount > 0
-                                ? `${actionCount} thing${actionCount === 1 ? "" : "s"} — usually under a minute`
-                                : "You're all caught up"}
+                            {actionCount} thing{actionCount === 1 ? "" : "s"} — usually under a minute
                         </p>
                     </div>
-                    {actionCount > 0 ? (
-                        <span className="stat-number inline-flex items-center justify-center min-w-[36px] h-9 rounded-full bg-primary text-primary-foreground text-base font-bold px-3">
-                            {actionCount}
-                        </span>
-                    ) : (
-                        <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-3 py-1.5">
-                            <PartyPopper className="w-3.5 h-3.5" /> Clear
-                        </span>
-                    )}
+                    <span className="stat-number inline-flex items-center justify-center min-w-[36px] h-9 rounded-full bg-primary text-primary-foreground text-base font-bold px-3">
+                        {actionCount}
+                    </span>
                 </div>
 
-                {actionCount === 0 ? (
-                    <div className="px-6 py-10 text-center text-sm text-muted-foreground">
-                        Nothing needs your attention. Scotive keeps watching your sent mail and client replies.
-                    </div>
-                ) : (
-                    <ul className="divide-y divide-border">
-                        {actionSections.map((s) =>
+                <ul className="divide-y divide-border">
+                    {actionSections.map((s) =>
                             s.rows.map((r, i) => {
                                 const sub = rowSubtitle(r, s.key);
                                 const Icon = s.icon;
@@ -245,7 +255,6 @@ export function TodayCard({ onDraftChase, onChanged }) {
                             }),
                         )}
                     </ul>
-                )}
 
                 {quietCount > 0 ? (
                     <div className="border-t border-border bg-muted/30">
