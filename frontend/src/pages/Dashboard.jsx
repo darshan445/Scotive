@@ -66,7 +66,11 @@ function StatsStrip({ ledger }) {
         const pastDueByCur = {};
         for (const i of pastDue) {
             const cur = (i.currency || "USD").toUpperCase();
-            pastDueByCur[cur] = (pastDueByCur[cur] || 0) + Number(i.balance_remaining ?? i.amount ?? 0);
+            // A past-due row can't owe $0 — a zeroed balance on an unpaid invoice is
+            // a claim artifact ("says paid" → "not yet"); fall back to the amount.
+            let owed = Number(i.balance_remaining ?? i.amount ?? 0);
+            if (owed <= 0) owed = Number(i.amount ?? 0);
+            pastDueByCur[cur] = (pastDueByCur[cur] || 0) + owed;
         }
         return { open, pastDue, promised, pastDueByCur };
     }, [ledger]);
