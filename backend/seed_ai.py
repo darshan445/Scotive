@@ -483,6 +483,7 @@ async def extract_client_invoices_with_ai(
     *,
     anchor_ids: list[str] | None = None,
     system_prompt: str | None = None,
+    context_note: str | None = None,
 ) -> Optional[dict[str, Any]]:
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
@@ -492,11 +493,12 @@ async def extract_client_invoices_with_ai(
     blocks = [_format_message_block(m, my_email=my_email) for m in messages]
     anchor_note = ""
     if anchor_ids:
-        anchor_note = f"INVOICE_ANCHOR_IDS: {', '.join(anchor_ids)}\n"
+        anchor_note = f"INVOICE_ANCHOR_IDS: {', '.join(a for a in anchor_ids if a)}\n"
+    extra_note = f"{context_note}\n" if context_note else ""
     user_content = (
         f"USER_EMAIL: {my_email}\n"
         f"CLIENT_EMAIL: {client_email}\n"
-        f"{anchor_note}\n"
+        f"{anchor_note}{extra_note}\n"
         + "\n".join(blocks)
     )[:18000]
 

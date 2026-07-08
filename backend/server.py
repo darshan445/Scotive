@@ -481,6 +481,9 @@ async def on_startup():
     await db.seed_jobs.create_index([("user_id", 1), ("started_at", -1)])
     await db.seed_candidates.create_index([("user_id", 1), ("job_id", 1), ("status", 1)])
     await db.seed_candidates.create_index([("user_id", 1), ("message_id", 1)])
+    # Incremental ingestion registry — every Gmail message id seen once; 30d TTL.
+    await db.processed_messages.create_index([("user_id", 1), ("message_id", 1)], unique=True)
+    await db.processed_messages.create_index("at", expireAfterSeconds=30 * 86400)
     await db.client_merges.create_index([("user_id", 1), ("canonical_key", 1)])
     await db.client_merges.create_index([("user_id", 1), ("alias_keys", 1)])
     await db.client_merge_prompts.create_index([("user_id", 1), ("status", 1), ("created_at", -1)])

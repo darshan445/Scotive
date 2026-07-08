@@ -64,12 +64,9 @@ def _lookback_seconds(raw: str) -> int:
     return int(m.group(1)) * _LOOKBACK_UNIT_SECONDS[m.group(2) or "h"]
 
 
-def sync_window_clause(mode: SyncMode, *, last_synced_at: str | None = None) -> str:
-    if mode == "onboarding":
-        return f"newer_than:{SEED_DAYS}d"
-    # Gmail's newer_than: only accepts d/m/y units — "newer_than:1h" is invalid and
-    # silently matches nothing. Use after:<epoch>, anchored on the last successful
-    # sync (with overlap) so gaps between runs never skip mail.
+def incremental_window_start(last_synced_at: str | None) -> datetime:
+    """Start of the incremental window, anchored on the last successful sync
+    (15 min overlap; 24h first run; capped at 7 days)."""
     now = datetime.now(timezone.utc)
     start = now - timedelta(seconds=_lookback_seconds(INCREMENTAL_LOOKBACK))
     last = parse_email_date(last_synced_at) if last_synced_at else None
@@ -77,8 +74,15 @@ def sync_window_clause(mode: SyncMode, *, last_synced_at: str | None = None) -> 
         start = min(start, last - timedelta(minutes=15))
     else:
         start = min(start, now - timedelta(hours=24))
-    start = max(start, now - timedelta(days=7))
-    return f"after:{int(start.timestamp())}"
+    return max(start, now - timedelta(days=7))
+
+
+def sync_window_clause(mode: SyncMode, *, last_synced_at: str | None = None) -> str:
+    if mode == "onboarding":
+        return f"newer_than:{SEED_DAYS}d"
+    # Gmail's newer_than: only accepts d/m/y units — "newer_than:1h" is invalid and
+    # silently matches nothing. Use after:<epoch>.
+    return f"after:{int(incremental_window_start(last_synced_at).timestamp())}"
 
 
 def sent_mail_queries(mode: SyncMode, window: str | None = None) -> list[str]:

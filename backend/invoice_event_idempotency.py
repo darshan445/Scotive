@@ -13,6 +13,8 @@ EVENT_ACTION_MAP = {
     "dispute": "dispute",
     "payment_claimed": "payment_claim",
     "approved": "payment_approved",
+    "question": "client_question",
+    "due_date_adjusted": "due_date_adjusted",
 }
 
 
