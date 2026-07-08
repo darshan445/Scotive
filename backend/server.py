@@ -455,7 +455,16 @@ async def on_startup():
     await db.oauth_states.create_index("state", unique=True)
     await db.scan_jobs.create_index([("user_id", 1), ("started_at", -1)])
     await db.invoices.create_index([("user_id", 1), ("created_at", -1)])
-    await db.invoices.create_index([("user_id", 1), ("source_message_id", 1)], unique=True)
+    # Multi-invoice emails ("#77 and #81" in one send) create several rows sharing
+    # one source message — uniqueness is per invoice number, not per email.
+    try:
+        await db.invoices.drop_index("user_id_1_source_message_id_1")
+    except Exception:
+        pass
+    await db.invoices.create_index(
+        [("user_id", 1), ("source_message_id", 1), ("invoice_ref_normalized", 1)],
+        unique=True,
+    )
     await db.invoices.create_index([("user_id", 1), ("counterparty_email", 1)])
     await db.invoices.create_index([("user_id", 1), ("client_identity_key", 1), ("invoice_ref_normalized", 1)])
     await db.review_items.create_index([("user_id", 1), ("source_message_id", 1)], unique=True)

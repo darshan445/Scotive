@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any, Optional
 
+from pymongo.errors import DuplicateKeyError
+
 # Must match client_sweep.CONSUMER_DOMAINS
 CONSUMER_DOMAINS = {
     "gmail.com", "googlemail.com", "yahoo.com", "yahoo.co.in", "yahoo.co.uk",
@@ -571,6 +573,15 @@ async def upsert_sweep_invoice(
             amount=new_amt,
             subject=subject,
         )
+    # Distinct invoice numbers are never the same invoice — one email/thread can
+    # carry several invoices ("#77 and #81"); each gets its own row.
+    if (
+        existing
+        and norm
+        and existing.get("invoice_ref_normalized")
+        and existing["invoice_ref_normalized"] != norm
+    ):
+        existing = None
 
     if existing:
         old_amt = float(existing.get("amount") or 0)
@@ -632,16 +643,34 @@ async def upsert_sweep_invoice(
             await db.invoices.update_one({"_id": existing["_id"]}, {"$set": patch})
         return "merged", existing["_id"]
 
-    # No normalized ref — dedupe by source message only
+    # No related row found — dedupe by source message, unless the existing row
+    # for this message carries a different invoice number (multi-invoice email).
     if doc.get("source_message_id"):
         by_msg = await db.invoices.find_one({
             "user_id": user_id,
             "source_message_id": doc["source_message_id"],
         })
-        if by_msg:
+        if by_msg and not (
+            norm
+            and by_msg.get("invoice_ref_normalized")
+            and by_msg["invoice_ref_normalized"] != norm
+        ):
             return "merged", by_msg["_id"]
 
-    res = await db.invoices.insert_one(doc)
+    try:
+        res = await db.invoices.insert_one(doc)
+    except DuplicateKeyError:
+        # Unique-index race or legacy index still in place — resolve to the row
+        # that won instead of surfacing a 500.
+        q: dict[str, Any] = {"user_id": user_id, "source_message_id": doc.get("source_message_id")}
+        if norm:
+            q["invoice_ref_normalized"] = norm
+        winner = await db.invoices.find_one(q) or await db.invoices.find_one({
+            "user_id": user_id, "source_message_id": doc.get("source_message_id"),
+        })
+        if winner:
+            return "merged", winner["_id"]
+        raise
     return "created", res.inserted_id
 
 
@@ -768,6 +797,19 @@ async def dedupe_existing_invoices(db, user_id, now_iso: str) -> int:
             if "thread" in group_key:
                 amt = float(docs[0].get("amount") or 0)
                 if not all(amounts_close(amt, float(d.get("amount") or 0)) for d in docs[1:]):
+                    continue
+                # Multi-invoice thread ("#77 and #81", both $600): merge only rows
+                # sharing an invoice number — distinct refs stay separate rows.
+                distinct_refs = {
+                    d.get("invoice_ref_normalized") for d in docs if d.get("invoice_ref_normalized")
+                }
+                if len(distinct_refs) > 1:
+                    by_ref: dict = {}
+                    for d in docs:
+                        by_ref.setdefault(d.get("invoice_ref_normalized"), []).append(d)
+                    for sub in by_ref.values():
+                        if len(sub) > 1:
+                            removed += await _merge_invoice_dupes(db, user_id, sub, now_iso)
                     continue
             removed += await _merge_invoice_dupes(db, user_id, docs, now_iso)
     return removed
