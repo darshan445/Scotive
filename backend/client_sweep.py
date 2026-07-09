@@ -145,6 +145,8 @@ EVENT_KIND_MAP = {
 }
 
 # partial_payment must run before promise on the same message (T7: partial + implicit promise).
+# dispute after partial so a disputed+partial invoice keeps disputed_claim_amount while
+# status can stay partially_paid (or disputed when no partial landed).
 _EVENT_APPLY_ORDER = {
     "partial_payment": 0,
     "promise": 1,
@@ -208,11 +210,11 @@ Rules:
 - Chronological thread messages may contain promises, partial payments, disputes, payment claims, corrections.
 - SENDER DIRECTION (critical): each thread line is labelled "YOU →" (user sent) or "{client} → YOU" (client sent). promise, partial_payment, dispute, payment_claimed, and approved events MUST cite a message where the client sent to the user — never from "YOU →" lines. Reminders, payment chasers, and follow-ups the USER sent are NEVER payment_claimed, promise, dispute, or partial_payment. "correction" MUST cite a "YOU →" message only.
 - "correction": the USER later revises an existing invoice's amount (e.g. "corrected: $300", "revised invoice, should be…", "my mistake — it's actually…"). Set amount to the NEW corrected amount and invoice_ref to the invoice being corrected. A correction is NEVER a new invoice row — do not add it to invoices[]. If a corrected due date is stated, put it in date. If the CLIENT later rejects a USER downward correction (e.g. "retain the bill as is", "don't reduce") and asks to keep the original total, do NOT apply the reduction — emit a correction event reverting to the pre-reduction amount, or omit the downward correction event.
-- A message can produce MULTIPLE events: e.g. "sent $1,200 (ref TXN...), rest coming next week" = one partial_payment (with amount + reference) AND one promise (for the remainder, date resolved from the message date).
+- A message can produce MULTIPLE events: e.g. "sent $1,200 (ref TXN...), rest coming next week" = one partial_payment (with amount + reference) AND one promise (for the remainder, date resolved from the message date). "We agreed $1,800 — sending $1,000 now as a partial" = one dispute (claimed amount 1800, quote the agreement phrase) AND one partial_payment ($1,000) — NEVER also emit a question for residual clauses like "will sort the rest after we confirm".
 - One client reply can map DIFFERENT events to DIFFERENT invoices — set invoice_ref per event ("paying #77 today, need another week or two on #81" = payment_claimed on #77 AND promise on #81, each with its own quote).
 - payment_claimed vs promise — TENSE TEST: has the money already left the client's hands? PAST-TENSE / completed transfers ("just paid", "sent it over on venmo", "paid through the link", "processed already", "sending it right now on venmo" — direct transfer as they write) = payment_claimed. FUTURE or in-process commitments where money has NOT moved yet ("will pay next week", "sending this through AP today — should hit your account within the week", "will process this week", "expect it processed by end of month", "need another week or two") = promise with the date resolved from the message date. Routing into AP/finance or a stated future arrival window is ALWAYS a promise, never payment_claimed.
 - "approved": the client acknowledges/approves the invoice or routes it for payment ("approved on our end", "forwarded to AP", "routing to finance for processing"). If the approval ALSO states an arrival window ("should hit your account within the week"), emit BOTH approved AND a promise with the date resolved from that window. A reference that "will be issued" later (e.g. "reference will be PO-88123 once issued") is NOT a payment reference — emit approved, never payment_claimed, and leave reference null until the real reference appears.
-- "question": the client asks the USER something that needs an answer — a clarification request ("can you break down the QA line item?"), a logistics question, or UNCERTAINTY about payment ("can you check if this was already paid? I thought we cleared this"). Uncertainty is NEVER payment_claimed; a clarification request is NOT a dispute. Emit question with the quote.
+- "question": the client asks the USER something that needs an answer — a clarification request ("can you break down the QA line item?"), a logistics question, or UNCERTAINTY about payment ("can you check if this was already paid? I thought we cleared this"). Uncertainty is NEVER payment_claimed; a clarification request is NOT a dispute. Emit question with the quote. Do NOT emit question when the same message already produced dispute, partial_payment, promise, or payment_claimed — those residual phrases are part of the primary signal, not a separate needs-reply item.
 - "due_date_adjusted": the client corrects the payment window's anchor or the due date itself ("QA held it until July 6th, so count the payment window from there") — set date to the NEW resolved due date (new anchor + the invoice's stated payment window). This is not a promise and not a dispute.
 - dispute_kind: wrong_amount (they say a different figure was agreed), scope, quality, terms, other.
 - For promise events, date must be ISO YYYY-MM-DD. Resolve relative phrases using the MESSAGE DATE shown in the thread (not sync time): "this Friday" → that week's Friday on or after the message date; "next Friday" → the Friday after; "tomorrow", "day after tomorrow", "end of this week", "next week", "this weekend", etc. Never copy due dates from quoted invoice text below — only the client's new words count.
@@ -996,6 +998,22 @@ async def apply_client_result(
         dedupe_ai_events(result.get("events") or []),
         key=lambda e: (_EVENT_APPLY_ORDER.get(e.get("type") or "", 99), e.get("message_id") or ""),
     )
+    # Drop question events that share a message_id with a concrete signal
+    # (dispute / partial / promise / payment_claimed) — TE-105.
+    _CONCRETE = {"dispute", "partial_payment", "promise", "payment_claimed", "correction"}
+    concrete_mids = {
+        (e.get("message_id") or "").strip()
+        for e in sorted_events
+        if e.get("type") in _CONCRETE and (e.get("message_id") or "").strip()
+    }
+    if concrete_mids:
+        sorted_events = [
+            e for e in sorted_events
+            if not (
+                e.get("type") == "question"
+                and (e.get("message_id") or "").strip() in concrete_mids
+            )
+        ]
     client_emails = _client_identity_emails(primary_email, result, email_to_primary)
     domains = _domains_for_clients(client_emails)
     for ev in sorted_events:
@@ -1097,10 +1115,33 @@ async def _write_event(
         await db.invoices.update_one({"_id": invoice_id}, {"$set": patch})
         await clear_watching_on_client_event(db, invoice_id, now_iso)
     elif ev_type == "dispute":
-        patch = {"status": "disputed", "chasing_paused": True, **activity}
+        bal = float(
+            inv.get("balance_remaining")
+            if inv and inv.get("balance_remaining") is not None
+            else (inv or {}).get("amount") or 0
+        )
+        paid = float((inv or {}).get("paid_amount") or 0)
+        # TE-105: dispute + partial on the same message — keep partially_paid
+        # when money already landed, but still record the claim amount.
+        keep_partial = (
+            inv
+            and paid > 0.005
+            and bal > 0.005
+            and inv.get("status") in ("partially_paid", "disputed", "invoiced", "overdue", "promised")
+        )
+        patch = {"chasing_paused": True, **activity}
+        if keep_partial and inv.get("status") == "partially_paid":
+            # Status already partially_paid from earlier event in this batch.
+            pass
+        elif keep_partial:
+            patch["status"] = "partially_paid"
+        else:
+            patch["status"] = "disputed"
         if ev.get("claimed_amount") is not None:
             # Reference only — the tracked amount never moves on a client claim.
             patch["disputed_claim_amount"] = float(ev["claimed_amount"])
+        elif ev.get("amount") is not None and ev_type == "dispute":
+            patch["disputed_claim_amount"] = float(ev["amount"])
         await db.invoices.update_one({"_id": invoice_id}, {"$set": patch})
         await clear_watching_on_client_event(db, invoice_id, now_iso)
     elif ev_type == "partial_payment" and ev.get("amount"):
@@ -1108,15 +1149,28 @@ async def _write_event(
         applied = min(float(ev["amount"]), bal)
         new_bal = round(max(bal - applied, 0), 2)
         new_paid = round(float(inv.get("paid_amount") or 0) + applied, 2)
-        new_status = "paid" if new_bal <= 0.005 else "partially_paid"
+        # Preserve an open dispute claim when partial lands on a disputed invoice
+        # (or when dispute will follow in the same batch via apply order).
+        was_disputed = inv and (
+            inv.get("status") == "disputed" or inv.get("disputed_claim_amount") is not None
+        )
+        if new_bal <= 0.005:
+            new_status = "paid"
+        else:
+            new_status = "partially_paid"
+        patch = {
+            "status": new_status,
+            "balance_remaining": new_bal,
+            "paid_amount": new_paid,
+            **activity,
+        }
+        # Keep disputed_claim_amount so the row can show both facts.
+        if was_disputed and inv.get("disputed_claim_amount") is not None:
+            patch["disputed_claim_amount"] = inv["disputed_claim_amount"]
+            patch["chasing_paused"] = True
         await db.invoices.update_one(
             {"_id": invoice_id},
-            {"$set": {
-                "status": new_status,
-                "balance_remaining": new_bal,
-                "paid_amount": new_paid,
-                **activity,
-            }},
+            {"$set": patch},
         )
         if new_status == "paid":
             await clear_watching_on_client_event(db, invoice_id, now_iso)

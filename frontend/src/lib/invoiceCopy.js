@@ -18,6 +18,27 @@ export function statusLabel(status) {
     return STATUS_LABELS[status] || (status || "invoiced").replace(/_/g, " ");
 }
 
+/** Combined status when an invoice is both disputed and partially paid. */
+export function invoiceStatusDisplay(inv) {
+    const status = inv?.status;
+    const claimed = inv?.disputed_claim_amount;
+    const hasClaim = claimed != null && Number(claimed) > 0;
+    const partial = status === "partially_paid"
+        || (Number(inv?.paid_amount || 0) > 0.005
+            && Number(inv?.balance_remaining ?? inv?.amount ?? 0) > 0.005);
+
+    if (status === "disputed" && partial) {
+        return "Disputed · partially paid";
+    }
+    if (status === "partially_paid" && hasClaim) {
+        return "Partially paid · disputed";
+    }
+    if (status === "disputed" && hasClaim) {
+        return statusLabel(status);
+    }
+    return statusLabel(status);
+}
+
 export function pastDueQuestion(inv) {
     const name = inv.counterparty_name || inv.counterparty_email || "Client";
     if (!inv.due_date) return null;
@@ -82,7 +103,7 @@ export function invoiceDisplayRef(inv) {
 
 /** Status + key date line for invoice cards (promise/due/sent). */
 export function invoiceStatusDateLine(inv) {
-    const status = statusLabel(inv?.status);
+    const status = invoiceStatusDisplay(inv);
     if (inv?.status === "stale") return `${status} · No activity 120+ days`;
     if (inv?.promise_date) return `${status} · ${formatDate(inv.promise_date)}`;
     if (inv?.due_date) {

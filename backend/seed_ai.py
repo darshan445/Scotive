@@ -108,7 +108,12 @@ Rules:
 - The LATEST exchange decides amount and status. Never discard post-dispute or post-negotiation replies as chatter — a short late reply ("perfect, will process it by tomorrow") often carries the current status.
 - amount = final AGREED total after the full thread negotiation:
   - Start from the original USER invoice send (anchor message_id).
-  - A later USER revision (re-sent invoice with a new total) updates amount ONLY if the client accepts it.
+  - A later USER revision (re-sent invoice with a new total, OR an in-thread
+    correction like "revising this to $X", "actually it's $X", "correcting to $X",
+    "let's make it $X") updates amount to that figure. A proactive USER correction
+    does NOT require a prior client dispute — amount changes, status stays
+    invoiced/overdue (or whatever the latest CLIENT signal implies) unless a
+    dispute is still open and unresolved.
   - If the USER reduces the amount and the CLIENT rejects that reduction (e.g. "retain the bill as is", "don't reduce any efforts", "keep the original amount"), revert to the pre-reduction total — NOT the lowered figure.
   - Client explicit approval of a specific revised total → use that revised amount.
   - The USER accepting the CLIENT's disputed figure IS the agreement — use that figure even before the client replies again. When the USER states several figures across messages ("$750", then "$860", then "$750"), the LAST figure the two sides converge on wins.
@@ -118,12 +123,13 @@ Rules:
   - promised: client committed to pay by a FUTURE date or timeframe, or money is routed into a process but has NOT moved yet ("will pay next week", "expect it processed by end of month", "need another week or two", "sending this through AP today — should hit your account within the week", "will process this week") → set promise_date, resolved from the REPLY's message date: "end of month" = last day of that month; "next week" = +7 days; "a week or two" = +14 days; "within the week" = that week's Friday
   - partially_paid: client paid part, balance remains
   - disputed: client disputes amount/terms → set dispute_kind (wrong_amount when they say a different figure was agreed, e.g. "we agreed on $750, can you resend?" → disputed_claim_amount 750, amount stays the USER's invoiced total)
+  - MULTI-SIGNAL (critical): one CLIENT message can carry BOTH a dispute AND a partial payment ("We agreed $1,800 — but either way, sending $1,000 now as a partial"). In that case set enriched_status to partially_paid (money moved), ALSO set disputed_claim_amount + dispute_kind, put the dispute sentence in status_evidence (or the clearest claim phrase), set paid_amount / balance_remaining for the partial, and set needs_reply false — do NOT invent a separate clarification question from residual phrases like "will sort the rest after we confirm".
   - DISPUTE RESOLUTION: a wrong_amount dispute ENDS the moment the USER accepts or re-sends at the client's figure ("sure, let's make it $750 then", "corrected invoice attached — $750"). From that message on the invoice is NO LONGER disputed: amount = the agreed figure, and status comes from the LATEST client message — no further client reply → invoiced/null; client acceptance with a payment window ("perfect, will process it by tomorrow") → promised with promise_date resolved from that reply's date. Never return disputed based on an old dispute that a later message resolved.
   - paid_unconfirmed: PAST-TENSE / completed payment claims only, no bank receipt ("sent it over on venmo", "just paid through the link", "processed already", "sending it right now on venmo" — a direct transfer happening as they write). TENSE TEST: has the money already left the client's hands? "Sent/paid/transferred" = paid_unconfirmed; "will send / sending through AP / should arrive" = promised, never paid_unconfirmed. If part was already received, keep balance_remaining at the outstanding portion.
   - overdue: only when due_date is in the past relative to today AND no stronger status applies
   - null / invoiced: open invoice with no client status signal yet
 - client_approved: true when the client acknowledges/approves the invoice or routes it for payment ("approved on our end", "forwarded to AP", "routing to finance"). If the approval ALSO states an arrival window ("sending through AP today, should hit your account within the week"), set client_approved true AND enriched_status promised with promise_date resolved from that window — never paid_unconfirmed. A reference that "will be issued" later ("reference will be PO-88123 once issued") is NOT a payment reference. Set approval_quote to the client's sentence.
-- needs_reply: true when the client asks the USER something needing an answer — clarification ("can you break down the QA line item?") or UNCERTAINTY about payment ("can you check if this was already paid?"). Uncertainty is NEVER paid_unconfirmed; a clarification request is NOT a dispute. Status stays unchanged. Set needs_reply_quote.
+- needs_reply: true when the client asks the USER something needing an answer — clarification ("can you break down the QA line item?") or UNCERTAINTY about payment ("can you check if this was already paid?"). Uncertainty is NEVER paid_unconfirmed; a clarification request is NOT a dispute. Status stays unchanged. Set needs_reply_quote. NEVER set needs_reply when the same message is already classified as dispute, partial payment, promise, or payment claim — residual clauses in those messages are not standalone questions.
 - If the CLIENT corrects the payment-window anchor or due date ("QA held it until July 6th, count from there"), recompute due_date from the NEW anchor plus the invoice's stated window — status stays invoiced, not promised.
 - One client reply can set DIFFERENT statuses on DIFFERENT invoice rows — map by invoice number ("paying #77 today, need another week or two on #81" = #77 paid_unconfirmed AND #81 promised with its own promise_date).
 - SENDER DIRECTION: lines labelled "YOU →" are user-sent; "{client} → YOU" are client-sent.
@@ -763,13 +769,28 @@ def invoices_to_candidates(
             if quote:
                 row["approval_quote"] = quote[:500]
         if inv.get("needs_reply"):
-            row["needs_reply"] = True
-            quote = (inv.get("needs_reply_quote") or "").strip()
-            if quote:
-                row["needs_reply_quote"] = quote[:500]
+            # Suppress needs_reply when the same assessment already carries a
+            # concrete dispute/payment signal (TE-105 residual-phrase trap).
+            concrete = (
+                enriched_status in (
+                    "disputed", "partially_paid", "promised", "paid_unconfirmed",
+                )
+                or claimed_amount is not None
+                or paid_amount is not None
+            )
+            if not concrete:
+                row["needs_reply"] = True
+                quote = (inv.get("needs_reply_quote") or "").strip()
+                if quote:
+                    row["needs_reply_quote"] = quote[:500]
         if inv.get("dispute_kind"):
             row["dispute_kind"] = str(inv["dispute_kind"]).strip()[:40]
-        if claimed_amount is not None and enriched_status == "disputed":
+        # Keep claim amount for multi-signal (dispute + partial) rows too.
+        if claimed_amount is not None and (
+            enriched_status == "disputed"
+            or enriched_status == "partially_paid"
+            or inv.get("dispute_kind")
+        ):
             row["disputed_claim_amount"] = claimed_amount
         out.append(row)
     return out

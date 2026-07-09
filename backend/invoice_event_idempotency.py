@@ -12,6 +12,7 @@ EVENT_ACTION_MAP = {
     "partial_payment": "partial_payment",
     "dispute": "dispute",
     "payment_claimed": "payment_claim",
+    "correction": "invoice_corrected",
     "approved": "payment_approved",
     "question": "client_question",
     "due_date_adjusted": "due_date_adjusted",

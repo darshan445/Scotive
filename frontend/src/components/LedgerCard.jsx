@@ -20,7 +20,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 
-import { invoiceDisplayRef, isJunkInvoiceRef, statusLabel, formatLastFollowUp, lastFollowUpSentAt } from "@/lib/invoiceCopy";
+import { invoiceDisplayRef, isJunkInvoiceRef, statusLabel, invoiceStatusDisplay, formatLastFollowUp, lastFollowUpSentAt } from "@/lib/invoiceCopy";
 import { openLedgerInvoices, historyLedgerInvoices, historyLedgerSummary } from "@/lib/ledgerInvoices";
 import { InvoiceTimeline } from "@/components/InvoiceTimeline";
 import { useWorkspaceVersion } from "@/lib/workspaceRefresh";
@@ -38,11 +38,19 @@ const STATUS_STYLES = {
     stale: "bg-stone-100 text-stone-600 border-stone-200",
 };
 
-function StatusPill({ status }) {
-    const cls = STATUS_STYLES[status] || STATUS_STYLES.invoiced;
+function StatusPill({ inv }) {
+    const status = inv?.status;
+    const hasClaim = inv?.disputed_claim_amount != null && Number(inv.disputed_claim_amount) > 0;
+    const partial = status === "partially_paid"
+        || (Number(inv?.paid_amount || 0) > 0.005
+            && Number(inv?.balance_remaining ?? inv?.amount ?? 0) > 0.005);
+    const styleKey = (status === "partially_paid" && hasClaim) ? "disputed"
+        : (status === "disputed" && partial) ? "disputed"
+        : (status || "invoiced");
+    const cls = STATUS_STYLES[styleKey] || STATUS_STYLES.invoiced;
     return (
         <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border ${cls}`} data-testid="invoice-status-pill">
-            {statusLabel(status)}
+            {invoiceStatusDisplay(inv)}
         </span>
     );
 }
@@ -286,14 +294,15 @@ export function LedgerCard({ ledger, onChanged, variant = "open" }) {
                                             </td>
                                             <td className="px-4 py-3 align-top text-right font-mono tabular-nums text-sm">
                                                 <div>{formatMoney(inv.amount, inv.currency || "USD")}</div>
-                                                {inv.status === "partially_paid" && inv.balance_remaining != null && inv.balance_remaining < inv.amount ? (
+                                                {(inv.status === "partially_paid" || (Number(inv.paid_amount || 0) > 0 && inv.disputed_claim_amount != null))
+                                                    && inv.balance_remaining != null && inv.balance_remaining < inv.amount ? (
                                                     <div className="text-[11px] text-green-700 mt-0.5" data-testid="ledger-balance-remaining">
                                                         {formatMoney(inv.balance_remaining, inv.currency || "USD")} left
                                                     </div>
                                                 ) : null}
                                             </td>
                                             <td className="px-4 py-3 align-top">
-                                                <StatusPill status={inv.status} />
+                                                <StatusPill inv={inv} />
                                                 {followUpLine ? (
                                                     <div className="text-[10px] text-muted-foreground mt-1" data-testid="ledger-followup-sent">
                                                         {followUpLine}
