@@ -94,7 +94,8 @@ _SEED_SCHEMA_AND_RULES = """Return STRICT JSON only:
     "approval_quote": string|null,
     "needs_reply": true|false|null,
     "needs_reply_quote": string|null,
-    "dispute_kind": "wrong_amount"|"scope"|"quality"|"terms"|"other"|null
+    "dispute_kind": "wrong_amount"|"scope"|"quality"|"terms"|"other"|null,
+    "disputed_claim_amount": number|null
   }],
   "discarded_message_ids": [string]
 }
@@ -104,16 +105,20 @@ Rules:
 - Informal payment requests ARE invoices when the USER sent them with a clear amount.
 - Use PDF text as the primary source for amount, invoice number, and due date on the original send when present.
 - Read ALL provided messages chronologically — in-thread AND out-of-thread — before deciding each invoice row.
+- The LATEST exchange decides amount and status. Never discard post-dispute or post-negotiation replies as chatter — a short late reply ("perfect, will process it by tomorrow") often carries the current status.
 - amount = final AGREED total after the full thread negotiation:
   - Start from the original USER invoice send (anchor message_id).
   - A later USER revision (re-sent invoice with a new total) updates amount ONLY if the client accepts it.
   - If the USER reduces the amount and the CLIENT rejects that reduction (e.g. "retain the bill as is", "don't reduce any efforts", "keep the original amount"), revert to the pre-reduction total — NOT the lowered figure.
   - Client explicit approval of a specific revised total → use that revised amount.
+  - The USER accepting the CLIENT's disputed figure IS the agreement — use that figure even before the client replies again. When the USER states several figures across messages ("$750", then "$860", then "$750"), the LAST figure the two sides converge on wins.
+  - A CLIENT's claimed figure alone NEVER changes amount. Until the USER accepts or re-sends at the client's figure, amount stays the USER's originally invoiced total; put the client's figure in disputed_claim_amount and their sentence in status_evidence instead.
 - balance_remaining / paid_amount: set when client partial payment or remaining balance is clear; else null.
 - enriched_status (only when clearly supported by CLIENT messages, never from USER reminders alone):
   - promised: client committed to pay by a FUTURE date or timeframe, or money is routed into a process but has NOT moved yet ("will pay next week", "expect it processed by end of month", "need another week or two", "sending this through AP today — should hit your account within the week", "will process this week") → set promise_date, resolved from the REPLY's message date: "end of month" = last day of that month; "next week" = +7 days; "a week or two" = +14 days; "within the week" = that week's Friday
   - partially_paid: client paid part, balance remains
-  - disputed: client disputes amount/terms → set dispute_kind (wrong_amount when they say a different figure was agreed, e.g. "we agreed on $750, can you resend?")
+  - disputed: client disputes amount/terms → set dispute_kind (wrong_amount when they say a different figure was agreed, e.g. "we agreed on $750, can you resend?" → disputed_claim_amount 750, amount stays the USER's invoiced total)
+  - DISPUTE RESOLUTION: a wrong_amount dispute ENDS the moment the USER accepts or re-sends at the client's figure ("sure, let's make it $750 then", "corrected invoice attached — $750"). From that message on the invoice is NO LONGER disputed: amount = the agreed figure, and status comes from the LATEST client message — no further client reply → invoiced/null; client acceptance with a payment window ("perfect, will process it by tomorrow") → promised with promise_date resolved from that reply's date. Never return disputed based on an old dispute that a later message resolved.
   - paid_unconfirmed: PAST-TENSE / completed payment claims only, no bank receipt ("sent it over on venmo", "just paid through the link", "processed already", "sending it right now on venmo" — a direct transfer happening as they write). TENSE TEST: has the money already left the client's hands? "Sent/paid/transferred" = paid_unconfirmed; "will send / sending through AP / should arrive" = promised, never paid_unconfirmed. If part was already received, keep balance_remaining at the outstanding portion.
   - overdue: only when due_date is in the past relative to today AND no stronger status applies
   - null / invoiced: open invoice with no client status signal yet
@@ -154,6 +159,12 @@ Context (chronological, oldest first):
 Most conversations contain exactly ONE invoice — return one row for it. A single
 email can state MULTIPLE distinct invoices (e.g. "Invoice #77: $600, Invoice #81: $600")
 — then return one row per distinct invoice, each with the same message_id.
+
+A CURRENT_TRACKED_STATE line may be included: that is the state stored after the
+PREVIOUS sync — possibly STALE background, never ground truth. Re-read the whole
+conversation and return the state as of the LATEST message; when newer messages
+change the amount or status, return the NEW values instead of restating the
+tracked state.
 
 """
     + _SEED_SCHEMA_AND_RULES
@@ -266,6 +277,34 @@ def resolve_negotiated_amount(
                 return prev_amt
 
     return ai_amount
+
+
+_AMOUNT_TOKEN_RE = re.compile(r"\d[\d,]*(?:\.\d{1,2})?")
+
+
+def _user_stated_amounts(
+    messages: list[dict], my_email: str, thread_id: str | None,
+) -> set[float]:
+    """Every figure the USER stated in their own words (quoted history stripped),
+    subject lines, or attached PDFs — the only figures allowed to become amount."""
+    out: set[float] = set()
+    my = my_email.lower()
+    for m in messages:
+        if _extract_email_addr(m.get("from", "")) != my:
+            continue
+        if thread_id and m.get("thread_id") and m["thread_id"] != thread_id:
+            continue
+        text = "\n".join([
+            preprocess_body(m.get("body") or m.get("snippet") or "", 4000),
+            m.get("pdf_text") or "",
+            m.get("subject") or "",
+        ])
+        for tok in _AMOUNT_TOKEN_RE.findall(text):
+            try:
+                out.add(round(float(tok.replace(",", "")), 2))
+            except ValueError:
+                pass
+    return out
 
 
 def _draft_invoices_from_sent(sent_msgs: list[dict]) -> list[dict]:
@@ -577,7 +616,7 @@ def invoices_to_candidates(
     confidence_min: float | None = None,
 ) -> list[dict]:
     """Map AI invoice rows to seed_candidates documents."""
-    from seed_scan import _client_display_name, _parse_msg_date, extract_due_date
+    from seed_scan import _client_display_name, _parse_msg_date, extract_amount_currency, extract_due_date
     from ledger_reconcile import client_identity_key, normalize_source_date
     from promise_dates import resolve_stated_date
 
@@ -640,6 +679,31 @@ def invoices_to_candidates(
             message_dt=sent_dt,
             message=src,
         )
+        claimed_amount = inv.get("disputed_claim_amount")
+        try:
+            claimed_amount = float(claimed_amount) if claimed_amount is not None else None
+        except (TypeError, ValueError):
+            claimed_amount = None
+        if enriched_status == "disputed":
+            # CORE RULE: a client's claimed figure never becomes the tracked
+            # amount. An unresolved dispute keeps the USER's invoiced total —
+            # if the AI's amount isn't stated anywhere in the user's own words,
+            # fall back to the anchor email's own total and keep the claim
+            # separately for context.
+            stated = _user_stated_amounts(
+                list(messages_by_id.values()), my_email, src.get("thread_id"),
+            )
+            if not any(abs(s - float(amount)) <= 0.01 for s in stated):
+                original, _cur = extract_amount_currency(src)
+                if original:
+                    if claimed_amount is None:
+                        claimed_amount = float(amount)
+                    logger.info(
+                        "seed.dispute GUARD anchor=%s ai_amount=%.2f → user_amount=%.2f",
+                        mid, float(amount), float(original),
+                    )
+                    amount = float(original)
+
         paid_amount = inv.get("paid_amount")
         balance_remaining = inv.get("balance_remaining")
         if paid_amount is not None:
@@ -705,6 +769,8 @@ def invoices_to_candidates(
                 row["needs_reply_quote"] = quote[:500]
         if inv.get("dispute_kind"):
             row["dispute_kind"] = str(inv["dispute_kind"]).strip()[:40]
+        if claimed_amount is not None and enriched_status == "disputed":
+            row["disputed_claim_amount"] = claimed_amount
         out.append(row)
     return out
 

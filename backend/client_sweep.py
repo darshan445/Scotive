@@ -1097,10 +1097,11 @@ async def _write_event(
         await db.invoices.update_one({"_id": invoice_id}, {"$set": patch})
         await clear_watching_on_client_event(db, invoice_id, now_iso)
     elif ev_type == "dispute":
-        await db.invoices.update_one(
-            {"_id": invoice_id},
-            {"$set": {"status": "disputed", "chasing_paused": True, **activity}},
-        )
+        patch = {"status": "disputed", "chasing_paused": True, **activity}
+        if ev.get("claimed_amount") is not None:
+            # Reference only — the tracked amount never moves on a client claim.
+            patch["disputed_claim_amount"] = float(ev["claimed_amount"])
+        await db.invoices.update_one({"_id": invoice_id}, {"$set": patch})
         await clear_watching_on_client_event(db, invoice_id, now_iso)
     elif ev_type == "partial_payment" and ev.get("amount"):
         bal = float(inv.get("balance_remaining") if inv and inv.get("balance_remaining") is not None else inv.get("amount") or 0)
@@ -1205,6 +1206,8 @@ async def _write_event(
             "confidence": ev.get("confidence"),
             "date": ev.get("date"),
             "amount": ev.get("amount"),
+            "old_amount": ev.get("old_amount"),
+            "claimed_amount": ev.get("claimed_amount"),
             "reference": ev.get("reference"),
             "dispute_kind": ev.get("dispute_kind"),
             "invoice_ref": ev.get("invoice_ref"),

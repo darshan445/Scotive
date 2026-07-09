@@ -207,6 +207,8 @@ def build_ledger_invoice_from_candidate(
             base["needs_reply_quote"] = doc["needs_reply_quote"]
     if doc.get("dispute_kind"):
         base["dispute_kind"] = doc["dispute_kind"]
+    if doc.get("disputed_claim_amount") is not None:
+        base["disputed_claim_amount"] = float(doc["disputed_claim_amount"])
     # PRD §8: promise and dispute pause chasing; a payment claim awaits confirmation.
     if status in ("promised", "disputed", "paid_unconfirmed"):
         base["chasing_paused"] = True

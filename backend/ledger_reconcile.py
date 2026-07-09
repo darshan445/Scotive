@@ -459,6 +459,7 @@ async def apply_invoice_correction(
         "balance_remaining": new_bal,
         "status": status,
         "promise_date": None,
+        "disputed_claim_amount": None,
         "chasing_paused": False,
         "status_updated_at": now_iso,
         "last_activity_at": now_iso,

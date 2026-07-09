@@ -178,9 +178,15 @@ export function CurationScreen({ candidates, onConfirm, busy, scanning = false }
                                                                 {c.source_subject || c.invoice_ref || "Invoice"}
                                                             </div>
                                                             {knownStatus ? (
-                                                                <div className="text-[10px] font-mono uppercase tracking-wide text-amber-800 mt-1">
-                                                                    {knownStatus}
-                                                                    {c.status_evidence ? ` — ${c.status_evidence}` : ""}
+                                                                <div className="text-[10px] font-mono tracking-wide text-amber-800 mt-1">
+                                                                    <span className="uppercase">{knownStatus}</span>
+                                                                    {c.status_evidence ? (
+                                                                        <span className="normal-case">
+                                                                            {" — "}
+                                                                            {c.enriched_status === "disputed" ? "client says: " : ""}
+                                                                            “{c.status_evidence}”
+                                                                        </span>
+                                                                    ) : null}
                                                                 </div>
                                                             ) : null}
                                                         </div>
