@@ -796,6 +796,40 @@ def invoices_to_candidates(
     return out
 
 
+def _anchor_invoice_refs(sent_msgs: list[dict]) -> list[str | None]:
+    """Detect distinct invoice refs in anchor sends for one-call-per-invoice.
+
+    Returns [None] when a single undifferentiable invoice is present (no
+    anchor_invoice_ref needed). Returns multiple refs when the same send
+    clearly lists several invoice numbers.
+    """
+    # Collect plausible refs from subjects + bodies of anchors
+    refs: list[str] = []
+    seen: set[str] = set()
+    for m in sent_msgs:
+        text = " ".join([
+            m.get("subject") or "",
+            preprocess_body(m.get("body") or m.get("snippet") or "", 2000),
+            m.get("pdf_text") or "",
+        ])
+        # Common patterns: Invoice #77, INV-77, #81
+        for m_ref in re.finditer(
+            r"(?i)(?:invoice\s*#?\s*|inv[#\-\s]*)([A-Z0-9][A-Z0-9\-]{1,20})"
+            r"|(?<![A-Za-z0-9])#([A-Z0-9][A-Z0-9\-]{1,20})",
+            text,
+        ):
+            raw = (m_ref.group(1) or m_ref.group(2) or "").strip()
+            norm = normalize_invoice_ref(raw)
+            if not norm or not is_plausible_invoice_ref(norm):
+                continue
+            if norm not in seen:
+                seen.add(norm)
+                refs.append(norm)
+    if len(refs) <= 1:
+        return [None]
+    return refs
+
+
 async def run_seed_ai_extraction(
     access: str,
     messages: list[dict],
@@ -806,9 +840,14 @@ async def run_seed_ai_extraction(
     now_iso: str,
     confidence_min: float | None = None,
     on_unit=None,
+    use_seed_rulebook: bool = False,
 ) -> tuple[list[dict], dict[str, int]]:
     """Per-invoice pipeline: AI gate each sent email, then one focused AI decision
     per invoice conversation (thread + out-of-thread mail), streamed via on_unit.
+
+    When use_seed_rulebook=True (90d onboarding), Extract LLM uses
+    rulebook_seed_scan.txt + prepared JSON I/O. Incremental keeps the legacy
+    SEED_INVOICE_PROMPT path.
 
     on_unit(rows) is awaited as each conversation finalizes so results can be
     written to the DB (and shown in the UI) without waiting for the whole scan.
@@ -822,7 +861,12 @@ async def run_seed_ai_extraction(
         "ai_fail": 0,
         "threads_fetched": 0,
         "oot_kept": 0,
+        "seed_rulebook": bool(use_seed_rulebook),
     }
+
+    if use_seed_rulebook:
+        from seed_rulebook import reset_llm_io_log
+        reset_llm_io_log()
 
     # Stage 1 — single-email AI gate: is this actually the user billing a client?
     async def _gate(m: dict) -> bool:
@@ -870,26 +914,68 @@ async def run_seed_ai_extraction(
             messages_by_id = {m["id"]: m for m in combined}
             anchor_ids = [m["id"] for m in sent_msgs if m.get("id")]
 
+            if use_seed_rulebook:
+                from seed_rulebook import (
+                    build_seed_scan_input,
+                    extract_seed_scan_with_rulebook,
+                    rulebook_result_to_candidate,
+                )
+                # One LLM call per invoice (rulebook rule 2)
+                refs = _anchor_invoice_refs(sent_msgs)
+                unit_rows: list[dict] = []
+                any_ok = False
+                for ref in refs:
+                    prepared = build_seed_scan_input(
+                        my_email=my_email,
+                        client_email=client,
+                        messages=combined,
+                        anchor_ids=anchor_ids,
+                        anchor_invoice_ref=ref,
+                    )
+                    result = await extract_seed_scan_with_rulebook(client, prepared)
+                    if not result:
+                        continue
+                    any_ok = True
+                    row = rulebook_result_to_candidate(
+                        client, result, messages_by_id,
+                        user_id=user_id, job_id=job_id, now_iso=now_iso,
+                        my_email=my_email, anchor_ids=anchor_ids,
+                        confidence_min=confidence_min,
+                    )
+                    if row:
+                        unit_rows.append(row)
+                if not any_ok:
+                    stats["ai_fail"] += 1
+                    return
+                stats["ai_ok"] += 1
+                if not unit_rows:
+                    return
+                all_candidates.extend(unit_rows)
+                if on_unit:
+                    await on_unit(unit_rows)
+                return
+
+            # Legacy extract (incremental new-invoice path)
             result = await extract_client_invoices_with_ai(
                 client, combined, my_email,
                 anchor_ids=anchor_ids,
                 system_prompt=SEED_INVOICE_PROMPT,
             )
-        if not result:
-            stats["ai_fail"] += 1
-            return
-        stats["ai_ok"] += 1
-        rows = invoices_to_candidates(
-            client, result, messages_by_id,
-            user_id=user_id, job_id=job_id, now_iso=now_iso,
-            my_email=my_email,
-            confidence_min=confidence_min,
-        )
-        if not rows:
-            return
-        all_candidates.extend(rows)
-        if on_unit:
-            await on_unit(rows)
+            if not result:
+                stats["ai_fail"] += 1
+                return
+            stats["ai_ok"] += 1
+            rows = invoices_to_candidates(
+                client, result, messages_by_id,
+                user_id=user_id, job_id=job_id, now_iso=now_iso,
+                my_email=my_email,
+                confidence_min=confidence_min,
+            )
+            if not rows:
+                return
+            all_candidates.extend(rows)
+            if on_unit:
+                await on_unit(rows)
 
     await asyncio.gather(*[_one_unit(t, ms) for t, ms in units.items()])
     return all_candidates, stats

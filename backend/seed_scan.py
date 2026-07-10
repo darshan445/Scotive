@@ -420,6 +420,13 @@ async def confirm_seed_curation(
             outcome, inv_id = await upsert_sweep_invoice(db, user_id, inv_doc, now_iso=now_iso)
             if inv_id:
                 tracked_invoice_ids.append(inv_id)
+                # Persist rulebook evidence trail when present on the candidate
+                seed_events = doc.get("seed_events") or []
+                if seed_events and doc.get("seed_rulebook"):
+                    from seed_rulebook import write_seed_events_for_invoice
+                    await write_seed_events_for_invoice(
+                        db, user_id, inv_id, seed_events, now_iso=now_iso,
+                    )
             if outcome == "created":
                 tracked += 1
 

@@ -415,6 +415,8 @@ async def run_gmail_sync(
 
         if os.environ.get("OPENROUTER_API_KEY"):
             await _set_job_phase("ai", counts)
+            # Onboarding (90d seed): Extract LLM uses rulebook_seed_scan.txt +
+            # prepared JSON I/O. Incremental path keeps the legacy extract prompt.
             _, ai_stats = await run_seed_ai_extraction(
                 access,
                 messages,
@@ -424,6 +426,7 @@ async def run_gmail_sync(
                 now_iso=now_iso,
                 confidence_min=confidence_min,
                 on_unit=_write_unit,
+                use_seed_rulebook=(mode == "onboarding"),
             )
         else:
             logger.warning("sync FALLBACK mode=%s reason=no_openrouter_key", mode)
