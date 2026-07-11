@@ -90,17 +90,21 @@ AMOUNT_LANGUAGE_RE = re.compile(
     r"|(?:\b(?:usd|inr|eur|rs\.?)\s*\d)",
     re.I,
 )
-# Correction intent — required with amount language so plain chases
-# ("reminder: $600 still due") do not trigger a re-eval AI call.
+# Correction / acceptance intent — required with amount language so plain
+# chases ("reminder: $600 still due") do not trigger a re-eval AI call.
+# Includes soft dispute-acceptance ("Confirmed, $1,850 it is.", "Agreed — $950.").
 CORRECTION_INTENT_RE = re.compile(
     r"(?i)\b(?:"
     r"revis(?:e|ing|ed)|correct(?:ing|ed|ion)?|"
+    r"confirm(?:ed|ing)?|agreed?|you'?re right|"
+    r"that'?s (?:right|correct|fine|it)|"
     r"actually|miscounted|my mistake|"
     r"let'?s make it|should (?:be|have been)|"
     r"update(?:d)?\s+(?:to|the\s+amount)|"
     r"chang(?:e|ing|ed)\s+(?:to|the\s+amount)|"
     r"new\s+(?:total|amount)|adjust(?:ing|ed)?|"
-    r"make\s+it\s+[$₹€£]?\d|down\s+to\s+[$₹€£]?\d"
+    r"make\s+it\s+[$₹€£]?\d|down\s+to\s+[$₹€£]?\d|"
+    r"it is\b"
     r")\b"
 )
 
@@ -120,6 +124,24 @@ def _is_amount_correction(msg: dict) -> bool:
 def _states_amount(msg: dict) -> bool:
     """True when the user's own words state a money amount (tests / diagnostics)."""
     return bool(AMOUNT_LANGUAGE_RE.search(_msg_own_text(msg)))
+
+
+def _should_trigger_user_reeval(msg: dict, inv: dict) -> bool:
+    """User send that should open Stage 4 without new client activity.
+
+    Explicit correction/acceptance language always qualifies. While a dispute
+    is open, any amount-stating user reply also qualifies — acceptance of the
+    client's figure is often soft ("Confirmed, $1,850 it is.") and must not
+    be buried as a chase.
+    """
+    if _is_amount_correction(msg):
+        return True
+    if (
+        (inv.get("status") == "disputed" or inv.get("disputed_claim_amount") is not None)
+        and _states_amount(msg)
+    ):
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -184,13 +206,23 @@ async def _split_known_new(
 # ---------------------------------------------------------------------------
 
 async def _invoice_processed_message_ids(
-    db, user_id, inv: dict, conversation_ids: list[str],
+    db, user_id, inv: dict, conversation_ids: list[str] | None = None,
 ) -> list[str]:
-    """Message ids already applied to this invoice (events + source + global registry)."""
+    """Message ids already applied to this invoice's timeline.
+
+    ONLY source + invoice_events (+ reeval_seen). Do NOT merge the global
+    `processed_messages` registry — that marks "seen for new-invoice gating"
+    and would hide user amount-corrections that Stage 2 already registered
+    before Stage 4 runs.
+    """
+    _ = conversation_ids  # reserved for callers; not merged into processed set
     seen: set[str] = set()
     src = inv.get("source_message_id")
     if src:
         seen.add(src)
+    for mid in inv.get("reeval_seen_message_ids") or []:
+        if mid:
+            seen.add(mid)
     async for ev in db.invoice_events.find(
         {"user_id": user_id, "invoice_id": inv["_id"]},
         {"meta.message_id": 1},
@@ -198,10 +230,18 @@ async def _invoice_processed_message_ids(
         mid = (ev.get("meta") or {}).get("message_id")
         if mid:
             seen.add(mid)
-    if conversation_ids:
-        already = await _processed_ids(db, user_id, conversation_ids)
-        seen.update(already)
     return sorted(seen)
+
+
+async def _mark_reeval_seen(db, inv_id, message_ids: list[str]) -> None:
+    """Remember messages considered in a reeval pass (even when new_events was empty)."""
+    mids = [m for m in message_ids if m]
+    if not mids:
+        return
+    await db.invoices.update_one(
+        {"_id": inv_id},
+        {"$addToSet": {"reeval_seen_message_ids": {"$each": mids}}},
+    )
 
 
 async def _apply_reeval_top_level(
@@ -220,13 +260,15 @@ async def _apply_reeval_top_level(
         changed = True
 
     new_ref = result.get("invoice_ref")
-    if new_ref and new_ref != (inv.get("invoice_ref_normalized") or inv.get("invoice_ref")):
-        from ledger_reconcile import normalize_invoice_ref
-        norm = normalize_invoice_ref(new_ref, inv.get("source_subject"))
-        if norm:
-            patch["invoice_ref"] = new_ref
-            patch["invoice_ref_normalized"] = norm
-            changed = True
+    cur_ref = inv.get("invoice_ref_normalized") or inv.get("invoice_ref")
+    if new_ref and str(new_ref).strip() and str(new_ref).strip().lower() != "null":
+        from ledger_reconcile import is_plausible_invoice_ref, normalize_invoice_ref
+        if str(new_ref).upper().replace(" ", "") != str(cur_ref or "").upper().replace(" ", ""):
+            norm = normalize_invoice_ref(new_ref, inv.get("source_subject"))
+            if norm and is_plausible_invoice_ref(norm):
+                patch["invoice_ref"] = new_ref if is_plausible_invoice_ref(str(new_ref)) else norm
+                patch["invoice_ref_normalized"] = norm
+                changed = True
 
     # Post-process may clear a resolved dispute claim after correction.
     if (
@@ -411,15 +453,24 @@ async def _reevaluate_tracked(
             correction_trigger = None
             if not new_client:
                 # No new client activity — re-evaluate when the user sent an
-                # amount-correction message. Plain follow-ups/chases skip.
+                # amount-correction / dispute-acceptance message. Plain chases skip.
                 correction_trigger = next(
                     (m for m in (unit.get("user_msgs") or [])
                      if _extract_email_addr(m.get("from", "")) == my_email.lower()
-                     and _is_amount_correction(m)),
+                     and _should_trigger_user_reeval(m, inv)),
                     None,
                 )
                 if not correction_trigger:
                     stats["skipped_no_activity"] += 1
+                    # Only bury chase/follow-ups with no money language. Amount-
+                    # bearing user msgs that failed the intent gate stay eligible
+                    # so a later sync (or gate fix) can still re-eval them.
+                    chase_ids = [
+                        m["id"] for m in (unit.get("user_msgs") or [])
+                        if m.get("id") and not _states_amount(m)
+                    ]
+                    processed.extend(chase_ids)
+                    await _mark_reeval_seen(db, inv["_id"], chase_ids)
                     if REEVAL_DEBUG:
                         logger.info(
                             "reeval SKIP inv=%s reason=no_activity user_msgs=%s",
@@ -434,9 +485,23 @@ async def _reevaluate_tracked(
 
             client = (inv.get("counterparty_email") or "").lower()
             conv_ids = [m["id"] for m in combined if m.get("id")]
-            processed_ids = await _invoice_processed_message_ids(
-                db, user_id, inv, conv_ids,
-            )
+            processed_ids = await _invoice_processed_message_ids(db, user_id, inv, conv_ids)
+            # Unbury a correction trigger that was previously marked reeval_seen
+            # without ever writing an invoice_event (false-negative intent gate).
+            if correction_trigger and correction_trigger.get("id"):
+                tid = correction_trigger["id"]
+                if tid in processed_ids:
+                    has_event = await db.invoice_events.find_one({
+                        "user_id": user_id,
+                        "invoice_id": inv["_id"],
+                        "meta.message_id": tid,
+                    }, {"_id": 1})
+                    if not has_event:
+                        processed_ids = [x for x in processed_ids if x != tid]
+                        logger.info(
+                            "reeval UNBURY inv=%s msg=%s reason=seen_without_event",
+                            inv["_id"], tid,
+                        )
             tracked = build_tracked_state(inv, processed_ids)
             prepared = build_reeval_input(
                 my_email=my_email,
@@ -466,21 +531,26 @@ async def _reevaluate_tracked(
             return
 
         stats["reevaluated"] += 1
-        # Mark newly seen activity so overlapping windows do not re-call.
-        processed.extend(m["id"] for m in new_client)
+        # Messages considered this pass (client activity + correction trigger +
+        # any event message_ids). Mark as applied to THIS invoice so the next
+        # sync does not re-emit; also mark globally so Stage 2 skips them.
+        considered: list[str] = [m["id"] for m in new_client if m.get("id")]
         if correction_trigger and correction_trigger.get("id"):
-            processed.append(correction_trigger["id"])
-        # Also mark any message ids that produced new_events
+            considered.append(correction_trigger["id"])
         for ev in result.get("new_events") or []:
             if ev.get("message_id"):
-                processed.append(ev["message_id"])
+                considered.append(ev["message_id"])
+        # Unprocessed user msgs from triggered that we inspected this pass
+        for m in unit.get("user_msgs") or []:
+            if m.get("id"):
+                considered.append(m["id"])
+        processed.extend(considered)
+        await _mark_reeval_seen(db, inv["_id"], considered)
 
         events = rulebook_events_to_write_events(
             result,
             invoice_ref=inv.get("invoice_ref_normalized") or inv.get("invoice_ref"),
         )
-        # Rulebook already emits only genuine new_events; processed_message_ids
-        # filter is the safety net. Do not drop on model confidence (often 0.0).
         for e in events:
             if e.get("type") == "correction" and e.get("old_amount") is None:
                 e["old_amount"] = float(inv.get("amount") or 0)
@@ -493,7 +563,6 @@ async def _reevaluate_tracked(
                 inv.get("promise_date"), result.get("promise_date"),
                 len(result.get("new_events") or []),
             )
-            # Still apply residual top-level clears (e.g. claim amount) if any.
             await _apply_reeval_top_level(db, inv, result, now_iso)
             return
 
@@ -507,7 +576,9 @@ async def _reevaluate_tracked(
                 db, user_id, inv["_id"], ev, messages_by_id, now_iso,
                 my_email=my_email,
             )
-        await _apply_reeval_top_level(db, inv, result, now_iso)
+        # Reload for top-level patch after events mutated the row
+        inv_after = await db.invoices.find_one({"_id": inv["_id"]}) or inv
+        await _apply_reeval_top_level(db, inv_after, result, now_iso)
         stats["state_changes"] += 1
         stats["corrections"] += sum(1 for e in events if e.get("type") == "correction")
         logger.info(
@@ -596,7 +667,10 @@ async def run_incremental_pipeline(db, user_id) -> dict[str, Any]:
             due_prompts.extend(unit_prompts)
 
         new_ids = {m["id"] for m in new_msgs}
-        processed_now = [m["id"] for m in fresh if m["id"] not in new_ids]
+        # Tracked-thread sends (triggered) must NOT be marked processed before
+        # Stage 4 — otherwise amount-corrections land in processed_message_ids
+        # and the reeval rulebook emits nothing for them.
+        processed_now: list[str] = []
         if new_msgs:
             _, ai_stats = await run_seed_ai_extraction(
                 access, new_msgs, my_email,
@@ -623,6 +697,7 @@ async def run_incremental_pipeline(db, user_id) -> dict[str, Any]:
             triggered, now_iso,
         )
         counts.update(reeval_stats)
+        # Stage 4 marks triggered/correction message ids via its own processed list
 
         await dedupe_existing_invoices(db, user_id, now_iso)
 

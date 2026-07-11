@@ -189,6 +189,8 @@ class ReevalFixTest:
             ("correcting to $400", True),
             ("let's make it $750 then", True),
             ("my mistake — it's actually $300", True),
+            ("Confirmed, $1,850 it is.", True),
+            ("Agreed — $950.", True),
             ("Reminder: $600 still due Aug 1.", False),
             ("Following up on the $2,000 invoice.", False),
             ("Just checking in — invoice #TB-102 for $600.", False),

@@ -86,6 +86,11 @@ MON_DAY_YEAR_RE = re.compile(
     r"\b([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{2,4})\b",
     re.I,
 )
+# "by July 20" / "July 20" — year inferred from message send date
+MON_DAY_NO_YEAR_RE = re.compile(
+    r"\b(?:by|on|until|before|for)?\s*([A-Za-z]{3,9})\s+(\d{1,2})\b(?!\s*,?\s*\d{2,4})",
+    re.I,
+)
 
 
 def _weekday_index(name: str) -> int:
@@ -185,6 +190,18 @@ def _parse_mon_day_year(mon: str, day: str, year: str) -> Optional[str]:
     return None
 
 
+def _parse_mon_day_anchored(mon: str, day: str, anchor: date) -> Optional[str]:
+    """Month+day without year → anchor year, or next year if already past."""
+    for y in (anchor.year, anchor.year + 1):
+        parsed = _parse_mon_day_year(mon, day, str(y))
+        if not parsed:
+            continue
+        d = date.fromisoformat(parsed)
+        if d >= anchor or y > anchor.year:
+            return parsed
+    return None
+
+
 def _parse_explicit_token(token: str, anchor: date) -> Optional[str]:
     token = token.strip()
     m = DAY_MON_YEAR_RE.search(token)
@@ -225,6 +242,13 @@ def extract_explicit_due_from_text(text: str, anchor: date | None = None) -> Opt
     parsed = _parse_explicit_in_text(text, base)
     if parsed:
         return parsed
+
+    m = MON_DAY_NO_YEAR_RE.search(text)
+    if m:
+        parsed = _parse_mon_day_anchored(m.group(1), m.group(2), base)
+        if parsed:
+            return parsed
+
     return None
 
 

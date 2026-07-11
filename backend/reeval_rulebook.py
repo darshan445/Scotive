@@ -189,6 +189,8 @@ def filter_new_events_to_unprocessed(parsed: dict, tracked_state: dict) -> dict:
 
 def apply_promise_date_resolution(parsed: dict) -> dict:
     """Overwrite model-guessed promise dates with code-computed ones."""
+    from promise_dates import extract_explicit_due_from_text
+
     latest_resolved: str | None = None
     for event in parsed.get("new_events") or []:
         if event.get("type") != "promise":
@@ -204,16 +206,20 @@ def apply_promise_date_resolution(parsed: dict) -> dict:
             except ValueError:
                 anchor = None
         resolved = None
-        if phrase:
+        # Prefer explicit calendar dates ("July 20", "2026-07-20") over relative math.
+        for candidate in (phrase, data.get("date"), event.get("quote")):
+            if not candidate:
+                continue
             try:
-                resolved = datetime.strptime(str(phrase).strip()[:10], "%Y-%m-%d").strftime("%Y-%m-%d")
+                resolved = datetime.strptime(str(candidate).strip()[:10], "%Y-%m-%d").strftime("%Y-%m-%d")
+                break
             except ValueError:
-                resolved = resolve_relative_date(str(phrase), anchor)
-        if not resolved and data.get("date"):
-            try:
-                resolved = datetime.strptime(str(data["date"])[:10], "%Y-%m-%d").strftime("%Y-%m-%d")
-            except ValueError:
-                resolved = None
+                resolved = extract_explicit_due_from_text(str(candidate), anchor)
+                if resolved:
+                    break
+                resolved = resolve_relative_date(str(candidate), anchor)
+                if resolved:
+                    break
         data["date"] = resolved
         if resolved:
             latest_resolved = resolved
