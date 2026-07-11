@@ -394,17 +394,25 @@ async def find_related_invoice(
             return existing
 
     if thread_id:
-        inv = await db.invoices.find_one(
-            {
-                "user_id": user_id,
-                "client_identity_key": client_key,
-                "source_thread_id": thread_id,
-            },
-            sort=INVOICE_MONGO_SORT,
-        )
-        if inv:
-            if amount is None or amounts_close(amount, float(inv.get("amount") or 0)):
+        thread_query: dict[str, Any] = {
+            "user_id": user_id,
+            "client_identity_key": client_key,
+            "source_thread_id": thread_id,
+        }
+        if norm_ref:
+            # Match only the same invoice number on this thread — never a sibling
+            # (#M-14 vs #J-19 often share amount + thread).
+            inv = await db.invoices.find_one(
+                {**thread_query, "invoice_ref_normalized": norm_ref},
+                sort=INVOICE_MONGO_SORT,
+            )
+            if inv:
                 return inv
+        else:
+            inv = await db.invoices.find_one(thread_query, sort=INVOICE_MONGO_SORT)
+            if inv:
+                if amount is None or amounts_close(amount, float(inv.get("amount") or 0)):
+                    return inv
 
     followup = is_invoice_followup(subject)
     if amount is not None and (followup or not norm_ref):

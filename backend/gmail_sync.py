@@ -239,6 +239,12 @@ async def _candidates_to_ledger(
         )
         if outcome == "created" and inv_id:
             created += 1
+            seed_events = doc.get("seed_events") or []
+            if seed_events and doc.get("seed_rulebook"):
+                from seed_rulebook import write_seed_events_for_invoice
+                await write_seed_events_for_invoice(
+                    db, user_id, inv_id, seed_events, now_iso=now_iso,
+                )
             row = await db.invoices.find_one({"_id": inv_id})
             if row:
                 payload = {
@@ -415,8 +421,8 @@ async def run_gmail_sync(
 
         if os.environ.get("OPENROUTER_API_KEY"):
             await _set_job_phase("ai", counts)
-            # Onboarding (90d seed): Extract LLM uses rulebook_seed_scan.txt +
-            # prepared JSON I/O. Incremental path keeps the legacy extract prompt.
+            # Onboarding (90d seed) + incremental new-invoice extract both use
+            # rulebook_seed_scan.txt + prepared JSON I/O.
             _, ai_stats = await run_seed_ai_extraction(
                 access,
                 messages,
@@ -426,7 +432,7 @@ async def run_gmail_sync(
                 now_iso=now_iso,
                 confidence_min=confidence_min,
                 on_unit=_write_unit,
-                use_seed_rulebook=(mode == "onboarding"),
+                use_seed_rulebook=True,
             )
         else:
             logger.warning("sync FALLBACK mode=%s reason=no_openrouter_key", mode)

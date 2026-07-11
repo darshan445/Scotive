@@ -5,15 +5,13 @@ Mirrors the onboarding per-invoice flow, adjusted to the sync window:
   bulk sent-mail fetch (window) → cheap filter
     → registry check (processed_messages / ledger by Gmail message id)
     → known invoice? skip the AI gate : AI gate for genuinely new sends
-  New invoice emails  → full thread + out-of-thread context → one AI decision
-                        per conversation → ledger row streamed (instant UI).
+  New invoice emails  → full thread + out-of-thread context → rulebook_seed_scan
+                        Extract → ledger row streamed (instant UI).
   Tracked invoices    → re-evaluated when the window holds new client
                         activity (in-thread reply or out-of-thread mention),
                         or when the USER sends an amount-correction message in
-                        the tracked thread (proactive revision OR accepting a
-                        dispute); the AI sees the whole conversation + current
-                        tracked state, and the result is written only when it
-                        changes the stored state (surfaces in "Needs you today").
+                        the tracked thread; rulebook_reeval sees the whole
+                        conversation + tracked_state and writes only new_events.
                         Plain follow-ups/chases with no correction language stay
                         skipped (skipped_no_activity).
 
@@ -23,7 +21,6 @@ message is gated/analyzed twice across overlapping windows.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import re
@@ -63,12 +60,16 @@ from ledger_reconcile import (
 from post_chase import run_post_chase_tick
 from post_track_enrichment import _out_of_thread_relevance
 from prior_chase import enrich_candidates_with_prior_chases
+from reeval_rulebook import (
+    build_reeval_input,
+    build_tracked_state,
+    extract_reeval_with_rulebook,
+    normalize_reeval_status,
+    rulebook_events_to_write_events,
+)
 from seed_ai import (
     SEED_AI_CONCURRENCY,
-    SEED_INVOICE_PROMPT,
     _merge_client_messages,
-    _normalize_enriched_status,
-    extract_client_invoices_with_ai,
     run_seed_ai_extraction,
 )
 from seed_scan import _ignored_ids, collapse_followups_incremental
@@ -77,8 +78,6 @@ logger = logging.getLogger("scotive.incremental_sync")
 
 # Recent mail: slightly lower bar than onboarding curation (user already confirmed historical)
 INCREMENTAL_CONFIDENCE_MIN = 0.5
-# Re-evaluating an already-tracked invoice changes stored state — higher bar.
-REEVAL_CONFIDENCE_MIN = 0.65
 CLIENT_QUERY_CHUNK = 15
 MAX_CLIENT_MSGS = 60
 # Verbose re-eval diagnostics (AI inputs/outputs, window decisions).
@@ -112,41 +111,15 @@ def _msg_own_text(msg: dict) -> str:
     )
 
 
-def _states_amount(msg: dict) -> bool:
-    return bool(AMOUNT_LANGUAGE_RE.search(_msg_own_text(msg)))
-
-
 def _is_amount_correction(msg: dict) -> bool:
     """True when the user's own words revise the invoice amount (not a chase)."""
     text = _msg_own_text(msg)
     return bool(AMOUNT_LANGUAGE_RE.search(text) and CORRECTION_INTENT_RE.search(text))
 
 
-def _find_amount_message(
-    combined: list[dict], my_email: str, amount: float,
-) -> Optional[dict]:
-    """Newest user-sent message whose own text states `amount` (correction anchor)."""
-    pat = re.compile(rf"(?<![\d.]){re.escape(f'{amount:g}')}(?:\.0{{1,2}})?(?!\d)")
-    best, best_dt = None, None
-    for m in combined:
-        if _extract_email_addr(m.get("from", "")) != my_email.lower():
-            continue
-        text = preprocess_body(m.get("body") or m.get("snippet") or "", 4000)
-        if not pat.search(text.replace(",", "")):
-            continue
-        dt = parse_email_date(m.get("date"))
-        if best is None or (dt and best_dt and dt > best_dt) or (dt and not best_dt):
-            best, best_dt = m, dt
-    return best
-
-
-def _amount_sentence(msg: dict, amount: float) -> Optional[str]:
-    """The user's own line stating the corrected amount — audit quote."""
-    text = preprocess_body(msg.get("body") or msg.get("snippet") or "", 4000)
-    for line in text.splitlines():
-        if f"{amount:g}" in line.replace(",", ""):
-            return line.strip()[:200]
-    return None
+def _states_amount(msg: dict) -> bool:
+    """True when the user's own words state a money amount (tests / diagnostics)."""
+    return bool(AMOUNT_LANGUAGE_RE.search(_msg_own_text(msg)))
 
 
 # ---------------------------------------------------------------------------
@@ -207,161 +180,69 @@ async def _split_known_new(
 
 
 # ---------------------------------------------------------------------------
-# Re-evaluation of tracked invoices (only on new client activity)
+# Re-evaluation of tracked invoices (rulebook_reeval)
 # ---------------------------------------------------------------------------
 
-def _pick_reeval_row(result: dict, inv: dict) -> Optional[dict]:
-    """Match the AI's invoice row to the tracked invoice (by ref, else single row)."""
-    rows = result.get("invoices") or []
-    if not rows:
-        return None
-    ref = (inv.get("invoice_ref_normalized") or "").upper()
-    if ref:
-        for row in rows:
-            row_ref = str(row.get("invoice_number") or "").upper().replace(" ", "")
-            if row_ref and (row_ref == ref or row_ref.lstrip("#") == ref):
-                return row
-    if len(rows) == 1:
-        return rows[0]
-    return None
+async def _invoice_processed_message_ids(
+    db, user_id, inv: dict, conversation_ids: list[str],
+) -> list[str]:
+    """Message ids already applied to this invoice (events + source + global registry)."""
+    seen: set[str] = set()
+    src = inv.get("source_message_id")
+    if src:
+        seen.add(src)
+    async for ev in db.invoice_events.find(
+        {"user_id": user_id, "invoice_id": inv["_id"]},
+        {"meta.message_id": 1},
+    ):
+        mid = (ev.get("meta") or {}).get("message_id")
+        if mid:
+            seen.add(mid)
+    if conversation_ids:
+        already = await _processed_ids(db, user_id, conversation_ids)
+        seen.update(already)
+    return sorted(seen)
 
 
-def _partial_paid_delta(inv: dict, row: dict) -> Optional[float]:
-    """Incremental partial-payment amount from AI row vs stored paid_amount."""
-    new_paid = row.get("paid_amount")
-    if new_paid is None and row.get("balance_remaining") is not None:
-        new_paid = float(inv.get("amount") or 0) - float(row["balance_remaining"])
-    if new_paid is None:
-        return None
-    old_paid = float(inv.get("paid_amount") or 0)
-    delta = round(float(new_paid) - old_paid, 2)
-    return delta if delta > 0.005 else None
+async def _apply_reeval_top_level(
+    db, inv: dict, result: dict, now_iso: str,
+) -> None:
+    """Apply residual top-level fields the event writer may not cover."""
+    patch: dict[str, Any] = {"last_activity_at": now_iso}
+    changed = False
 
+    new_due = result.get("due_date")
+    if new_due and new_due != inv.get("due_date"):
+        patch["due_date"] = new_due
+        patch["due_date_assumed"] = (result.get("due_date_status") or "") == "missing"
+        if result.get("due_date_status"):
+            patch["due_date_status"] = result["due_date_status"]
+        changed = True
 
-def _dispute_quote(row: dict, fallback: str = "") -> str:
-    """Prefer a claim-focused quote; fall back to status_evidence."""
-    for key in ("dispute_quote", "status_evidence"):
-        q = (row.get(key) or "").strip()
-        if q:
-            return q
-    return fallback
+    new_ref = result.get("invoice_ref")
+    if new_ref and new_ref != (inv.get("invoice_ref_normalized") or inv.get("invoice_ref")):
+        from ledger_reconcile import normalize_invoice_ref
+        norm = normalize_invoice_ref(new_ref, inv.get("source_subject"))
+        if norm:
+            patch["invoice_ref"] = new_ref
+            patch["invoice_ref_normalized"] = norm
+            changed = True
 
-
-def _partial_quote(row: dict, fallback: str = "") -> str:
-    for key in ("partial_payment_quote", "status_evidence"):
-        q = (row.get(key) or "").strip()
-        if q:
-            return q
-    return fallback
-
-
-def _events_from_reeval(
-    inv: dict, row: dict, correction_msg: Optional[dict] = None,
-) -> list[dict]:
-    """Diff the AI's fresh assessment against the stored invoice → timeline events.
-
-    Only differences become events, so an unchanged conversation writes nothing.
-    One client message may yield MULTIPLE signal events (e.g. dispute +
-    partial_payment). Spurious needs_reply/question events are suppressed when
-    the same assessment already produced a concrete payment/dispute signal.
-    _write_event then enforces sender direction + idempotency + status semantics.
-    """
-    evs: list[dict] = []
-    conf = float(row.get("confidence") or 0)
-    quote = (row.get("status_evidence") or "").strip()
-    base = {"invoice_ref": inv.get("invoice_ref_normalized"), "confidence": conf}
-    st = _normalize_enriched_status(row.get("enriched_status"))
-    cur = inv.get("status")
-
-    # USER amount correction (proactive OR resolving a dispute). CORE RULE:
-    # only an explicit USER message stating the figure moves the amount —
-    # a client claim alone never rewrites it. No DISPUTED precondition.
-    new_amt = row.get("amount")
-    old_amt = float(inv.get("amount") or 0)
-    corrected = (
-        new_amt is not None
-        and correction_msg is not None
-        and abs(float(new_amt) - old_amt) > 0.005
-    )
-    if corrected:
-        if st == "disputed" and cur == "disputed":
-            # Restating the dispute the correction just resolved — document
-            # it BEFORE the correction so a stale verdict cannot flip status
-            # back after the correction lands (idempotent if already logged).
-            evs.append({**base, "type": "dispute", "quote": quote,
-                        "dispute_kind": row.get("dispute_kind"),
-                        "claimed_amount": row.get("disputed_claim_amount")})
-        evs.append({
-            **base,
-            "type": "correction",
-            "amount": float(new_amt),
-            "old_amount": old_amt,
-            "date": row.get("due_date"),
-            "message_id": correction_msg.get("id"),
-            "quote": _amount_sentence(correction_msg, float(new_amt))
-            or quote or "corrected amount agreed in conversation",
-        })
-        cur = "invoiced"  # status the correction leaves behind; diff below sees it
-
-    # Multi-signal: emit independent events (not elif). A single client reply
-    # can dispute the total AND claim a partial payment in the same message.
-    claimed = row.get("disputed_claim_amount")
-    has_dispute_signal = (
-        not corrected
-        and cur != "disputed"
-        and (
-            st == "disputed"
-            or claimed is not None
-            or bool(row.get("dispute_kind"))
+    # Post-process may clear a resolved dispute claim after correction.
+    if (
+        result.get("disputed_claim_amount") is None
+        and inv.get("disputed_claim_amount") is not None
+        and any(
+            e.get("type") == "amount_correction"
+            for e in (result.get("new_events") or [])
         )
-    )
-    if has_dispute_signal:
-        evs.append({
-            **base,
-            "type": "dispute",
-            "quote": _dispute_quote(row, quote),
-            "dispute_kind": row.get("dispute_kind") or "wrong_amount",
-            "claimed_amount": claimed,
-        })
+    ):
+        patch["disputed_claim_amount"] = None
+        changed = True
 
-    partial_delta = _partial_paid_delta(inv, row)
-    # Emit partial whenever paid delta is clear — including alongside a dispute
-    # (TE-105: "we agreed $X — sending $Y as a partial").
-    if partial_delta is not None:
-        evs.append({
-            **base,
-            "type": "partial_payment",
-            "amount": partial_delta,
-            "quote": _partial_quote(row, quote),
-        })
-
-    if st == "promised":
-        pd = row.get("promise_date")
-        if cur != "promised" or (pd and pd != inv.get("promise_date")):
-            evs.append({**base, "type": "promise", "date": pd, "quote": quote})
-    elif st == "paid_unconfirmed" and cur not in ("paid_unconfirmed", "paid"):
-        if not has_dispute_signal and partial_delta is None:
-            evs.append({**base, "type": "payment_claimed", "quote": quote})
-
-    signal_types = {e["type"] for e in evs}
-    # Do not split a residual phrase into a standalone "question" when the
-    # same message already produced concrete dispute/payment events (TE-105).
-    concrete = signal_types & {
-        "dispute", "partial_payment", "payment_claimed", "promise", "correction",
-    }
-    if row.get("needs_reply") and not inv.get("needs_reply") and not concrete:
-        evs.append({**base, "type": "question",
-                    "quote": (row.get("needs_reply_quote") or quote)})
-    if row.get("client_approved") and not inv.get("client_approved"):
-        evs.append({**base, "type": "approved",
-                    "quote": (row.get("approval_quote") or quote)})
-
-    # Due dates: only fill a MISSING one — never clobber a user-curated date.
-    new_due = row.get("due_date")
-    if new_due and not inv.get("due_date"):
-        evs.append({**base, "type": "due_date_adjusted", "date": new_due,
-                    "quote": quote or "due date stated in conversation"})
-    return evs
+    if changed:
+        patch["status_updated_at"] = now_iso
+        await db.invoices.update_one({"_id": inv["_id"]}, {"$set": patch})
 
 
 async def _fetch_new_client_mail(
@@ -527,11 +408,10 @@ async def _reevaluate_tracked(
                 if _is_new_client_msg(m, my_email, window_start)
                 and m["id"] not in already
             ]
+            correction_trigger = None
             if not new_client:
                 # No new client activity — re-evaluate when the user sent an
-                # amount-correction message (proactive revision OR dispute
-                # acceptance). Plain follow-ups/chases with no correction
-                # language still skip (skipped_no_activity).
+                # amount-correction message. Plain follow-ups/chases skip.
                 correction_trigger = next(
                     (m for m in (unit.get("user_msgs") or [])
                      if _extract_email_addr(m.get("from", "")) == my_email.lower()
@@ -552,29 +432,31 @@ async def _reevaluate_tracked(
                     inv["_id"], correction_trigger.get("id"), inv.get("status"),
                 )
 
-            context = (
-                "CURRENT_TRACKED_STATE: "
-                f"ref={inv.get('invoice_ref_normalized') or 'n/a'} "
-                f"amount={inv.get('amount')} {inv.get('currency') or 'USD'} "
-                f"status={inv.get('status')} "
-                f"due={inv.get('due_date') or 'n/a'} "
-                f"promise={inv.get('promise_date') or 'n/a'} "
-                f"paid={inv.get('paid_amount') or 0}"
+            client = (inv.get("counterparty_email") or "").lower()
+            conv_ids = [m["id"] for m in combined if m.get("id")]
+            processed_ids = await _invoice_processed_message_ids(
+                db, user_id, inv, conv_ids,
+            )
+            tracked = build_tracked_state(inv, processed_ids)
+            prepared = build_reeval_input(
+                my_email=my_email,
+                client_email=client,
+                messages=combined,
+                tracked_state=tracked,
+                anchor_ids=[inv.get("source_message_id")] if inv.get("source_message_id") else None,
             )
             if REEVAL_DEBUG:
                 logger.info(
-                    "reeval AI-INPUT inv=%s context=%r msgs=%s",
-                    inv["_id"], context,
+                    "reeval AI-INPUT inv=%s tracked=%s msgs=%s",
+                    inv["_id"],
+                    {k: tracked[k] for k in (
+                        "invoice_ref", "amount", "status", "promise_date",
+                        "paid_amount", "disputed_claim_amount",
+                    )},
                     [(m.get("id"), m.get("date")) for m in combined],
                 )
-            result = await extract_client_invoices_with_ai(
-                (inv.get("counterparty_email") or "").lower(),
-                combined,
-                my_email,
-                anchor_ids=[inv.get("source_message_id")],
-                system_prompt=SEED_INVOICE_PROMPT,
-                context_note=context,
-            )
+            result = await extract_reeval_with_rulebook(client, prepared)
+
         if not result:
             logger.warning(
                 "reeval AI-EMPTY inv=%s thread=%s new_client=%s",
@@ -582,51 +464,39 @@ async def _reevaluate_tracked(
                 [m.get("id") for m in new_client],
             )
             return
-        if REEVAL_DEBUG:
-            logger.info(
-                "reeval AI-RESULT inv=%s raw=%s",
-                inv["_id"], json.dumps(result, default=str)[:4000],
-            )
-        stats["reevaluated"] += 1
-        processed.extend(m["id"] for m in new_client)
 
-        row = _pick_reeval_row(result, inv)
-        if not row:
-            logger.info(
-                "reeval DROP inv=%s reason=row_match rows=%s refs=%r stored_ref=%r",
-                inv["_id"], len(result.get("invoices") or []),
-                [r.get("invoice_number") for r in (result.get("invoices") or [])],
-                inv.get("invoice_ref_normalized"),
-            )
-            return
-        conf = float(row.get("confidence") or 0)
-        if conf < REEVAL_CONFIDENCE_MIN:
-            logger.info(
-                "reeval DROP inv=%s reason=low_confidence conf=%.2f status=%r amount=%r",
-                inv["_id"], conf, row.get("enriched_status"), row.get("amount"),
-            )
-            return
-        correction_msg = None
-        if row.get("amount") is not None:
-            delta = abs(float(row["amount"]) - float(inv.get("amount") or 0))
-            if delta > 0.005:
-                candidate = _find_amount_message(combined, my_email, float(row["amount"]))
-                # User must have stated the new figure. Correction language OR
-                # an open dispute (accepting the client's claim) qualifies.
-                if candidate and (
-                    _is_amount_correction(candidate) or inv.get("status") == "disputed"
-                ):
-                    correction_msg = candidate
-        events = _events_from_reeval(inv, row, correction_msg=correction_msg)
+        stats["reevaluated"] += 1
+        # Mark newly seen activity so overlapping windows do not re-call.
+        processed.extend(m["id"] for m in new_client)
+        if correction_trigger and correction_trigger.get("id"):
+            processed.append(correction_trigger["id"])
+        # Also mark any message ids that produced new_events
+        for ev in result.get("new_events") or []:
+            if ev.get("message_id"):
+                processed.append(ev["message_id"])
+
+        events = rulebook_events_to_write_events(
+            result,
+            invoice_ref=inv.get("invoice_ref_normalized") or inv.get("invoice_ref"),
+        )
+        # Rulebook already emits only genuine new_events; processed_message_ids
+        # filter is the safety net. Do not drop on model confidence (often 0.0).
+        for e in events:
+            if e.get("type") == "correction" and e.get("old_amount") is None:
+                e["old_amount"] = float(inv.get("amount") or 0)
         if not events:
             logger.info(
-                "reeval NO-DIFF inv=%s status=%s→%s amount=%s→%s promise=%s→%s",
+                "reeval NO-DIFF inv=%s status=%s→%s amount=%s→%s promise=%s→%s events_raw=%s",
                 inv["_id"], inv.get("status"),
-                _normalize_enriched_status(row.get("enriched_status")),
-                inv.get("amount"), row.get("amount"),
-                inv.get("promise_date"), row.get("promise_date"),
+                normalize_reeval_status(result.get("status")),
+                inv.get("amount"), result.get("amount"),
+                inv.get("promise_date"), result.get("promise_date"),
+                len(result.get("new_events") or []),
             )
+            # Still apply residual top-level clears (e.g. claim amount) if any.
+            await _apply_reeval_top_level(db, inv, result, now_iso)
             return
+
         events = sorted(
             events,
             key=lambda e: (_EVENT_APPLY_ORDER.get(e.get("type") or "", 99), e.get("message_id") or ""),
@@ -637,6 +507,7 @@ async def _reevaluate_tracked(
                 db, user_id, inv["_id"], ev, messages_by_id, now_iso,
                 my_email=my_email,
             )
+        await _apply_reeval_top_level(db, inv, result, now_iso)
         stats["state_changes"] += 1
         stats["corrections"] += sum(1 for e in events if e.get("type") == "correction")
         logger.info(
@@ -732,6 +603,7 @@ async def run_incremental_pipeline(db, user_id) -> dict[str, Any]:
                 user_id=user_id, job_id=user_id, now_iso=now_iso,
                 confidence_min=INCREMENTAL_CONFIDENCE_MIN,
                 on_unit=_write_unit,
+                use_seed_rulebook=True,
             )
             counts.update(ai_stats)
             # A transient AI failure must not permanently swallow an invoice —

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 import os
@@ -796,29 +797,53 @@ def invoices_to_candidates(
     return out
 
 
+def _anchor_scan_text(msg: dict) -> str:
+    """Subject + body + pdf for ref detection — HTML-decoded so &#39; ≠ #39."""
+    raw = " ".join([
+        msg.get("subject") or "",
+        preprocess_body(msg.get("body") or msg.get("snippet") or "", 2000),
+        msg.get("pdf_text") or "",
+    ])
+    text = html.unescape(raw)
+    # Drop tags; keep text content for patterns like Invoice #77.
+    text = re.sub(r"<[^>]+>", " ", text)
+    return text
+
+
+def _bare_hash_ref_ok(raw: str) -> bool:
+    """Bare #N refs: require letters or ≥3 digits so &#39; / short noise never qualify."""
+    v = (raw or "").strip().upper().replace(" ", "")
+    if not v:
+        return False
+    if re.search(r"[A-Z]", v):
+        return True
+    return bool(re.fullmatch(r"\d{3,}", v))
+
+
 def _anchor_invoice_refs(sent_msgs: list[dict]) -> list[str | None]:
     """Detect distinct invoice refs in anchor sends for one-call-per-invoice.
 
     Returns [None] when a single undifferentiable invoice is present (no
     anchor_invoice_ref needed). Returns multiple refs when the same send
     clearly lists several invoice numbers.
+
+    Scoped to each call's sent_msgs only — local refs/seen, no shared accumulator.
     """
-    # Collect plausible refs from subjects + bodies of anchors
+    # invoice WB-77 / Invoice #77 / INV-77 — word-bounded capture
+    # Bare #81 — must NOT match HTML entities (&#39;) or mid-number substrings.
+    _REF_RE = re.compile(
+        r"(?i)(?:invoice\s*#?\s*|inv[#\-\s]*)([A-Z0-9][A-Z0-9\-]{1,20})\b"
+        r"|(?<![&A-Za-z0-9])#([A-Z0-9][A-Z0-9\-]{0,20})\b",
+    )
     refs: list[str] = []
     seen: set[str] = set()
     for m in sent_msgs:
-        text = " ".join([
-            m.get("subject") or "",
-            preprocess_body(m.get("body") or m.get("snippet") or "", 2000),
-            m.get("pdf_text") or "",
-        ])
-        # Common patterns: Invoice #77, INV-77, #81
-        for m_ref in re.finditer(
-            r"(?i)(?:invoice\s*#?\s*|inv[#\-\s]*)([A-Z0-9][A-Z0-9\-]{1,20})"
-            r"|(?<![A-Za-z0-9])#([A-Z0-9][A-Z0-9\-]{1,20})",
-            text,
-        ):
+        text = _anchor_scan_text(m)
+        for m_ref in _REF_RE.finditer(text):
+            from_invoice_ctx = m_ref.group(1) is not None
             raw = (m_ref.group(1) or m_ref.group(2) or "").strip()
+            if not from_invoice_ctx and not _bare_hash_ref_ok(raw):
+                continue
             norm = normalize_invoice_ref(raw)
             if not norm or not is_plausible_invoice_ref(norm):
                 continue
@@ -845,9 +870,9 @@ async def run_seed_ai_extraction(
     """Per-invoice pipeline: AI gate each sent email, then one focused AI decision
     per invoice conversation (thread + out-of-thread mail), streamed via on_unit.
 
-    When use_seed_rulebook=True (90d onboarding), Extract LLM uses
-    rulebook_seed_scan.txt + prepared JSON I/O. Incremental keeps the legacy
-    SEED_INVOICE_PROMPT path.
+    When use_seed_rulebook=True (onboarding + incremental new invoices), Extract
+    LLM uses rulebook_seed_scan.txt + prepared JSON I/O. Otherwise legacy
+    SEED_INVOICE_PROMPT.
 
     on_unit(rows) is awaited as each conversation finalizes so results can be
     written to the DB (and shown in the UI) without waiting for the whole scan.

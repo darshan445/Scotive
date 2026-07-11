@@ -1,7 +1,7 @@
-"""90-day seed Extract LLM — rulebook_seed_scan.txt + prepared JSON I/O.
+"""90-day seed + incremental new-invoice Extract LLM — rulebook_seed_scan.txt.
 
-Used ONLY for onboarding seed (mode=onboarding). Incremental extract/re-eval
-keeps the legacy SEED_INVOICE_PROMPT path.
+Used for onboarding seed and incremental Stage 3 (new invoices).
+Incremental Stage 4 re-eval uses reeval_rulebook / rulebook_reeval.txt.
 """
 from __future__ import annotations
 

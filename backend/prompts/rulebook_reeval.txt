@@ -120,7 +120,7 @@ CORE RULES
      `partial_payment` (see rule 4).
    - Whenever a promise event is the current governing signal, set
      `status` to `promised`. This OVERRIDES whatever `tracked_state.status`
-     already was — including `invoiced`, `past_due`, or even `disputed` if
+     already was — including `invoiced`, `overdue`, or even `disputed` if
      the promise directly follows and resolves a dispute in the same
      batch. A promise always supersedes prior status once made. Leave
      `promise_date` as null in your output — downstream code resolves it.
@@ -241,7 +241,7 @@ OUTPUT — RETURN ONLY THIS JSON, NOTHING ELSE
   "currency": "USD | INR | EUR | ...",
   "due_date": "YYYY-MM-DD or null",
   "due_date_status": "explicit | terms_computed | pdf | deliverable_anchored | missing",
-  "status": "invoiced | past_due | promised | disputed | partially_paid | paid_unconfirmed",
+  "status": "invoiced | overdue | promised | disputed | partially_paid | paid_unconfirmed",
   "promise_date": "null — always null in your output, resolved downstream",
   "paid_amount": number,
   "balance_remaining": number,

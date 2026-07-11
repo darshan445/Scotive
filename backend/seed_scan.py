@@ -180,7 +180,11 @@ def build_ledger_invoice_from_candidate(
         "invoice_ref": doc.get("invoice_ref"),
         "invoice_ref_normalized": doc.get("invoice_ref_normalized"),
         "due_date": due_date,
-        "due_date_assumed": False,
+        "due_date_assumed": (
+            (doc.get("due_date_status") or "") == "missing"
+            if doc.get("due_date_status") is not None
+            else bool(doc.get("due_date_assumed"))
+        ),
         "promise_date": doc.get("promise_date"),
         "status": status,
         "kind": "invoice_sent",
@@ -201,6 +205,8 @@ def build_ledger_invoice_from_candidate(
         base["client_approved"] = True
         if doc.get("approval_quote"):
             base["approval_quote"] = doc["approval_quote"]
+    if doc.get("due_date_status"):
+        base["due_date_status"] = doc["due_date_status"]
     if doc.get("needs_reply"):
         base["needs_reply"] = True
         if doc.get("needs_reply_quote"):
@@ -229,6 +235,10 @@ def collapse_followups_incremental(index: dict, candidates: list[dict]) -> list[
 
     `index` carries seen (ref/thread, client) keys across calls so streamed units
     dedupe against everything already written.
+
+    Distinct invoice numbers on the SAME thread (multi-invoice email like
+    "#M-14 and #J-19") are never collapsed into each other — even when the
+    subject matches follow-up language ("Outstanding balances…").
     """
     ordered = sorted(candidates, key=lambda c: c.get("source_date") or "")
     kept: list[dict] = []
@@ -249,7 +259,16 @@ def collapse_followups_incremental(index: dict, candidates: list[dict]) -> list[
             if key not in index:
                 continue
             prior = index[key]
-            if is_invoice_followup(subj) or (ref and ref == prior.get("invoice_ref_normalized")):
+            prior_ref = prior.get("invoice_ref_normalized")
+            # Same thread, different invoice numbers → keep both (multi-invoice send).
+            if (
+                key[0] == "thread"
+                and ref
+                and prior_ref
+                and ref != prior_ref
+            ):
+                continue
+            if is_invoice_followup(subj) or (ref and ref == prior_ref):
                 duplicate = True
                 logger.info(
                     "seed SKIP followup msg=%s client=%s ref=%s",

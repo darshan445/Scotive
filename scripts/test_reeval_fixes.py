@@ -29,9 +29,13 @@ from client_sweep import (  # noqa: E402
     apply_client_result,
 )
 from incremental_sync import (  # noqa: E402
-    _events_from_reeval,
     _is_amount_correction,
     _states_amount,
+)
+from reeval_rulebook import (  # noqa: E402
+    enforce_dispute_resolution,
+    filter_new_events_to_unprocessed,
+    rulebook_events_to_write_events,
 )
 from ledger_reconcile import (  # noqa: E402
     client_identity_key,
@@ -201,37 +205,30 @@ class ReevalFixTest:
                 self._check(f"amount language {body[:28]!r}", _states_amount(msg))
 
     # ------------------------------------------------------------------
-    # Unit: _events_from_reeval
+    # Unit: rulebook new_events → _write_event mapping
     # ------------------------------------------------------------------
     def test_events_from_reeval_tb102(self) -> None:
-        print("\n== TB-102 events_from_reeval (proactive correction) ==")
-        inv = {
-            "status": "invoiced",
-            "amount": 600.0,
-            "paid_amount": 0,
-            "invoice_ref_normalized": "TB-102",
-            "needs_reply": False,
-        }
-        corr = {
-            "id": "msg-corr",
-            "from": USER_EMAIL,
-            "body": "Actually, revising this down to $550 — miscounted a few hours.",
-            "subject": "Re: Invoice #TB-102",
-        }
-        row = {
-            "enriched_status": "invoiced",
+        print("\n== TB-102 rulebook amount_correction mapping ==")
+        result = {
+            "invoice_ref": "TB-102",
             "amount": 550.0,
-            "confidence": 0.95,
-            "status_evidence": "",
-            "needs_reply": False,
+            "status": "invoiced",
+            "disputed_claim_amount": None,
+            "new_events": [{
+                "type": "amount_correction",
+                "message_id": "msg-corr",
+                "sender": "user",
+                "quote": "Actually, revising this down to $550 — miscounted a few hours.",
+                "confidence": 0.95,
+                "data": {"amount": 550.0},
+            }],
         }
-        evs = _events_from_reeval(inv, row, correction_msg=corr)
+        evs = rulebook_events_to_write_events(result, invoice_ref="TB-102")
         types = [e["type"] for e in evs]
         self._check("TB-102 emits correction", "correction" in types, types)
         self._check("TB-102 no dispute event", "dispute" not in types, types)
         corr_ev = next(e for e in evs if e["type"] == "correction")
         self._check("TB-102 new amount 550", corr_ev.get("amount") == 550.0, corr_ev)
-        self._check("TB-102 old_amount 600", corr_ev.get("old_amount") == 600.0, corr_ev)
         self._check(
             "TB-102 quote from user msg",
             "550" in (corr_ev.get("quote") or "")
@@ -239,34 +236,59 @@ class ReevalFixTest:
             corr_ev.get("quote"),
         )
 
-        chase_row = {**row, "amount": 600.0}
-        evs2 = _events_from_reeval(inv, chase_row, correction_msg=None)
-        self._check("plain follow-up no events", evs2 == [], evs2)
+        empty = rulebook_events_to_write_events(
+            {"new_events": []}, invoice_ref="TB-102",
+        )
+        self._check("plain follow-up no events", empty == [], empty)
 
     def test_events_from_reeval_te105(self) -> None:
-        print("\n== TE-105 events_from_reeval (dispute + partial, no question) ==")
-        inv = {
-            "status": "invoiced",
+        print("\n== TE-105 rulebook dispute + partial (no needs_reply) ==")
+        result = {
+            "invoice_ref": "TE-105",
             "amount": 2000.0,
-            "paid_amount": 0,
-            "invoice_ref_normalized": "TE-105",
-            "needs_reply": False,
-        }
-        row = {
-            "enriched_status": "partially_paid",
-            "amount": 2000.0,
+            "status": "partially_paid",
             "paid_amount": 1000.0,
             "balance_remaining": 1000.0,
             "disputed_claim_amount": 1800.0,
-            "dispute_kind": "wrong_amount",
-            "confidence": 0.95,
-            "status_evidence": "We agreed $1,800",
-            "needs_reply": True,
-            "needs_reply_quote": "will sort the rest after we confirm the total",
-            "partial_payment_quote": "sending $1,000 now as a partial",
-            "dispute_quote": "We agreed $1,800",
+            "new_events": [
+                {
+                    "type": "dispute",
+                    "message_id": "msg-multi",
+                    "sender": "client",
+                    "quote": "We agreed $1,800",
+                    "confidence": 0.95,
+                    "data": {"amount": 1800.0},
+                },
+                {
+                    "type": "partial_payment",
+                    "message_id": "msg-multi",
+                    "sender": "client",
+                    "quote": "sending $1,000 now as a partial",
+                    "confidence": 0.95,
+                    "data": {"amount": 1000.0},
+                },
+            ],
         }
-        evs = _events_from_reeval(inv, row)
+        # Safety net: already-processed dispute must not reappear
+        filtered = filter_new_events_to_unprocessed(
+            {
+                "new_events": result["new_events"] + [{
+                    "type": "dispute",
+                    "message_id": "old-msg",
+                    "quote": "stale",
+                    "confidence": 0.9,
+                    "data": {"amount": 1800},
+                }],
+            },
+            {"processed_message_ids": ["old-msg"]},
+        )
+        self._check(
+            "TE-105 filter drops processed",
+            len(filtered["new_events"]) == 2,
+            len(filtered["new_events"]),
+        )
+
+        evs = rulebook_events_to_write_events(result, invoice_ref="TE-105")
         types = [e["type"] for e in evs]
         self._check("TE-105 has dispute", "dispute" in types, types)
         self._check("TE-105 has partial_payment", "partial_payment" in types, types)
@@ -283,6 +305,23 @@ class ReevalFixTest:
         )
         self._check("TE-105 claimed 1800", float(dispute.get("claimed_amount") or 0) == 1800.0)
         self._check("TE-105 partial amount 1000", float(partial.get("amount") or 0) == 1000.0)
+
+        # Correction after dispute clears claim in post-process
+        resolved = enforce_dispute_resolution(
+            {
+                "disputed_claim_amount": 1800,
+                "new_events": [
+                    {"type": "dispute", "message_id": "a", "data": {"amount": 1800}},
+                    {"type": "amount_correction", "message_id": "b", "data": {"amount": 1800}},
+                ],
+            },
+            {"disputed_claim_amount": None},
+        )
+        self._check(
+            "TE-105 correction clears claim",
+            resolved.get("disputed_claim_amount") is None,
+            resolved.get("disputed_claim_amount"),
+        )
 
     # ------------------------------------------------------------------
     # Pipeline
@@ -311,13 +350,20 @@ class ReevalFixTest:
             body="Actually, revising this down to $550 — miscounted a few hours.",
             when=corr_when,
         )
-        row = {
-            "enriched_status": "invoiced",
-            "amount": 550.0,
-            "confidence": 0.95,
-            "status_evidence": "",
-        }
-        events = _events_from_reeval(inv, row, correction_msg=corr_msg)
+        events = rulebook_events_to_write_events({
+            "invoice_ref": "TB-102",
+            "new_events": [{
+                "type": "amount_correction",
+                "message_id": corr_msg["id"],
+                "sender": "user",
+                "quote": corr_msg["body"],
+                "confidence": 0.95,
+                "data": {"amount": 550.0},
+            }],
+        }, invoice_ref="TB-102")
+        for e in events:
+            if e.get("type") == "correction":
+                e["old_amount"] = 600.0
         events = sorted(
             events,
             key=lambda e: (_EVENT_APPLY_ORDER.get(e.get("type") or "", 99), e.get("message_id") or ""),
@@ -488,20 +534,27 @@ class ReevalFixTest:
             when=reply_when,
             msg_id=reply2_id,
         )
-        row = {
-            "enriched_status": "partially_paid",
-            "amount": 2000.0,
-            "paid_amount": 1000.0,
-            "balance_remaining": 1000.0,
-            "disputed_claim_amount": 1800.0,
-            "dispute_kind": "wrong_amount",
-            "confidence": 0.95,
-            "status_evidence": "We agreed $1,800",
-            "needs_reply": True,
-            "needs_reply_quote": "will sort the rest after we confirm the total",
-            "partial_payment_quote": "sending $1,000 now as a partial",
-        }
-        events = _events_from_reeval(inv2, row)
+        events = rulebook_events_to_write_events({
+            "invoice_ref": "TE-105B",
+            "new_events": [
+                {
+                    "type": "dispute",
+                    "message_id": reply2_id,
+                    "sender": "client",
+                    "quote": "We agreed $1,800",
+                    "confidence": 0.95,
+                    "data": {"amount": 1800.0},
+                },
+                {
+                    "type": "partial_payment",
+                    "message_id": reply2_id,
+                    "sender": "client",
+                    "quote": "sending $1,000 now as a partial",
+                    "confidence": 0.95,
+                    "data": {"amount": 1000.0},
+                },
+            ],
+        }, invoice_ref="TE-105B")
         events = sorted(
             events,
             key=lambda e: (_EVENT_APPLY_ORDER.get(e.get("type") or "", 99), e.get("message_id") or ""),
