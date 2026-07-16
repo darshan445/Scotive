@@ -71,6 +71,8 @@ async def collect_today_sections(db, user_id) -> dict:
     stale_prompts = []
     watching = []
     async for inv in db.invoices.find({"user_id": user_id}):
+        if inv.get("tracking_paused"):
+            continue
         s = inv.get("status")
         if s == "paid_unconfirmed":
             confirm_prompts.append(inv)

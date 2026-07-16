@@ -684,10 +684,15 @@ async def upsert_sweep_invoice(
 
 
 def compute_open_totals(invoices: list[dict], open_statuses: tuple[str, ...]) -> dict[str, Any]:
-    """Currency-grouped open balances + distinct client count."""
+    """Currency-grouped open balances + distinct client count.
+
+    User-paused invoices (tracking_paused) are excluded from amounts and client count.
+    """
     totals_by_currency: dict[str, float] = {}
     client_keys: set[str] = set()
     for doc in invoices:
+        if doc.get("tracking_paused"):
+            continue
         if doc.get("status") not in open_statuses:
             continue
         bal = float(doc.get("balance_remaining") if doc.get("balance_remaining") is not None else doc.get("amount") or 0)

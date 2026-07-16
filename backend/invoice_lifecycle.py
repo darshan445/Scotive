@@ -70,7 +70,10 @@ def clear_stale_fields(patch: dict) -> None:
 
 
 async def apply_past_due_transitions(db, user_id) -> int:
-    """Flip invoiced → overdue the moment due_date is before today (no grace buffer)."""
+    """Flip invoiced → overdue the moment due_date is before today (no grace buffer).
+
+    Skips tracking_paused invoices — overdue flip runs on resume via the next tick.
+    """
     today = datetime.now(timezone.utc).date()
     now_iso = datetime.now(timezone.utc).isoformat()
     updated = 0
@@ -78,6 +81,7 @@ async def apply_past_due_transitions(db, user_id) -> int:
         "user_id": user_id,
         "status": "invoiced",
         "due_date": {"$nin": [None, ""]},
+        "tracking_paused": {"$ne": True},
     }):
         due = _parse_date(inv.get("due_date"))
         if not due or due >= today:
@@ -98,6 +102,7 @@ async def apply_past_due_transitions(db, user_id) -> int:
         "user_id": user_id,
         "status": "overdue",
         "due_date": {"$nin": [None, ""]},
+        "tracking_paused": {"$ne": True},
     }):
         due = _parse_date(inv.get("due_date"))
         if not due or due < today:
@@ -126,6 +131,7 @@ async def apply_promise_broken_transitions(db, user_id) -> int:
         "user_id": user_id,
         "status": "promised",
         "promise_date": {"$nin": [None, ""]},
+        "tracking_paused": {"$ne": True},
     }):
         pd = _parse_date(inv.get("promise_date"))
         if not pd or pd >= today:
@@ -166,7 +172,11 @@ async def apply_stale_transitions(db, user_id) -> int:
     now_iso = now.isoformat()
     stale_count = 0
 
-    async for inv in db.invoices.find({"user_id": user_id, "status": {"$in": list(STALE_ELIGIBLE)}}):
+    async for inv in db.invoices.find({
+        "user_id": user_id,
+        "status": {"$in": list(STALE_ELIGIBLE)},
+        "tracking_paused": {"$ne": True},
+    }):
         last = await resolve_last_activity(db, inv)
         if not last:
             continue

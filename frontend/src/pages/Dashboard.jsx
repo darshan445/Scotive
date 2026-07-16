@@ -25,7 +25,7 @@ import { useReceipts } from "@/hooks/useReceipts";
 import { useOnboarding } from "@/hooks/useOnboarding";
 import { useLiveDetection } from "@/hooks/useLiveDetection";
 import { useWorkspaceRefresh } from "@/hooks/useWorkspaceRefresh";
-import { openLedgerInvoices, historyLedgerInvoices } from "@/lib/ledgerInvoices";
+import { openLedgerInvoices, historyLedgerInvoices, pausedLedgerInvoices } from "@/lib/ledgerInvoices";
 
 const OPEN_STATUSES = new Set(["invoiced", "overdue", "promised", "partially_paid", "promise_broken", "disputed"]);
 
@@ -59,7 +59,7 @@ function StatTile({ label, value, sub, icon: Icon, tone = "default", testId }) {
 
 function StatsStrip({ ledger }) {
     const stats = useMemo(() => {
-        const invoices = ledger?.invoices || [];
+        const invoices = (ledger?.invoices || []).filter((i) => !i.tracking_paused);
         const open = invoices.filter((i) => OPEN_STATUSES.has(i.status));
         const pastDue = invoices.filter((i) => i.status === "overdue" || i.status === "promise_broken");
         const promised = invoices.filter((i) => i.status === "promised");
@@ -154,6 +154,10 @@ export default function DashboardPage() {
     );
     const paidInvoiceCount = useMemo(
         () => historyLedgerInvoices(ledger?.invoices).length,
+        [ledger?.invoices],
+    );
+    const pausedInvoiceCount = useMemo(
+        () => pausedLedgerInvoices(ledger?.invoices).length,
         [ledger?.invoices],
     );
 
@@ -257,7 +261,9 @@ export default function DashboardPage() {
                                 <SyncStatusBar
                                     watching
                                     openInvoiceCount={
-                                        (ledger?.invoices || []).filter((i) => OPEN_STATUSES.has(i.status)).length
+                                        (ledger?.invoices || []).filter(
+                                            (i) => OPEN_STATUSES.has(i.status) && !i.tracking_paused,
+                                        ).length
                                     }
                                     onSynced={handleSyncDetected}
                                 />
@@ -341,6 +347,11 @@ export default function DashboardPage() {
                                         <TabsTrigger value="ledger" className="rounded-full px-4 py-2 text-sm data-[state=active]:shadow-sm" data-testid="tab-ledger">
                                             Open{openInvoiceCount ? ` (${openInvoiceCount})` : ""}
                                         </TabsTrigger>
+                                        {pausedInvoiceCount > 0 ? (
+                                            <TabsTrigger value="paused" className="rounded-full px-4 py-2 text-sm data-[state=active]:shadow-sm" data-testid="tab-paused">
+                                                Paused ({pausedInvoiceCount})
+                                            </TabsTrigger>
+                                        ) : null}
                                         <TabsTrigger value="paid" className="rounded-full px-4 py-2 text-sm data-[state=active]:shadow-sm" data-testid="tab-paid">
                                             Paid{paidInvoiceCount ? ` (${paidInvoiceCount})` : ""}
                                         </TabsTrigger>
@@ -358,6 +369,11 @@ export default function DashboardPage() {
                                     <TabsContent value="paid" className="mt-4">
                                         <LedgerCard ledger={ledger} onChanged={refreshAll} variant="paid" />
                                     </TabsContent>
+                                    {pausedInvoiceCount > 0 ? (
+                                        <TabsContent value="paused" className="mt-4">
+                                            <LedgerCard ledger={ledger} onChanged={refreshAll} variant="paused" />
+                                        </TabsContent>
+                                    ) : null}
                                     <TabsContent value="ledger" className="mt-4">
                                         <LedgerCard ledger={ledger} onChanged={refreshAll} variant="open" />
                                     </TabsContent>

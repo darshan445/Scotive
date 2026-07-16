@@ -2,6 +2,7 @@ import { MoreHorizontal } from "lucide-react";
 import { toast } from "sonner";
 import { api, extractError } from "@/lib/api";
 import { gmailThreadUrl } from "@/lib/invoiceTimeline";
+import { isTrackingPaused } from "@/lib/ledgerInvoices";
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -36,17 +37,40 @@ export async function markInvoicePaidWithUndo(invoiceId, { onChanged } = {}) {
     }
 }
 
+export async function pauseInvoiceTracking(invoiceId, { onChanged } = {}) {
+    try {
+        await api.post(`/invoices/${invoiceId}/action`, { action: "pause" });
+        toast.success("Paused tracking");
+        await onChanged?.();
+    } catch (e) {
+        toast.error(extractError(e));
+    }
+}
+
+export async function resumeInvoiceTracking(invoiceId, { onChanged } = {}) {
+    try {
+        await api.post(`/invoices/${invoiceId}/action`, { action: "resume" });
+        toast.success("Resumed tracking");
+        await onChanged?.();
+    } catch (e) {
+        toast.error(extractError(e));
+    }
+}
+
 /**
- * ⋯ menu for list/digest rows: Mark as paid + Open in Gmail.
- * Callers must stopPropagation on the trigger wrapper so row clicks still open detail.
+ * ⋯ menu: Mark as paid · Pause/Resume tracking · Open in Gmail.
  */
 export function InvoiceOverflowMenu({ invoice, onChanged, className = "" }) {
     if (!invoice?._id) return null;
 
-    const canMarkPaid = invoice.status && !CLOSED.has(invoice.status);
+    const closed = invoice.status && CLOSED.has(invoice.status);
+    const paused = isTrackingPaused(invoice);
+    const canMarkPaid = !closed;
+    const canPause = !closed && !paused;
+    const canResume = !closed && paused;
     const threadUrl = gmailThreadUrl(invoice.source_thread_id || invoice.thread_id);
 
-    if (!canMarkPaid && !threadUrl) return null;
+    if (!canMarkPaid && !canPause && !canResume && !threadUrl) return null;
 
     return (
         <div
@@ -65,13 +89,29 @@ export function InvoiceOverflowMenu({ invoice, onChanged, className = "" }) {
                         <MoreHorizontal className="h-4 w-4" />
                     </button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuContent align="end" className="w-48">
                     {canMarkPaid ? (
                         <DropdownMenuItem
                             data-testid="overflow-mark-paid"
                             onSelect={() => markInvoicePaidWithUndo(invoice._id, { onChanged })}
                         >
                             Mark as paid
+                        </DropdownMenuItem>
+                    ) : null}
+                    {canPause ? (
+                        <DropdownMenuItem
+                            data-testid="overflow-pause-tracking"
+                            onSelect={() => pauseInvoiceTracking(invoice._id, { onChanged })}
+                        >
+                            Pause tracking
+                        </DropdownMenuItem>
+                    ) : null}
+                    {canResume ? (
+                        <DropdownMenuItem
+                            data-testid="overflow-resume-tracking"
+                            onSelect={() => resumeInvoiceTracking(invoice._id, { onChanged })}
+                        >
+                            Resume tracking
                         </DropdownMenuItem>
                     ) : null}
                     {threadUrl ? (

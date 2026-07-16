@@ -127,6 +127,7 @@ async def run_post_chase_tick(db, user_id) -> dict[str, Any]:
         "user_id": user_id,
         "watching_for_reply": True,
         "chasing_paused": {"$ne": True},
+        "tracking_paused": {"$ne": True},
         "ladder_exhausted": {"$ne": True},
         "status": {"$in": ["overdue", "promise_broken", "invoiced", "partially_paid"]},
     }):

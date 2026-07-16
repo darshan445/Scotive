@@ -70,7 +70,10 @@ _OPEN_STATUSES = ("invoiced", "overdue", "promised", "partially_paid", "promise_
 
 
 class InvoiceActionInput(BaseModel):
-    action: str  # mark_paid | write_off | dispute | resolve_dispute | pause | resume | undo | dismiss_stale | set_due_date | skip_due_date
+    # mark_paid | write_off | dispute | resolve_dispute | pause | resume | undo |
+    # dismiss_stale | set_due_date | skip_due_date | deny_payment_claim
+    # pause = user "Pause tracking" (sets tracking_paused + chasing_paused)
+    action: str
     due_date: str | None = Field(default=None, max_length=32)
 
 
@@ -652,7 +655,10 @@ def build_router(db, get_current_user):
                 "invoice_count": {"$sum": 1},
                 "open_by_currency": {"$push": {
                     "$cond": [
-                        {"$in": ["$status", list(_OPEN_STATUSES)]},
+                        {"$and": [
+                            {"$in": ["$status", list(_OPEN_STATUSES)]},
+                            {"$ne": [{"$ifNull": ["$tracking_paused", False]}, True]},
+                        ]},
                         {
                             "currency": {"$ifNull": ["$currency", "USD"]},
                             "amount": {"$ifNull": ["$balance_remaining", "$amount"]},
@@ -851,6 +857,7 @@ def build_router(db, get_current_user):
             "paid_amount": inv.get("paid_amount"),
             "paid_at": inv.get("paid_at"),
             "chasing_paused": inv.get("chasing_paused", False),
+            "tracking_paused": inv.get("tracking_paused", False),
         }
 
         patch: dict = {"status_updated_at": now}
@@ -864,6 +871,7 @@ def build_router(db, get_current_user):
             patch["claim_balance_before"] = None
             patch["claim_paid_before"] = None
             patch["chasing_paused"] = False
+            patch["tracking_paused"] = False
             patch["watching_for_reply"] = False
             patch["ladder_exhausted"] = False
             clear_stale_fields(patch)
@@ -891,6 +899,7 @@ def build_router(db, get_current_user):
         elif action == "write_off":
             patch["status"] = "written_off"
             patch["watching_for_reply"] = False
+            patch["tracking_paused"] = False
             clear_stale_fields(patch)
             patch["last_activity_at"] = now
             await ack_followup_prompts(db, user["_id"], [invoice_id])
@@ -906,10 +915,17 @@ def build_router(db, get_current_user):
             clear_stale_fields(patch)
             patch["last_activity_at"] = now
         elif action == "pause":
+            # User "Pause tracking" — hide from active surfaces; stop chases.
+            patch["tracking_paused"] = True
             patch["chasing_paused"] = True
             await ack_followup_prompts(db, user["_id"], [invoice_id])
         elif action == "resume":
-            patch["chasing_paused"] = False
+            patch["tracking_paused"] = False
+            # Restore chase gate: auto-pause statuses keep chasing paused.
+            auto_pause = inv.get("status") in (
+                "promised", "disputed", "paid_unconfirmed", "stale",
+            )
+            patch["chasing_paused"] = bool(auto_pause)
         elif action == "set_due_date":
             if not payload.due_date:
                 raise HTTPException(status_code=400, detail="due_date required")
@@ -962,6 +978,8 @@ def build_router(db, get_current_user):
         stale_prompts = []
         merge_prompts = []
         async for inv in db.invoices.find({"user_id": user["_id"]}):
+            if inv.get("tracking_paused"):
+                continue
             s = inv.get("status")
             row = _serialize(inv)
             if s == "paid_unconfirmed":
@@ -1044,6 +1062,7 @@ def build_router(db, get_current_user):
         thread_subject = inv.get("source_subject") or ""
         is_dispute = inv.get("status") == "disputed"
         dispute_quote = None
+        claim_amt = inv.get("disputed_claim_amount")
         if is_dispute:
             ev = await db.invoice_events.find_one(
                 {"user_id": user["_id"], "invoice_id": inv["_id"], "action": "dispute"},
@@ -1056,7 +1075,8 @@ def build_router(db, get_current_user):
             "Always include invoice ref (if any), amount, due date. On a broken promise, quote the client's own stated date verbatim. "
             + (
                 "The client has DISPUTED this invoice — do not demand payment. Acknowledge their concern, "
-                "reference what they said, and propose resolving it (a quick call or clarification). "
+                "reference what they said, and if a claimed amount is provided, confirm you'll adjust the invoice "
+                "to that amount (e.g. 'you're right — adjusting to $X'). Propose resolving it briefly. "
                 if is_dispute
                 else ""
             )
@@ -1069,6 +1089,7 @@ def build_router(db, get_current_user):
             f"Original thread subject: {thread_subject or 'n/a'}\n"
             f"Invoice ref: {inv.get('invoice_ref') or 'n/a'}\n"
             f"Amount: {inv.get('amount')} {inv.get('currency','USD')}\n"
+            f"Client claimed amount (if disputing): {claim_amt if claim_amt is not None else 'n/a'}\n"
             f"Due date: {inv.get('due_date') or 'n/a'}\n"
             f"Promise date: {inv.get('promise_date') or 'n/a'}\n"
             f"Status: {inv.get('status')}\n"

@@ -17,11 +17,14 @@ import {
     openLedgerInvoices,
     historyLedgerInvoices,
     historyLedgerSummary,
+    pausedLedgerInvoices,
     groupInvoicesByClient,
     STATUS_FILTER_CHIPS,
     SORT_OPTIONS,
 } from "@/lib/ledgerInvoices";
 import { navigateToInvoice } from "@/lib/invoiceNavigation";
+import { resumeInvoiceTracking } from "@/components/InvoiceOverflowMenu";
+import { Button } from "@/components/ui/button";
 
 const STATUS_STYLES = {
     invoiced: "bg-gray-100 text-gray-700 border-gray-200",
@@ -81,16 +84,19 @@ export function LedgerCard({ ledger, onChanged, variant = "open" }) {
     const [sortKey, setSortKey] = useState("due_soonest");
     const [groupByClient, setGroupByClient] = useState(false);
     const isHistory = variant === "paid";
+    const isPaused = variant === "paused";
     const allInvoices = ledger?.invoices ?? [];
     const invoices = useMemo(
-        () => (isHistory
-            ? historyLedgerInvoices(allInvoices)
-            : openLedgerInvoices(allInvoices, { statusFilter, sort: sortKey })),
-        [allInvoices, isHistory, statusFilter, sortKey],
+        () => {
+            if (isHistory) return historyLedgerInvoices(allInvoices);
+            if (isPaused) return pausedLedgerInvoices(allInvoices);
+            return openLedgerInvoices(allInvoices, { statusFilter, sort: sortKey });
+        },
+        [allInvoices, isHistory, isPaused, statusFilter, sortKey],
     );
     const clientGroups = useMemo(
-        () => (!isHistory && groupByClient ? groupInvoicesByClient(invoices) : null),
-        [invoices, isHistory, groupByClient],
+        () => (!isHistory && !isPaused && groupByClient ? groupInvoicesByClient(invoices) : null),
+        [invoices, isHistory, isPaused, groupByClient],
     );
     const historySummary = useMemo(
         () => historyLedgerSummary(allInvoices),
@@ -101,7 +107,7 @@ export function LedgerCard({ ledger, onChanged, variant = "open" }) {
     const openTotals = totals_by_currency ?? total_open;
 
     return (
-        <div className="space-y-6" data-testid={isHistory ? "ledger-card-paid" : "ledger-card"}>
+        <div className="space-y-6" data-testid={isHistory ? "ledger-card-paid" : isPaused ? "ledger-card-paused" : "ledger-card"}>
             <div className="surface-card p-6 md:p-7">
                 <div className="flex items-start justify-between gap-4 flex-wrap">
                     <div>
@@ -125,6 +131,18 @@ export function LedgerCard({ ledger, onChanged, variant = "open" }) {
                                     </span>
                                 </div>
                             </>
+                        ) : isPaused ? (
+                            <>
+                                <div className="eyebrow">Paused</div>
+                                <div className="mt-1 flex items-baseline gap-4 flex-wrap">
+                                    <span className="stat-number font-bold text-4xl md:text-[2.75rem] tracking-tight" data-testid="ledger-paused-count">
+                                        {invoices.length}
+                                    </span>
+                                    <span className="text-muted-foreground text-sm">
+                                        invoice{invoices.length === 1 ? "" : "s"} off active lists — resume anytime
+                                    </span>
+                                </div>
+                            </>
                         ) : (
                             <>
                                 <div className="eyebrow">You&apos;re owed</div>
@@ -139,7 +157,7 @@ export function LedgerCard({ ledger, onChanged, variant = "open" }) {
                             </>
                         )}
                     </div>
-                    {!isHistory ? (
+                    {!isHistory && !isPaused ? (
                         <button
                             onClick={() => setManualOpen(true)}
                             className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3.5 py-2 text-sm font-medium hover:bg-muted transition-colors"
@@ -153,16 +171,24 @@ export function LedgerCard({ ledger, onChanged, variant = "open" }) {
             {invoices.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-border bg-card/40 p-10 text-center" data-testid="ledger-empty">
                     <h3 className="font-heading font-semibold text-lg">
-                        {isHistory ? "No paid invoices yet." : statusFilter !== "all" ? "No invoices match this filter." : "No open invoices."}
+                        {isHistory
+                            ? "No paid invoices yet."
+                            : isPaused
+                              ? "Nothing paused."
+                              : statusFilter !== "all"
+                                ? "No invoices match this filter."
+                                : "No open invoices."}
                     </h3>
                     <p className="mt-2 text-sm text-muted-foreground max-w-md mx-auto">
                         {isHistory
                             ? "When you mark invoices paid, they move here for your records."
-                            : statusFilter !== "all"
-                              ? "Try another status chip or clear the filter."
-                              : "Scotive is watching your sent mail — send your next invoice like you always do and it will appear here."}
+                            : isPaused
+                              ? "Pause tracking from the ⋯ menu when you want an invoice off active lists without marking it paid."
+                              : statusFilter !== "all"
+                                ? "Try another status chip or clear the filter."
+                                : "Scotive is watching your sent mail — send your next invoice like you always do and it will appear here."}
                     </p>
-                    {!isHistory && statusFilter === "all" ? (
+                    {!isHistory && !isPaused && statusFilter === "all" ? (
                         <button
                             onClick={() => setManualOpen(true)}
                             className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-md border border-border bg-card text-sm font-medium hover:bg-muted transition-colors"
@@ -173,7 +199,7 @@ export function LedgerCard({ ledger, onChanged, variant = "open" }) {
                 </div>
             ) : (
                 <div className="rounded-2xl border border-border bg-card overflow-hidden" data-testid="ledger-table-wrapper">
-                    {!isHistory ? (
+                    {!isHistory && !isPaused ? (
                         <div className="px-4 py-3 border-b border-border flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between bg-muted/20" data-testid="ledger-toolbar">
                             <div className="flex flex-wrap gap-1.5" data-testid="ledger-status-filters">
                                 {STATUS_FILTER_CHIPS.map((chip) => (
@@ -226,8 +252,13 @@ export function LedgerCard({ ledger, onChanged, variant = "open" }) {
                                 <th className="px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider text-right">Amount</th>
                                 <th className="px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Status</th>
                                 <th className="px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-                                    {isHistory ? "Closed" : "Due / Promise"}
+                                    {isHistory ? "Closed" : isPaused ? "Status" : "Due / Promise"}
                                 </th>
+                                {isPaused ? (
+                                    <th className="px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                                        <span className="sr-only">Resume</span>
+                                    </th>
+                                ) : null}
                                 <th className="w-10 px-2 py-3"><span className="sr-only">Actions</span></th>
                             </tr>
                         </thead>
@@ -236,7 +267,7 @@ export function LedgerCard({ ledger, onChanged, variant = "open" }) {
                                 <Fragment key={group.key}>
                                     {group.name ? (
                                         <tr className="bg-muted/50 border-b border-border" data-testid="ledger-client-group">
-                                            <td colSpan={6} className="px-4 py-2">
+                                            <td colSpan={isPaused ? 7 : 6} className="px-4 py-2">
                                                 <div className="flex items-baseline justify-between gap-3">
                                                     <div className="text-xs font-semibold">
                                                         {group.name}
@@ -323,6 +354,18 @@ export function LedgerCard({ ledger, onChanged, variant = "open" }) {
                                                         />
                                                     )}
                                                 </td>
+                                                {isPaused ? (
+                                                    <td className="px-4 py-3 align-top" onClick={(e) => e.stopPropagation()}>
+                                                        <Button
+                                                            size="sm"
+                                                            variant="outline"
+                                                            data-testid="ledger-resume-tracking"
+                                                            onClick={() => resumeInvoiceTracking(inv._id, { onChanged })}
+                                                        >
+                                                            Resume
+                                                        </Button>
+                                                    </td>
+                                                ) : null}
                                                 <td className="px-2 py-3 align-top">
                                                     <InvoiceOverflowMenu
                                                         invoice={inv}

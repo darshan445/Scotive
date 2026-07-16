@@ -185,6 +185,7 @@ async def run_escalation_tick(db, user_id) -> dict:
         "user_id": user_id,
         "status": {"$in": list(CHASEABLE_STATUSES)},
         "chasing_paused": {"$ne": True},
+        "tracking_paused": {"$ne": True},
     }):
         counts["invoices_scanned"] += 1
 

@@ -290,8 +290,12 @@ export function InvoiceDetailDrawer({ invoiceId, preview = null, open, onClose, 
                     : action === "deny_payment_claim" ? "Marked not yet received"
                       : "Updated",
             );
-            refresh();
             await onChanged?.();
+            if (action === "mark_paid") {
+                onClose?.();
+            } else {
+                refresh();
+            }
         } catch (e) {
             toast.error(extractError(e));
         } finally {
@@ -312,21 +316,13 @@ export function InvoiceDetailDrawer({ invoiceId, preview = null, open, onClose, 
         });
     }
 
-    function openAdjust() {
-        const claim = inv?.disputed_claim_amount;
-        if (claim == null) {
-            openComposer();
-            return;
-        }
-        const amt = Number(claim).toLocaleString("en-US", { maximumFractionDigits: 2 });
-        openComposer(`Confirming the adjusted amount of $${amt} for this invoice — you're right.`);
-    }
-
     const actions = (() => {
         if (!inv) return null;
         const s = inv.status;
         const composing = composePresent;
         if (s === "paid" || s === "written_off") return null;
+
+        // paid_unconfirmed: Received / Not yet (no Mark paid — Received is that verb)
         if (s === "paid_unconfirmed") {
             return (
                 <>
@@ -335,55 +331,31 @@ export function InvoiceDetailDrawer({ invoiceId, preview = null, open, onClose, 
                 </>
             );
         }
-        if (s === "disputed" || (inv.needs_reply && inv.disputed_claim_amount != null)) {
-            return (
-                <>
-                    <Button
-                        onClick={() => openComposer()}
-                        disabled={busy || composing}
-                        aria-pressed={composing}
-                        data-testid="detail-reply"
-                    >
-                        <Send className="w-3.5 h-3.5 mr-1.5" /> Reply
-                    </Button>
-                    {inv.disputed_claim_amount != null ? (
-                        <Button variant="outline" onClick={openAdjust} disabled={busy || composing} data-testid="detail-adjust">
-                            Adjust to {formatMoney(inv.disputed_claim_amount, inv.currency || "USD")}
-                        </Button>
-                    ) : null}
-                </>
-            );
-        }
-        if (inv.needs_reply) {
-            return (
+
+        // One primary compose verb by situation + Mark paid secondary
+        const needsCompose =
+            s === "disputed"
+            || inv.needs_reply
+            || ["overdue", "promise_broken", "invoiced", "promised", "partially_paid", "stale"].includes(s);
+        if (!needsCompose) return null;
+
+        const isReply = s === "disputed" || inv.needs_reply;
+        return (
+            <>
                 <Button
                     onClick={() => openComposer()}
                     disabled={busy || composing}
                     aria-pressed={composing}
-                    data-testid="detail-reply"
+                    data-testid={isReply ? "detail-reply" : "detail-follow-up"}
                 >
-                    <Send className="w-3.5 h-3.5 mr-1.5" /> Reply
+                    <Send className="w-3.5 h-3.5 mr-1.5" />
+                    {isReply ? "Reply" : "Follow up"}
                 </Button>
-            );
-        }
-        if (["overdue", "promise_broken", "invoiced", "promised", "partially_paid", "stale"].includes(s)) {
-            return (
-                <>
-                    <Button
-                        onClick={() => openComposer()}
-                        disabled={busy || composing}
-                        aria-pressed={composing}
-                        data-testid="detail-follow-up"
-                    >
-                        <Send className="w-3.5 h-3.5 mr-1.5" /> Follow up
-                    </Button>
-                    <Button variant="outline" onClick={() => act("mark_paid")} disabled={busy} data-testid="detail-mark-paid">
-                        Mark paid
-                    </Button>
-                </>
-            );
-        }
-        return null;
+                <Button variant="outline" onClick={() => act("mark_paid")} disabled={busy} data-testid="detail-mark-paid">
+                    Mark paid
+                </Button>
+            </>
+        );
     })();
 
     const threadUrl = gmailThreadUrl(data?.thread_id || inv?.source_thread_id);

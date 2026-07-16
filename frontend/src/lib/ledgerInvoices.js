@@ -19,12 +19,24 @@ export const SORT_OPTIONS = [
     { key: "most_overdue", label: "Most overdue" },
 ];
 
+export function isTrackingPaused(inv) {
+    return Boolean(inv?.tracking_paused);
+}
+
+/** Active open rows — excludes paid/written_off and user-paused. */
 export function isOpenLedgerInvoice(inv) {
-    return inv?.status && !HISTORY_INVOICE_STATUSES.has(inv.status);
+    return inv?.status
+        && !HISTORY_INVOICE_STATUSES.has(inv.status)
+        && !isTrackingPaused(inv);
 }
 
 export function isHistoryLedgerInvoice(inv) {
     return inv?.status && HISTORY_INVOICE_STATUSES.has(inv.status);
+}
+
+/** User-paused open invoices (Paused tab). */
+export function isPausedLedgerInvoice(inv) {
+    return isTrackingPaused(inv) && inv?.status && !HISTORY_INVOICE_STATUSES.has(inv.status);
 }
 
 function _ts(iso) {
@@ -102,6 +114,18 @@ function sortInvoices(list, sortKey) {
 export function openLedgerInvoices(invoices = [], { statusFilter = "all", sort = "due_soonest" } = {}) {
     const open = invoices.filter(isOpenLedgerInvoice).filter((inv) => matchesStatusFilter(inv, statusFilter));
     return sortInvoices(open, sort);
+}
+
+/** User-paused invoices — most recently paused first. */
+export function pausedLedgerInvoices(invoices = []) {
+    return invoices
+        .filter(isPausedLedgerInvoice)
+        .slice()
+        .sort((a, b) => {
+            const ka = _ts(a.status_updated_at) || _ts(a.source_date) || _ts(a.created_at);
+            const kb = _ts(b.status_updated_at) || _ts(b.source_date) || _ts(b.created_at);
+            return kb - ka;
+        });
 }
 
 /** Group open invoices under client headers with subtotals. */
