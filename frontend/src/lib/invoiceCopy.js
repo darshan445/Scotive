@@ -40,9 +40,53 @@ export function invoiceStatusDisplay(inv) {
 }
 
 export function pastDueQuestion(inv) {
-    const name = inv.counterparty_name || inv.counterparty_email || "Client";
     if (!inv.due_date) return null;
-    return `${name} was due ${formatDate(inv.due_date)} — has it arrived?`;
+    return `Was due ${formatDate(inv.due_date)} — has it arrived?`;
+}
+
+/** Dashboard-only factual context — dates/ledger math, never message quotes. */
+export function factualDigestLine(inv, sectionKey) {
+    if (sectionKey === "due_overdue") {
+        return pastDueQuestion(inv);
+    }
+    if (sectionKey === "broken_promises") {
+        return inv.promise_date
+            ? `Promised ${formatDate(inv.promise_date)} — didn't arrive`
+            : "Promise date passed — didn't arrive";
+    }
+    if (sectionKey === "confirm_prompts") {
+        return "Says paid — did you receive it?";
+    }
+    if (sectionKey === "needs_reply") {
+        const claim = inv?.disputed_claim_amount;
+        if (inv?.status === "disputed" || (claim != null && Number(claim) > 0)) {
+            const cur = inv.currency || "USD";
+            let you;
+            let them;
+            try {
+                you = new Intl.NumberFormat("en-US", { style: "currency", currency: cur }).format(Number(inv.amount || 0));
+                them = claim != null
+                    ? new Intl.NumberFormat("en-US", { style: "currency", currency: cur }).format(Number(claim))
+                    : null;
+            } catch {
+                you = `$${Number(inv.amount || 0).toFixed(2)}`;
+                them = claim != null ? `$${Number(claim).toFixed(2)}` : null;
+            }
+            return them ? `You billed ${you} · client claims ${them}` : `You billed ${you}`;
+        }
+        return null;
+    }
+    if (sectionKey === "stale_prompts") {
+        return "No email activity in 120+ days";
+    }
+    return null;
+}
+
+/** Full original subject — primary invoice identifier in the UI. */
+export function invoiceSubject(inv) {
+    const subject = (inv?.source_subject || "").trim();
+    if (subject) return subject;
+    return invoiceDisplayRef(inv);
 }
 
 export function watchingSubtitle(inv) {

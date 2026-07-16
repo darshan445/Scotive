@@ -512,6 +512,126 @@ def build_router(db, get_current_user):
             "next": invoice_next_line(serialized_inv),
         }
 
+    @router.get("/invoices/{invoice_id}/conversation")
+    async def invoice_conversation(invoice_id: str, user: dict = Depends(get_current_user)):
+        """Full Gmail thread for invoice detail — read path only, fetch-on-open."""
+        import re
+        from gmail_client import (
+            GmailAuthError,
+            _html_to_visible_text,
+            get_access_token,
+            get_message,
+            get_thread_messages,
+            parse_email_addresses,
+        )
+        from ledger_reconcile import parse_email_date, strip_quoted_history
+
+        try:
+            inv = await db.invoices.find_one({"_id": ObjectId(invoice_id), "user_id": user["_id"]})
+        except Exception:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        if not inv:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        inv = enrich_invoice_doc(dict(inv), inv.get("counterparty_email") or "")
+
+        conn = await db.gmail_connections.find_one({"user_id": user["_id"]}) or {}
+        my_email = (conn.get("email") or "").lower()
+
+        event_rows = []
+        async for ev in db.invoice_events.find({"user_id": user["_id"], "invoice_id": inv["_id"]}):
+            event_rows.append(ev)
+
+        _MARKER_LABELS = {
+            "dispute": "Disputed",
+            "payment_promise": "Promised",
+            "payment_claim": "Says paid",
+            "partial_payment": "Partial payment",
+            "invoice_corrected": "Amount corrected",
+            "client_question": "Needs reply",
+            "mark_paid": "Marked paid",
+            "payment_approved": "Approved",
+        }
+        markers_by_mid: dict[str, list[str]] = {}
+        linked_mids: set[str] = set()
+        for ev in event_rows:
+            meta = ev.get("meta") or {}
+            mid = meta.get("message_id")
+            action = ev.get("action") or ""
+            if mid:
+                linked_mids.add(mid)
+            label = _MARKER_LABELS.get(action)
+            if mid and label:
+                markers_by_mid.setdefault(mid, [])
+                if label not in markers_by_mid[mid]:
+                    markers_by_mid[mid].append(label)
+
+        messages: list[dict] = []
+        gmail_error = None
+        thread_id = inv.get("source_thread_id")
+        try:
+            access = await get_access_token(db, user["_id"])
+            if thread_id:
+                messages = await get_thread_messages(access, thread_id, body_limit=50000)
+            seen = {m.get("id") for m in messages if m.get("id")}
+            for mid in linked_mids:
+                if mid in seen:
+                    continue
+                extra = await get_message(access, mid)
+                if extra:
+                    messages.append(extra)
+                    seen.add(mid)
+            origin = inv.get("source_message_id")
+            if origin and origin not in seen:
+                extra = await get_message(access, origin)
+                if extra:
+                    messages.append(extra)
+        except GmailAuthError as e:
+            gmail_error = str(e) or "Gmail not connected"
+            logger.warning("invoice.conversation gmail auth fail inv=%s err=%s", invoice_id, e)
+        except Exception as e:
+            gmail_error = "Could not load conversation from Gmail"
+            logger.warning("invoice.conversation fail inv=%s err=%s", invoice_id, e)
+
+        def _ts(msg: dict) -> float:
+            dt = parse_email_date(msg.get("date"))
+            return dt.timestamp() if dt else 0.0
+
+        messages.sort(key=_ts)
+
+        out_msgs = []
+        for m in messages:
+            sender = (parse_email_addresses(m.get("from") or "") or [""])[0].lower()
+            direction = "you" if my_email and sender == my_email else "client"
+            mid = m.get("id")
+            body = m.get("body") or m.get("snippet") or ""
+            # Safety net if an older parser left HTML tags in the body
+            if re.search(r"</?[a-z][\s\S]*>", body, re.I):
+                body = _html_to_visible_text(body)
+            # Thread view already shows prior messages — drop quoted history
+            body = strip_quoted_history(body)
+            out_msgs.append({
+                "id": mid,
+                "thread_id": m.get("thread_id") or thread_id,
+                "subject": m.get("subject") or "",
+                "from": m.get("from") or "",
+                "to": m.get("to") or "",
+                "date": m.get("date") or "",
+                "body": body,
+                "direction": direction,
+                "state_markers": markers_by_mid.get(mid or "", []),
+                "attachment_names": m.get("attachment_names") or [],
+            })
+
+        client_replied = any(m["direction"] == "client" for m in out_msgs)
+        return {
+            "invoice": _serialize(inv),
+            "messages": out_msgs,
+            "thread_id": thread_id,
+            "client_ever_replied": client_replied,
+            "gmail_error": gmail_error,
+            "my_email": my_email or None,
+        }
+
     # ---- Clients ---------------------------------------------------------
     @router.get("/clients")
     async def list_clients(user: dict = Depends(get_current_user)):

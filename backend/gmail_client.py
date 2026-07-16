@@ -146,26 +146,65 @@ async def list_message_ids(access_token: str, query: str, max_pages: int = 20) -
     return ids
 
 
+def _html_to_visible_text(html: str) -> str:
+    """Turn an HTML email body into readable plain text for UI / LLM."""
+    import html as html_lib
+
+    text = html or ""
+    # Drop quoted-reply chrome early when possible
+    text = re.sub(
+        r'(?is)<div[^>]*class=["\'][^"\']*gmail_quote[^"\']*["\'][^>]*>.*$',
+        "",
+        text,
+    )
+    text = re.sub(r"(?is)<style[^>]*>.*?</style>", "", text)
+    text = re.sub(r"(?is)<script[^>]*>.*?</script>", "", text)
+    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
+    text = re.sub(r"(?i)</p\s*>", "\n\n", text)
+    text = re.sub(r"(?i)</div\s*>", "\n", text)
+    text = re.sub(r"(?i)</li\s*>", "\n", text)
+    text = re.sub(r"(?i)</tr\s*>", "\n", text)
+    text = re.sub(r"(?i)</h[1-6]\s*>", "\n\n", text)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = html_lib.unescape(text)
+    text = text.replace("\xa0", " ")
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 def _extract_text_from_payload(payload: dict) -> str:
-    parts = []
+    """Prefer text/plain; fall back to HTML→text. Never concatenate both."""
+    plain_parts: list[str] = []
+    html_parts: list[str] = []
 
     def walk(node):
         if not node:
             return
-        mime = node.get("mimeType", "")
+        mime = (node.get("mimeType") or "").lower()
         body = node.get("body", {})
         data = body.get("data")
         if data and mime.startswith("text/"):
             try:
                 decoded = base64.urlsafe_b64decode(data + "==").decode("utf-8", errors="ignore")
-                parts.append(decoded)
             except Exception:
+                decoded = ""
+            if not decoded:
                 pass
+            elif mime == "text/html":
+                html_parts.append(decoded)
+            else:
+                # text/plain and other text/*
+                plain_parts.append(decoded)
         for child in node.get("parts", []) or []:
             walk(child)
 
     walk(payload)
-    return "\n".join(parts)
+    if plain_parts:
+        return "\n".join(plain_parts).strip()
+    if html_parts:
+        return _html_to_visible_text("\n".join(html_parts))
+    return ""
 
 
 def _collect_attachment_filenames(payload: dict) -> list[str]:
@@ -216,13 +255,14 @@ def parse_email_addresses(header_value: str) -> list[str]:
     return [a.lower() for a in found]
 
 
-def _parse_full_message(raw: dict) -> Optional[dict]:
+def _parse_full_message(raw: dict, *, body_limit: int = 8000) -> Optional[dict]:
     if not raw.get("id"):
         return None
     payload = raw.get("payload", {})
     headers = {h["name"].lower(): h["value"] for h in payload.get("headers", [])}
     body = _extract_text_from_payload(payload)
-    body = body[:8000]
+    if body_limit and body_limit > 0:
+        body = body[:body_limit]
     attachment_names = _collect_attachment_filenames(payload)
     attachment_parts = _collect_attachment_parts(payload)
     to_addrs = parse_email_addresses(headers.get("to", ""))
@@ -538,7 +578,12 @@ async def get_thread_message_ids(access_token: str, thread_id: str) -> list[str]
     return [m["id"] for m in (r.json().get("messages") or []) if m.get("id")]
 
 
-async def get_thread_messages(access_token: str, thread_id: str) -> list[dict]:
+async def get_thread_messages(
+    access_token: str,
+    thread_id: str,
+    *,
+    body_limit: int = 8000,
+) -> list[dict]:
     """Fetch every message in a thread (one threads.get?format=full call)."""
     headers = {"Authorization": f"Bearer {access_token}"}
 
@@ -558,7 +603,7 @@ async def get_thread_messages(access_token: str, thread_id: str) -> list[dict]:
         return []
     out: list[dict] = []
     for raw in r.json().get("messages") or []:
-        msg = _parse_full_message(raw)
+        msg = _parse_full_message(raw, body_limit=body_limit)
         if msg:
             out.append(msg)
     return out

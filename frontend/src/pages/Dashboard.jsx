@@ -253,7 +253,15 @@ export default function DashboardPage() {
                                             : "Forward-tracking from here — not inbox archaeology."}
                                 </p>
                             </div>
-                            {pastOnboarding ? <SyncStatusBar watching onSynced={handleSyncDetected} /> : null}
+                            {pastOnboarding ? (
+                                <SyncStatusBar
+                                    watching
+                                    openInvoiceCount={
+                                        (ledger?.invoices || []).filter((i) => OPEN_STATUSES.has(i.status)).length
+                                    }
+                                    onSynced={handleSyncDetected}
+                                />
+                            ) : null}
                         </div>
 
                         {onboarding?.phase === "scanning" || onboarding?.phase === "curating" ? (
@@ -325,7 +333,7 @@ export default function DashboardPage() {
                                 {onboarding?.phase === "watching" && !hasOpenInvoices ? (
                                     <WatchingEmptyState onChanged={refreshAll} />
                                 ) : (
-                                    <TodayCard onDraftChase={setChaseInvoice} onChanged={refreshAll} />
+                                    <TodayCard onChanged={refreshAll} />
                                 )}
 
                                 <Tabs defaultValue="ledger" className="w-full" data-testid="dashboard-tabs">

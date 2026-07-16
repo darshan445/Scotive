@@ -20,7 +20,7 @@ function timeAgo(iso) {
 /**
  * Sync strip + live sent-mail watching indicator.
  */
-export function SyncStatusBar({ onSynced, watching = false }) {
+export function SyncStatusBar({ onSynced, watching = false, openInvoiceCount = 0 }) {
     const [state, setState] = useState(null);
     const [busy, setBusy] = useState(false);
 
@@ -84,17 +84,24 @@ export function SyncStatusBar({ onSynced, watching = false }) {
                 <div className="text-xs font-medium text-muted-foreground min-w-0">
                     {isWatching ? (
                         <span className="inline-flex items-center gap-1.5 text-emerald-700">
-                            <Eye className="w-3.5 h-3.5" />
-                            Watching sent mail
+                            <Eye className="w-3.5 h-3.5 flex-shrink-0" />
+                            <span className="truncate">
+                                Watching {openInvoiceCount} open invoice{openInvoiceCount === 1 ? "" : "s"}
+                                {checkedAgo ? (
+                                    <span className="text-muted-foreground"> · {checkedAgo}</span>
+                                ) : null}
+                            </span>
                         </span>
                     ) : (
-                        <>Sync</>
+                        <>
+                            Sync
+                            {checkedAgo ? (
+                                <span className="text-muted-foreground ml-1.5">
+                                    · {checkedAgo}
+                                </span>
+                            ) : null}
+                        </>
                     )}
-                    {checkedAgo ? (
-                        <span className="text-muted-foreground ml-1.5">
-                            · {checkedAgo}
-                        </span>
-                    ) : null}
                 </div>
             </div>
             <span className="w-px h-4 bg-border" />

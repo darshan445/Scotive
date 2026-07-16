@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, ChevronRight, TrendingUp, AlertTriangle, Clock } from "lucide-react";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { ArrowLeft, TrendingUp, AlertTriangle, Clock } from "lucide-react";
 import { TopNav } from "@/components/TopNav";
 import { api, extractError } from "@/lib/api";
 import { formatMoney, formatOpenTotals } from "@/components/LedgerCard";
-import { invoiceDisplayRef, invoiceStatusDateLine } from "@/lib/invoiceCopy";
-import { InvoiceTimeline } from "@/components/InvoiceTimeline";
+import { invoiceStatusDateLine, invoiceSubject, isJunkInvoiceRef } from "@/lib/invoiceCopy";
+import { navigateToInvoice } from "@/lib/invoiceNavigation";
 
 const RISK_STYLES = {
     on_time: { label: "Pays on time", cls: "bg-green-50 text-green-800 border-green-200", Icon: TrendingUp },
@@ -77,9 +77,10 @@ function Stat({ label, value, detail, testid }) {
 
 export default function ClientDetailPage() {
     const { email } = useParams();
+    const navigate = useNavigate();
+    const location = useLocation();
     const [data, setData] = useState(null);
     const [err, setErr] = useState("");
-    const [expanded, setExpanded] = useState(null);
 
     useEffect(() => {
         api.get(`/clients/${encodeURIComponent(email)}`)
@@ -129,38 +130,30 @@ export default function ClientDetailPage() {
                         </section>
 
                         <section>
-                            <h2 className="font-heading font-bold text-xl mb-3">Invoices & evidence</h2>
+                            <h2 className="font-heading font-bold text-xl mb-3">Invoices</h2>
                             <div className="space-y-3" data-testid="client-invoices">
                                 {data.invoices.map((inv) => {
-                                    const isOpen = expanded === inv._id;
+                                    const subject = invoiceSubject(inv);
+                                    const ref = (inv.invoice_ref || "").trim();
                                     return (
-                                        <div
+                                        <button
                                             key={inv._id}
-                                            className="rounded-xl border border-border bg-card overflow-hidden"
-                                            data-testid="client-invoice-row">
-                                            <button
-                                                type="button"
-                                                onClick={() => setExpanded(isOpen ? null : inv._id)}
-                                                className="w-full text-left p-4 hover:bg-muted/30 transition-colors">
-                                                <div className="flex items-start gap-2">
-                                                    <ChevronRight className={`w-4 h-4 mt-0.5 text-muted-foreground flex-shrink-0 transition-transform ${isOpen ? "rotate-90" : ""}`} />
-                                                    <div className="flex-1 min-w-0">
-                                                        <div className="flex flex-wrap items-baseline justify-between gap-2">
-                                                            <div className="font-medium">{invoiceDisplayRef(inv)}</div>
-                                                            <div className="font-mono tabular-nums">{formatMoney(inv.amount, inv.currency)}</div>
-                                                        </div>
-                                                        <div className="mt-1 text-[11px] font-mono text-muted-foreground">
-                                                            {invoiceStatusDateLine(inv)}
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            </button>
-                                            {isOpen ? (
-                                                <div className="px-4 pb-4 pl-10 border-t border-border/60 bg-muted/10">
-                                                    <InvoiceTimeline invoiceId={inv._id} className="pt-3" />
-                                                </div>
+                                            type="button"
+                                            onClick={() => navigateToInvoice(navigate, location, inv._id)}
+                                            className="w-full text-left rounded-xl border border-border bg-card p-4 hover:bg-muted/30 transition-colors"
+                                            data-testid="client-invoice-row"
+                                        >
+                                            <div className="flex flex-wrap items-baseline justify-between gap-2">
+                                                <div className="font-medium break-words whitespace-normal">{subject}</div>
+                                                <div className="font-mono tabular-nums flex-shrink-0">{formatMoney(inv.amount, inv.currency)}</div>
+                                            </div>
+                                            {ref && !isJunkInvoiceRef(ref) && ref !== subject ? (
+                                                <div className="text-[11px] font-mono text-muted-foreground mt-0.5">{ref}</div>
                                             ) : null}
-                                        </div>
+                                            <div className="mt-1 text-[11px] font-mono text-muted-foreground">
+                                                {invoiceStatusDateLine(inv)}
+                                            </div>
+                                        </button>
                                     );
                                 })}
                             </div>

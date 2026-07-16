@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, extractError } from "@/lib/api";
+import { useWorkspaceRefreshEffect } from "@/lib/workspaceRefresh";
 
 export function useScan() {
     const [state, setState] = useState(null); // {has_job, status, phase, counts, ...}
@@ -74,6 +75,10 @@ export function useLedger(shouldFetch = true) {
     useEffect(() => {
         if (shouldFetch) refresh();
     }, [shouldFetch, refresh]);
+
+    useWorkspaceRefreshEffect(() => {
+        if (shouldFetch) refresh();
+    });
 
     return { data, error, refresh };
 }
