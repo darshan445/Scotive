@@ -418,14 +418,36 @@ def rulebook_result_to_candidate(
     except (TypeError, ValueError):
         bal_f = max(0.0, float(amount) - paid_f)
 
-    # Auto partially_paid when prior partial is clear
+    partial_ev = _latest_event(events, "partial_payment")
+    correction_ev = _latest_event(events, "amount_correction")
+    # Client-claimed partials stay in the claim bucket until user confirms.
+    # User-stated corrections (haul-video) keep booking to paid_amount.
+    client_partial_claim = None
+    if partial_ev and not correction_ev:
+        try:
+            client_partial_claim = float((partial_ev.get("data") or {}).get("amount") or 0)
+        except (TypeError, ValueError):
+            client_partial_claim = None
+        if client_partial_claim is not None and client_partial_claim > 0.005:
+            paid_f = 0.0
+            bal_f = float(amount)
+
+    # Auto partially_paid when prior CONFIRMED partial is clear
     if (
         enriched in (None, "invoiced", "overdue")
         and paid_f > 0.005
         and bal_f > 0.005
         and bal_f < float(amount) - 0.005
+        and not client_partial_claim
     ):
         enriched = "partially_paid"
+
+    # Client partial claim → paid_unconfirmed (or keep disputed if also disputed)
+    if client_partial_claim and client_partial_claim > 0.005:
+        if enriched == "partially_paid":
+            enriched = "paid_unconfirmed"
+        elif enriched in (None, "invoiced", "overdue"):
+            enriched = "paid_unconfirmed"
 
     promise_date = result.get("promise_date")
     if enriched == "promised" and not promise_date:
@@ -497,10 +519,18 @@ def rulebook_result_to_candidate(
         row["promise_date"] = promise_date
     if evidence:
         row["status_evidence"] = str(evidence)[:500]
-    if claimed_f is not None and enriched == "disputed":
+    if client_partial_claim and client_partial_claim > 0.005:
+        row["payment_claim_amount"] = client_partial_claim
+        row["payment_claim_pending"] = True
+        if partial_ev and partial_ev.get("quote"):
+            row["payment_claim_quote"] = str(partial_ev["quote"])[:500]
+    if claimed_f is not None and enriched in ("disputed", "paid_unconfirmed", "partially_paid"):
         row["disputed_claim_amount"] = claimed_f
         if dispute_ev:
             row["dispute_kind"] = "wrong_amount"
+        # Dispute + unconfirmed partial claim → disputed chip with says-paid.
+        if client_partial_claim and client_partial_claim > 0.005:
+            row["enriched_status"] = "disputed"
     if needs_ev and enriched in (None, "invoiced", "overdue"):
         row["needs_reply"] = True
         if needs_ev.get("quote"):

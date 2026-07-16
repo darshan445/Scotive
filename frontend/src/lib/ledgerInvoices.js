@@ -39,6 +39,37 @@ export function isPausedLedgerInvoice(inv) {
     return isTrackingPaused(inv) && inv?.status && !HISTORY_INVOICE_STATUSES.has(inv.status);
 }
 
+/**
+ * Amount that counts toward Outstanding / You're Owed / client subtotals.
+ * Unconfirmed payment claims never reduce this.
+ */
+export function outstandingBalance(inv) {
+    if (!inv) return 0;
+    const amt = Number(inv.amount || 0);
+    const bal = inv.balance_remaining != null ? Number(inv.balance_remaining) : amt;
+    const pending = Boolean(inv.payment_claim_pending) || inv.status === "paid_unconfirmed";
+    if (!pending) return bal;
+
+    if (inv.claim_balance_before != null) {
+        return Math.max(0, Number(inv.claim_balance_before));
+    }
+    if (inv.claim_paid_before != null) {
+        return Math.max(0, Math.round((amt - Number(inv.claim_paid_before || 0)) * 100) / 100);
+    }
+    const claim = Number(inv.payment_claim_amount);
+    if (Number.isFinite(claim) && claim > 0.005) {
+        if (bal + 0.005 < amt && Math.abs((bal + claim) - amt) <= Math.max(0.02, amt * 0.001)) {
+            return Math.round((bal + claim) * 100) / 100;
+        }
+        if (bal <= 0.005) {
+            return Math.abs(claim - amt) <= 0.02 ? Math.max(claim, amt) : Math.round((bal + claim) * 100) / 100;
+        }
+        return bal;
+    }
+    if (inv.status === "paid_unconfirmed" && bal <= 0.005) return amt;
+    return bal;
+}
+
 function _ts(iso) {
     if (!iso) return 0;
     const t = Date.parse(iso);
@@ -66,7 +97,12 @@ function matchesStatusFilter(inv, filter) {
         return inv.status === "partially_paid"
             || (Number(inv.paid_amount || 0) > 0.005
                 && Number(inv.balance_remaining ?? inv.amount ?? 0) > 0.005
+                && !inv.payment_claim_pending
+                && inv.status !== "paid_unconfirmed"
                 && !HISTORY_INVOICE_STATUSES.has(inv.status));
+    }
+    if (filter === "paid_unconfirmed") {
+        return inv.status === "paid_unconfirmed" || inv.payment_claim_pending;
     }
     return inv.status === filter;
 }
@@ -146,7 +182,7 @@ export function groupInvoicesByClient(invoices = []) {
         g.invoices.push(inv);
         if (!g.name && inv.counterparty_name) g.name = inv.counterparty_name;
         const cur = (inv.currency || "USD").toUpperCase();
-        const bal = Number(inv.balance_remaining ?? inv.amount ?? 0);
+        const bal = outstandingBalance(inv);
         g.subtotals[cur] = (g.subtotals[cur] || 0) + bal;
     }
     return [...map.values()];

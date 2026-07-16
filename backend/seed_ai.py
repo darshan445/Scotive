@@ -722,6 +722,21 @@ def invoices_to_candidates(
         elif paid_amount is not None:
             balance_remaining = max(0.0, float(amount) - paid_amount)
 
+        # Client-claimed partials with a coexisting dispute (multi-signal) go to
+        # the claim bucket. Pure user-stated partials (haul-video) stay paid_amount.
+        payment_claim_amount = None
+        if (
+            claimed_amount is not None
+            and paid_amount is not None
+            and paid_amount > 0.005
+            and (balance_remaining is None or float(balance_remaining) > 0.005)
+            and enriched_status in ("partially_paid", "disputed", "paid_unconfirmed", None)
+        ):
+            payment_claim_amount = float(paid_amount)
+            paid_amount = 0.0
+            balance_remaining = float(amount)
+            enriched_status = "disputed"
+
         age_days = 0
         if sent_dt:
             age_days = (datetime.now(timezone.utc) - sent_dt).days
@@ -761,6 +776,9 @@ def invoices_to_candidates(
             row["paid_amount"] = paid_amount
         if balance_remaining is not None:
             row["balance_remaining"] = balance_remaining
+        if payment_claim_amount is not None:
+            row["payment_claim_amount"] = payment_claim_amount
+            row["payment_claim_pending"] = True
         evidence = (inv.get("status_evidence") or "").strip()
         if evidence:
             row["status_evidence"] = evidence[:500]
@@ -778,6 +796,7 @@ def invoices_to_candidates(
                 )
                 or claimed_amount is not None
                 or paid_amount is not None
+                or payment_claim_amount is not None
             )
             if not concrete:
                 row["needs_reply"] = True
@@ -790,7 +809,9 @@ def invoices_to_candidates(
         if claimed_amount is not None and (
             enriched_status == "disputed"
             or enriched_status == "partially_paid"
+            or enriched_status == "paid_unconfirmed"
             or inv.get("dispute_kind")
+            or payment_claim_amount is not None
         ):
             row["disputed_claim_amount"] = claimed_amount
         out.append(row)

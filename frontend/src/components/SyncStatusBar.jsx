@@ -9,12 +9,15 @@ function timeAgo(iso) {
     const dt = new Date(iso);
     if (Number.isNaN(dt.getTime())) return null;
     const seconds = Math.max(0, Math.floor((Date.now() - dt.getTime()) / 1000));
-    if (seconds < 60) return `${seconds}s ago`;
+    if (seconds < 45) return "just now";
     const mins = Math.floor(seconds / 60);
-    if (mins < 60) return `${mins}m ago`;
+    if (mins < 60) return mins === 1 ? "1 minute ago" : `${mins} minutes ago`;
     const hrs = Math.floor(mins / 60);
-    if (hrs < 24) return `${hrs}h ago`;
-    return `${Math.floor(hrs / 24)}d ago`;
+    if (hrs < 24) return hrs === 1 ? "1 hour ago" : `${hrs} hours ago`;
+    const days = Math.floor(hrs / 24);
+    if (days < 30) return days === 1 ? "1 day ago" : `${days} days ago`;
+    const months = Math.floor(days / 30);
+    return months === 1 ? "1 month ago" : `${months} months ago`;
 }
 
 /**
@@ -23,6 +26,7 @@ function timeAgo(iso) {
 export function SyncStatusBar({ onSynced, watching = false, openInvoiceCount = 0 }) {
     const [state, setState] = useState(null);
     const [busy, setBusy] = useState(false);
+    const [nowTick, setNowTick] = useState(0);
 
     const load = useCallback(async () => {
         try {
@@ -38,6 +42,12 @@ export function SyncStatusBar({ onSynced, watching = false, openInvoiceCount = 0
         const t = setInterval(load, 30000);
         return () => clearInterval(t);
     }, [load]);
+
+    // Refresh relative labels without waiting for the next sync-state poll.
+    useEffect(() => {
+        const t = setInterval(() => setNowTick((n) => n + 1), 60000);
+        return () => clearInterval(t);
+    }, []);
 
     useWorkspaceRefreshEffect(load);
 
@@ -69,7 +79,10 @@ export function SyncStatusBar({ onSynced, watching = false, openInvoiceCount = 0
         }
     }
 
-    const checkedAgo = timeAgo(state?.last_detected_at || state?.last_synced_at);
+    // Prefer last completed sync; fall back to last detect stamp.
+    void nowTick; // keep relative label current
+    const lastSyncIso = state?.last_synced_at || state?.last_detected_at;
+    const syncedAgo = timeAgo(lastSyncIso);
     const isWatching = watching || state?.watching_sent_mail;
 
     return (
@@ -83,21 +96,23 @@ export function SyncStatusBar({ onSynced, watching = false, openInvoiceCount = 0
                 ) : null}
                 <div className="text-xs font-medium text-muted-foreground min-w-0">
                     {isWatching ? (
-                        <span className="inline-flex items-center gap-1.5 text-emerald-700">
-                            <Eye className="w-3.5 h-3.5 flex-shrink-0" />
-                            <span className="truncate">
+                        <span className="inline-flex items-center gap-1.5 min-w-0">
+                            <Eye className="w-3.5 h-3.5 flex-shrink-0 text-emerald-700" />
+                            <span className="truncate text-emerald-700">
                                 Watching {openInvoiceCount} open invoice{openInvoiceCount === 1 ? "" : "s"}
-                                {checkedAgo ? (
-                                    <span className="text-muted-foreground"> · {checkedAgo}</span>
-                                ) : null}
                             </span>
+                            {syncedAgo ? (
+                                <span className="truncate text-muted-foreground" data-testid="sync-last-ago">
+                                    · Last sync {syncedAgo}
+                                </span>
+                            ) : null}
                         </span>
                     ) : (
                         <>
                             Sync
-                            {checkedAgo ? (
-                                <span className="text-muted-foreground ml-1.5">
-                                    · {checkedAgo}
+                            {syncedAgo ? (
+                                <span className="text-muted-foreground ml-1.5" data-testid="sync-last-ago">
+                                    · Last sync {syncedAgo}
                                 </span>
                             ) : null}
                         </>

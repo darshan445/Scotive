@@ -435,9 +435,19 @@ class Set5Test:
         self._check("G5 two events", set(types) == {"dispute", "partial_payment"}, types)
         self._check("G5 amount 2400", float(inv["amount"]) == 2400)
         self._check("G5 claim 2000", float(inv.get("disputed_claim_amount") or 0) == 2000)
-        self._check("G5 paid 1200", float(inv.get("paid_amount") or 0) == 1200)
-        self._check("G5 balance 1200", float(inv.get("balance_remaining") or 0) == 1200)
-        self._check("G5 partially_paid", inv["status"] == "partially_paid", inv.get("status"))
+        self._check("G5 paid still 0", float(inv.get("paid_amount") or 0) == 0)
+        self._check("G5 balance still 2400", float(inv.get("balance_remaining") or 0) == 2400)
+        self._check(
+            "G5 payment_claim 1200",
+            float(inv.get("payment_claim_amount") or 0) == 1200,
+            inv.get("payment_claim_amount"),
+        )
+        self._check("G5 claim pending", bool(inv.get("payment_claim_pending")))
+        self._check(
+            "G5 disputed + says paid",
+            inv["status"] == "disputed",
+            inv.get("status"),
+        )
 
     async def run(self) -> int:
         await self.test_g1()

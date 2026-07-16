@@ -487,28 +487,37 @@ class ReevalFixTest:
         self._check("TE-105 exactly 2 signal events", len(signal) == 2, signal)
 
         self._check(
-            "TE-105 paid_amount 1000",
-            float(inv.get("paid_amount") or 0) == 1000.0,
+            "TE-105 paid_amount still 0",
+            float(inv.get("paid_amount") or 0) == 0.0,
             inv.get("paid_amount"),
         )
         self._check(
-            "TE-105 balance 1000",
-            float(inv.get("balance_remaining") or 0) == 1000.0,
+            "TE-105 balance still 2000",
+            float(inv.get("balance_remaining") or 0) == 2000.0,
             inv.get("balance_remaining"),
         )
+        self._check(
+            "TE-105 payment_claim 1000",
+            float(inv.get("payment_claim_amount") or 0) == 1000.0,
+            inv.get("payment_claim_amount"),
+        )
+        self._check("TE-105 claim pending", bool(inv.get("payment_claim_pending")))
         self._check(
             "TE-105 disputed_claim 1800",
             float(inv.get("disputed_claim_amount") or 0) == 1800.0,
             inv.get("disputed_claim_amount"),
         )
         both = (
-            (inv.get("status") == "partially_paid" and inv.get("disputed_claim_amount") is not None)
-            or (inv.get("status") == "disputed" and float(inv.get("paid_amount") or 0) >= 1000)
+            inv.get("status") == "disputed"
+            and inv.get("disputed_claim_amount") is not None
+            and float(inv.get("payment_claim_amount") or 0) >= 1000
+            and float(inv.get("paid_amount") or 0) < 0.02
         )
         self._check(
-            "TE-105 both dispute + partial visible on row",
+            "TE-105 both dispute + partial claim visible on row",
             both,
-            f"status={inv.get('status')} paid={inv.get('paid_amount')} claim={inv.get('disputed_claim_amount')}",
+            f"status={inv.get('status')} paid={inv.get('paid_amount')} "
+            f"pay_claim={inv.get('payment_claim_amount')} claim={inv.get('disputed_claim_amount')}",
         )
 
         # Path B: incremental re-eval event extraction + _write_event
@@ -578,13 +587,16 @@ class ReevalFixTest:
         self._check("TE-105B reeval partial", "partial_payment" in actions2, actions2)
         self._check("TE-105B reeval NO question", "client_question" not in actions2, actions2)
         both2 = (
-            (inv2b.get("status") == "partially_paid" and inv2b.get("disputed_claim_amount") is not None)
-            or (inv2b.get("status") == "disputed" and float(inv2b.get("paid_amount") or 0) >= 1000)
+            inv2b.get("status") == "disputed"
+            and inv2b.get("disputed_claim_amount") is not None
+            and float(inv2b.get("payment_claim_amount") or 0) >= 1000
+            and float(inv2b.get("paid_amount") or 0) < 0.02
         )
         self._check(
             "TE-105B both facts on row",
             both2,
-            f"status={inv2b.get('status')} paid={inv2b.get('paid_amount')} claim={inv2b.get('disputed_claim_amount')}",
+            f"status={inv2b.get('status')} paid={inv2b.get('paid_amount')} "
+            f"pay_claim={inv2b.get('payment_claim_amount')} claim={inv2b.get('disputed_claim_amount')}",
         )
 
     async def run(self) -> int:

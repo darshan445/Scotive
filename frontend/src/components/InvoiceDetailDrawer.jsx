@@ -12,6 +12,7 @@ import {
     invoiceSubject,
     isJunkInvoiceRef,
     factualDigestLine,
+    hasPendingPaymentClaim,
 } from "@/lib/invoiceCopy";
 import { gmailThreadUrl } from "@/lib/invoiceTimeline";
 import { cn } from "@/lib/utils";
@@ -31,7 +32,12 @@ const STATUS_STYLES = {
 
 function StatusChip({ inv }) {
     const status = inv?.status || "invoiced";
-    const cls = STATUS_STYLES[status] || STATUS_STYLES.invoiced;
+    const hasClaim = inv?.disputed_claim_amount != null && Number(inv.disputed_claim_amount) > 0;
+    const pendingPay = hasPendingPaymentClaim(inv);
+    let styleKey = status;
+    if (pendingPay && (status === "disputed" || hasClaim)) styleKey = "paid_unconfirmed";
+    else if (status === "partially_paid" && hasClaim) styleKey = "disputed";
+    const cls = STATUS_STYLES[styleKey] || STATUS_STYLES.invoiced;
     return (
         <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-medium border ${cls}`} data-testid="invoice-status-pill">
             {invoiceStatusDisplay(inv)}
@@ -184,6 +190,9 @@ function emailBodyToText(raw) {
 }
 
 function headerFactLine(inv) {
+    if (hasPendingPaymentClaim(inv)) {
+        return factualDigestLine(inv, "confirm_prompts");
+    }
     if (inv.status === "promise_broken") {
         return factualDigestLine(inv, "broken_promises");
     }
@@ -191,8 +200,11 @@ function headerFactLine(inv) {
         return `Promise date ${formatDate(inv.promise_date)}`;
     }
     if (inv.status === "overdue") return factualDigestLine(inv, "due_overdue");
-    if (inv.status === "paid_unconfirmed") return factualDigestLine(inv, "confirm_prompts");
-    if (inv.status === "disputed" || inv.disputed_claim_amount != null) {
+    if (
+        inv.status === "disputed"
+        || inv.disputed_claim_amount != null
+        || (inv.payment_claim_amount != null && Number(inv.payment_claim_amount) > 0.005)
+    ) {
         return factualDigestLine(inv, "needs_reply");
     }
     if (inv.due_date) return `Due ${formatDate(inv.due_date)}`;
@@ -322,8 +334,9 @@ export function InvoiceDetailDrawer({ invoiceId, preview = null, open, onClose, 
         const composing = composePresent;
         if (s === "paid" || s === "written_off") return null;
 
-        // paid_unconfirmed: Received / Not yet (no Mark paid — Received is that verb)
-        if (s === "paid_unconfirmed") {
+        // Pending payment claim (full or partial, with or without dispute):
+        // Received / Not yet only — never two action sets for one invoice.
+        if (hasPendingPaymentClaim(inv)) {
             return (
                 <>
                     <Button onClick={() => act("mark_paid")} disabled={busy} data-testid="detail-received">Received</Button>
@@ -360,7 +373,8 @@ export function InvoiceDetailDrawer({ invoiceId, preview = null, open, onClose, 
 
     const threadUrl = gmailThreadUrl(data?.thread_id || inv?.source_thread_id);
     const fact = inv ? headerFactLine(inv) : null;
-    const partial = inv && Number(inv.paid_amount || 0) > 0.005
+    const partial = inv && !hasPendingPaymentClaim(inv)
+        && Number(inv.paid_amount || 0) > 0.005
         && Number(inv.balance_remaining ?? inv.amount ?? 0) > 0.005;
     const loadingThread = open && invoiceId && !data && !err;
 

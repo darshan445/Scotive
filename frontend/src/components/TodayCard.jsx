@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { AlertTriangle, Clock, HelpCircle, MessageSquareWarning, Wallet } from "lucide-react";
-import { api } from "@/lib/api";
+import { toast } from "sonner";
+import { api, extractError } from "@/lib/api";
 import { useWorkspaceRefreshEffect } from "@/lib/workspaceRefresh";
 import { formatMoney } from "@/components/LedgerCard";
 import { factualDigestLine, invoiceSubject, isJunkInvoiceRef } from "@/lib/invoiceCopy";
 import { ClientMergePrompts } from "@/components/ClientMergePrompts";
 import { InvoiceOverflowMenu } from "@/components/InvoiceOverflowMenu";
 import { navigateToInvoice } from "@/lib/invoiceNavigation";
+import { Button } from "@/components/ui/button";
 
 /** Urgency order: money at risk → quick confirms → needs reply. */
 const ACTION_SECTIONS = [
@@ -26,6 +28,15 @@ const TONE_BADGE = {
     slate: "bg-muted text-muted-foreground border-border",
 };
 
+/** Match ledger StatusPill colors for status chips (not section tone). */
+const STATUS_CHIP = {
+    disputed: "bg-purple-50 text-purple-700 border-purple-200",
+    paid_unconfirmed: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    overdue: "bg-red-50 text-red-700 border-red-200",
+    promise_broken: "bg-orange-50 text-orange-700 border-orange-200",
+    stale: "bg-stone-100 text-stone-600 border-stone-200",
+};
+
 const TONE_ICON = {
     red: "text-red-600",
     amber: "text-amber-600",
@@ -39,16 +50,39 @@ function sortByAmountDesc(rows) {
 }
 
 function cardLabel(r, sectionKey) {
+    if (sectionKey === "confirm_prompts") {
+        if (r.status === "disputed" || r.disputed_claim_amount != null) {
+            return "Disputed · says paid";
+        }
+        return "Says paid";
+    }
     if (sectionKey === "needs_reply" && (r.status === "disputed" || r.disputed_claim_amount != null)) {
         return "Disputed";
     }
     return ACTION_SECTIONS.find((s) => s.key === sectionKey)?.label || sectionKey;
 }
 
+function chipClass(r, sectionKey, sectionTone) {
+    if (sectionKey === "confirm_prompts") {
+        if (r.status === "disputed" || r.disputed_claim_amount != null) {
+            return STATUS_CHIP.disputed;
+        }
+        return STATUS_CHIP.paid_unconfirmed;
+    }
+    if (sectionKey === "needs_reply" && (r.status === "disputed" || r.disputed_claim_amount != null)) {
+        return STATUS_CHIP.disputed;
+    }
+    if (sectionKey === "due_overdue") return STATUS_CHIP.overdue;
+    if (sectionKey === "broken_promises") return STATUS_CHIP.promise_broken;
+    if (sectionKey === "stale_prompts") return STATUS_CHIP.stale;
+    return TONE_BADGE[sectionTone];
+}
+
 export function TodayCard({ onChanged }) {
     const navigate = useNavigate();
     const location = useLocation();
     const [data, setData] = useState(null);
+    const [busyId, setBusyId] = useState(null);
 
     const refresh = useCallback(() => {
         api.post("/lifecycle/run").catch(() => {}).finally(() => {
@@ -60,6 +94,21 @@ export function TodayCard({ onChanged }) {
         refresh();
         await onChanged?.();
     }, [refresh, onChanged]);
+
+    async function confirmAction(invoiceId, action, e) {
+        e?.stopPropagation?.();
+        e?.preventDefault?.();
+        setBusyId(invoiceId);
+        try {
+            await api.post(`/invoices/${invoiceId}/action`, { action });
+            toast.success(action === "mark_paid" ? "Marked received" : "Marked not yet received");
+            await handleChanged();
+        } catch (err) {
+            toast.error(extractError(err));
+        } finally {
+            setBusyId(null);
+        }
+    }
 
     useEffect(() => {
         refresh();
@@ -157,7 +206,7 @@ export function TodayCard({ onChanged }) {
                                                     {formatMoney(r.amount, r.currency || "USD")}
                                                 </span>
                                                 <span
-                                                    className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border ${TONE_BADGE[s.tone]}`}
+                                                    className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border ${chipClass(r, s.key, s.tone)}`}
                                                     data-testid={i === 0 ? `${s.testid}-count` : undefined}
                                                 >
                                                     {label}
@@ -172,6 +221,27 @@ export function TodayCard({ onChanged }) {
                                             {fact ? (
                                                 <div className="text-xs text-muted-foreground mt-1" data-testid="digest-fact-line">
                                                     {fact}
+                                                </div>
+                                            ) : null}
+                                            {s.key === "confirm_prompts" ? (
+                                                <div className="flex flex-wrap gap-2 mt-2" onClick={(e) => e.stopPropagation()}>
+                                                    <Button
+                                                        size="sm"
+                                                        disabled={busyId === r._id}
+                                                        onClick={(e) => confirmAction(r._id, "mark_paid", e)}
+                                                        data-testid="today-received"
+                                                    >
+                                                        Received
+                                                    </Button>
+                                                    <Button
+                                                        size="sm"
+                                                        variant="outline"
+                                                        disabled={busyId === r._id}
+                                                        onClick={(e) => confirmAction(r._id, "deny_payment_claim", e)}
+                                                        data-testid="today-not-yet"
+                                                    >
+                                                        Not yet
+                                                    </Button>
                                                 </div>
                                             ) : null}
                                         </div>

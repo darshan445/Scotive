@@ -32,9 +32,11 @@ export function AuthProvider({ children }) {
         }
     }, []);
 
-    const register = useCallback(async (email, password, name) => {
+    const register = useCallback(async (email, password, name, timezone) => {
         try {
-            const { data } = await api.post("/auth/register", { email, password, name });
+            const body = { email, password, name };
+            if (timezone) body.timezone = timezone;
+            const { data } = await api.post("/auth/register", body);
             setUser(data);
             return { ok: true, user: data };
         } catch (e) {

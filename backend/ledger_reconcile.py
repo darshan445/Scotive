@@ -687,7 +687,10 @@ def compute_open_totals(invoices: list[dict], open_statuses: tuple[str, ...]) ->
     """Currency-grouped open balances + distinct client count.
 
     User-paused invoices (tracking_paused) are excluded from amounts and client count.
+    Unconfirmed payment claims never reduce the outstanding figure.
     """
+    from invoice_lifecycle import outstanding_balance
+
     totals_by_currency: dict[str, float] = {}
     client_keys: set[str] = set()
     for doc in invoices:
@@ -695,7 +698,7 @@ def compute_open_totals(invoices: list[dict], open_statuses: tuple[str, ...]) ->
             continue
         if doc.get("status") not in open_statuses:
             continue
-        bal = float(doc.get("balance_remaining") if doc.get("balance_remaining") is not None else doc.get("amount") or 0)
+        bal = outstanding_balance(doc)
         cur = (doc.get("currency") or "USD").upper()
         totals_by_currency[cur] = round(totals_by_currency.get(cur, 0) + bal, 2)
         em = (doc.get("counterparty_email") or "").lower()

@@ -18,20 +18,49 @@ export function statusLabel(status) {
     return STATUS_LABELS[status] || (status || "invoiced").replace(/_/g, " ");
 }
 
-/** Combined status when an invoice is both disputed and partially paid. */
+/** True while a client payment claim still needs Received / Not yet. */
+export function hasPendingPaymentClaim(inv) {
+    if (!inv) return false;
+    if (inv.payment_claim_pending) return true;
+    return inv.status === "paid_unconfirmed";
+}
+
+export function paymentClaimAmount(inv) {
+    const n = Number(inv?.payment_claim_amount);
+    return Number.isFinite(n) && n > 0.005 ? n : null;
+}
+
+function formatCurrency(amount, currency = "USD") {
+    try {
+        return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(Number(amount || 0));
+    } catch {
+        return `$${Number(amount || 0).toFixed(2)}`;
+    }
+}
+
+/** Combined status when an invoice is both disputed and partially paid / says paid. */
 export function invoiceStatusDisplay(inv) {
     const status = inv?.status;
     const claimed = inv?.disputed_claim_amount;
     const hasClaim = claimed != null && Number(claimed) > 0;
-    const partial = status === "partially_paid"
+    const pendingPay = hasPendingPaymentClaim(inv);
+    const confirmedPartial = !pendingPay && (
+        status === "partially_paid"
         || (Number(inv?.paid_amount || 0) > 0.005
-            && Number(inv?.balance_remaining ?? inv?.amount ?? 0) > 0.005);
+            && Number(inv?.balance_remaining ?? inv?.amount ?? 0) > 0.005)
+    );
 
-    if (status === "disputed" && partial) {
+    if (pendingPay && (status === "disputed" || hasClaim)) {
+        return "Disputed · says paid";
+    }
+    if (pendingPay || status === "paid_unconfirmed") {
+        return "Says paid";
+    }
+    if ((status === "disputed" || hasClaim) && confirmedPartial) {
         return "Disputed · partially paid";
     }
     if (status === "partially_paid" && hasClaim) {
-        return "Partially paid · disputed";
+        return "Disputed · partially paid";
     }
     if (status === "disputed" && hasClaim) {
         return statusLabel(status);
@@ -46,6 +75,10 @@ export function pastDueQuestion(inv) {
 
 /** Dashboard-only factual context — dates/ledger math, never message quotes. */
 export function factualDigestLine(inv, sectionKey) {
+    const cur = inv?.currency || "USD";
+    const payClaim = paymentClaimAmount(inv);
+    const disputeClaim = inv?.disputed_claim_amount;
+
     if (sectionKey === "due_overdue") {
         return pastDueQuestion(inv);
     }
@@ -55,24 +88,29 @@ export function factualDigestLine(inv, sectionKey) {
             : "Promise date passed — didn't arrive";
     }
     if (sectionKey === "confirm_prompts") {
+        const parts = [];
+        parts.push(`You billed ${formatCurrency(inv.amount, cur)}`);
+        if (disputeClaim != null && Number(disputeClaim) > 0) {
+            parts.push(`client claims ${formatCurrency(disputeClaim, cur)}`);
+        }
+        if (payClaim != null) {
+            parts.push(`says ${formatCurrency(payClaim, cur)} sent`);
+        }
+        if (parts.length > 1 || payClaim != null) {
+            return `${parts.join(" · ")} — did you receive it?`;
+        }
         return "Says paid — did you receive it?";
     }
     if (sectionKey === "needs_reply") {
-        const claim = inv?.disputed_claim_amount;
-        if (inv?.status === "disputed" || (claim != null && Number(claim) > 0)) {
-            const cur = inv.currency || "USD";
-            let you;
-            let them;
-            try {
-                you = new Intl.NumberFormat("en-US", { style: "currency", currency: cur }).format(Number(inv.amount || 0));
-                them = claim != null
-                    ? new Intl.NumberFormat("en-US", { style: "currency", currency: cur }).format(Number(claim))
-                    : null;
-            } catch {
-                you = `$${Number(inv.amount || 0).toFixed(2)}`;
-                them = claim != null ? `$${Number(claim).toFixed(2)}` : null;
-            }
-            return them ? `You billed ${you} · client claims ${them}` : `You billed ${you}`;
+        const parts = [`You billed ${formatCurrency(inv.amount, cur)}`];
+        if (disputeClaim != null && Number(disputeClaim) > 0) {
+            parts.push(`client claims ${formatCurrency(disputeClaim, cur)}`);
+        }
+        if (payClaim != null) {
+            parts.push(`says ${formatCurrency(payClaim, cur)} sent`);
+        }
+        if (parts.length > 1 || inv?.status === "disputed") {
+            return parts.join(" · ");
         }
         return null;
     }

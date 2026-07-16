@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { TopNav } from "@/components/TopNav";
 import { api, extractError } from "@/lib/api";
-import { formatDate, formatMoney, formatOpenTotals } from "@/components/LedgerCard";
+import { formatDate, formatOpenTotals } from "@/components/LedgerCard";
 import { useWorkspaceRefreshEffect } from "@/lib/workspaceRefresh";
 
 export default function ClientsPage() {
+    const navigate = useNavigate();
     const [clients, setClients] = useState(null);
     const [err, setErr] = useState("");
 
@@ -15,6 +16,10 @@ export default function ClientsPage() {
 
     useEffect(() => { load(); }, [load]);
     useWorkspaceRefreshEffect(load);
+
+    function openClient(email) {
+        navigate(`/clients/${encodeURIComponent(email)}`);
+    }
 
     return (
         <div className="min-h-screen bg-background text-foreground" data-testid="clients-page">
@@ -44,11 +49,24 @@ export default function ClientsPage() {
                             </thead>
                             <tbody>
                                 {clients.map((c) => (
-                                    <tr key={c.email} className="border-b border-border/60 hover:bg-muted/30" data-testid="clients-row">
+                                    <tr
+                                        key={c.email}
+                                        role="link"
+                                        tabIndex={0}
+                                        onClick={() => openClient(c.email)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === "Enter" || e.key === " ") {
+                                                e.preventDefault();
+                                                openClient(c.email);
+                                            }
+                                        }}
+                                        className="border-b border-border/60 hover:bg-muted/30 cursor-pointer"
+                                        data-testid="clients-row"
+                                    >
                                         <td className="px-4 py-3">
-                                            <Link to={`/clients/${encodeURIComponent(c.email)}`} className="font-medium hover:underline" data-testid="clients-row-link">
+                                            <div className="font-medium" data-testid="clients-row-link">
                                                 {c.name || c.email}
-                                            </Link>
+                                            </div>
                                             {c.name ? <div className="text-[11px] font-mono text-muted-foreground">{c.email}</div> : null}
                                         </td>
                                         <td className="px-4 py-3 text-right font-mono tabular-nums">

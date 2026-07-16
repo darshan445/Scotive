@@ -36,6 +36,158 @@ def effective_prior_status(inv: dict) -> str:
     return inv.get("status") or "invoiced"
 
 
+def payment_claim_amount_value(inv: dict | None) -> float | None:
+    """Claimed sent amount awaiting user confirmation, if any."""
+    if not inv:
+        return None
+    raw = inv.get("payment_claim_amount")
+    if raw is None:
+        return None
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return val if val > 0.005 else None
+
+
+def has_pending_payment_claim(inv: dict | None) -> bool:
+    """True while a client payment claim still needs Received / Not yet."""
+    if not inv:
+        return False
+    if inv.get("payment_claim_pending"):
+        return True
+    # Legacy full says-paid rows used status alone.
+    return inv.get("status") == "paid_unconfirmed"
+
+
+def outstanding_balance(inv: dict | None) -> float:
+    """Amount that counts toward Outstanding / You're Owed.
+
+    Unconfirmed payment claims (full or partial) never reduce this — use the
+    pre-claim snapshot when present, otherwise restore any claim amount that
+    was already subtracted from balance_remaining (legacy / receipt paths).
+    """
+    if not inv:
+        return 0.0
+    amt = float(inv.get("amount") or 0)
+    bal = float(
+        inv.get("balance_remaining")
+        if inv.get("balance_remaining") is not None
+        else amt
+    )
+    if not has_pending_payment_claim(inv):
+        return bal
+
+    if inv.get("claim_balance_before") is not None:
+        return max(0.0, float(inv["claim_balance_before"]))
+
+    if inv.get("claim_paid_before") is not None:
+        return max(0.0, round(amt - float(inv["claim_paid_before"] or 0), 2))
+
+    claim = payment_claim_amount_value(inv)
+    if claim is not None:
+        # Claim was booked into paid_amount / carved out of balance — add back.
+        if bal + 0.005 < amt and abs((bal + claim) - amt) <= max(0.02, amt * 0.001):
+            return round(bal + claim, 2)
+        if bal <= 0.005:
+            return max(claim, amt) if abs(claim - amt) <= 0.02 else round(bal + claim, 2)
+        return bal
+
+    # Legacy full says-paid with balance already zeroed, no claim fields.
+    if inv.get("status") == "paid_unconfirmed" and bal <= 0.005:
+        return amt
+    return bal
+
+
+def clear_payment_claim_fields(patch: dict, *, keep_amount: bool = False) -> None:
+    """Clear pending-claim bookkeeping from an invoice patch."""
+    if not keep_amount:
+        patch["payment_claim_amount"] = None
+    patch["payment_claim_pending"] = False
+    patch["payment_claim_quote"] = None
+    patch["status_before_claim"] = None
+    patch["claim_balance_before"] = None
+    patch["claim_paid_before"] = None
+
+
+async def migrate_unconfirmed_client_partial_claims(db, user_id) -> int:
+    """Move client-claimed partials wrongly booked into paid_amount into the claim bucket.
+
+    Heuristic: last client partial_payment event with no later mark_paid / receipt
+    confirmation, and paid_amount matching that event amount.
+    """
+    updated = 0
+    async for inv in db.invoices.find({
+        "user_id": user_id,
+        "status": {"$in": ["partially_paid", "disputed"]},
+        "paid_amount": {"$gt": 0.005},
+        "payment_claim_pending": {"$ne": True},
+    }):
+        events = []
+        async for e in db.invoice_events.find(
+            {"user_id": user_id, "invoice_id": inv["_id"]},
+            sort=[("at", 1)],
+        ):
+            events.append(e)
+
+        last_partial = None
+        confirmed_after = False
+        for e in events:
+            action = e.get("action")
+            if action == "partial_payment":
+                last_partial = e
+                confirmed_after = False
+            elif action in ("mark_paid", "receipt_matched", "user_confirmed_match"):
+                confirmed_after = True
+            elif action == "invoice_corrected":
+                # User-stated anchor / correction — leave confirmed money alone.
+                confirmed_after = True
+
+        if not last_partial or confirmed_after:
+            continue
+
+        meta = last_partial.get("meta") or {}
+        try:
+            claim_amt = float(meta.get("amount") or 0)
+        except (TypeError, ValueError):
+            claim_amt = 0.0
+        paid = float(inv.get("paid_amount") or 0)
+        if claim_amt <= 0.005 or abs(paid - claim_amt) > 0.02:
+            continue
+
+        amt = float(inv.get("amount") or 0)
+        new_paid = round(max(paid - claim_amt, 0), 2)
+        new_bal = round(max(amt - new_paid, 0), 2)
+        has_dispute = inv.get("disputed_claim_amount") is not None
+        due = _parse_date(inv.get("due_date"))
+        today = datetime.now(timezone.utc).date()
+        prior = "overdue" if (due and due < today) else "invoiced"
+        new_status = "disputed" if has_dispute else "paid_unconfirmed"
+
+        patch = {
+            "paid_amount": new_paid,
+            "balance_remaining": new_bal,
+            "payment_claim_amount": claim_amt,
+            "payment_claim_pending": True,
+            "payment_claim_quote": meta.get("quote"),
+            "status_before_claim": prior,
+            "claim_balance_before": new_bal,
+            "claim_paid_before": new_paid,
+            "status": new_status,
+            "chasing_paused": True,
+            "paid_at": None,
+        }
+        if has_dispute and inv.get("disputed_claim_amount") is not None:
+            patch["disputed_claim_amount"] = inv["disputed_claim_amount"]
+
+        await db.invoices.update_one({"_id": inv["_id"]}, {"$set": patch})
+        updated += 1
+
+    if updated:
+        logger.info("migrated unconfirmed client partials user=%s count=%s", user_id, updated)
+    return updated
+
+
 async def resolve_last_activity(db, inv: dict) -> datetime | None:
     """Best-effort last meaningful activity on an invoice."""
     for key in ("last_activity_at", "status_updated_at", "source_date", "created_at"):

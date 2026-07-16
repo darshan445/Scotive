@@ -3,6 +3,7 @@ import { CheckCircle2, ChevronDown, ChevronUp, Wallet } from "lucide-react";
 import { api, extractError } from "@/lib/api";
 import { toast } from "sonner";
 import { formatMoney, formatDate } from "@/components/LedgerCard";
+import { hasPendingPaymentClaim } from "@/lib/invoiceCopy";
 
 const OPEN_INVOICE_STATUSES = [
     "invoiced",
@@ -36,7 +37,7 @@ export function PaymentsCard({ receipts, ledger, onChanged }) {
     const rows = receipts?.receipts || [];
     const invById = new Map((ledger?.invoices || []).map((i) => [i._id, i]));
 
-    const confirmInvoices = (ledger?.invoices || []).filter((i) => i.status === "paid_unconfirmed");
+    const confirmInvoices = (ledger?.invoices || []).filter((i) => hasPendingPaymentClaim(i));
     const unmatched = rows.filter((r) => r.match_status === "unmatched");
     const ambiguous = rows.filter((r) => r.match_status === "ambiguous");
     const recent = rows.filter((r) =>

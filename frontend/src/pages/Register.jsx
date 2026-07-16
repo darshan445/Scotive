@@ -25,7 +25,13 @@ export default function RegisterPage() {
             return;
         }
         setSubmitting(true);
-        const res = await register(email, password, name.trim() || null);
+        let timezone = null;
+        try {
+            timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+        } catch {
+            timezone = null;
+        }
+        const res = await register(email, password, name.trim() || null, timezone);
         setSubmitting(false);
         if (!res.ok) {
             setError(res.error);

@@ -215,12 +215,18 @@ def build_ledger_invoice_from_candidate(
         base["dispute_kind"] = doc["dispute_kind"]
     if doc.get("disputed_claim_amount") is not None:
         base["disputed_claim_amount"] = float(doc["disputed_claim_amount"])
+    if doc.get("payment_claim_amount") is not None:
+        base["payment_claim_amount"] = float(doc["payment_claim_amount"])
+        base["payment_claim_pending"] = bool(doc.get("payment_claim_pending", True))
+        if doc.get("payment_claim_quote"):
+            base["payment_claim_quote"] = doc["payment_claim_quote"]
     # PRD §8: promise and dispute pause chasing; a payment claim awaits confirmation.
-    if status in ("promised", "disputed", "paid_unconfirmed"):
+    if status in ("promised", "disputed", "paid_unconfirmed") or base.get("payment_claim_pending"):
         base["chasing_paused"] = True
-    if status == "paid_unconfirmed":
+    if status == "paid_unconfirmed" or base.get("payment_claim_pending"):
         # Pre-claim state for "Not yet" reverts — date-driven, never assume overdue.
-        base["status_before_claim"] = "overdue" if (due_dt and due_dt < today) else "invoiced"
+        if not base.get("status_before_claim"):
+            base["status_before_claim"] = "overdue" if (due_dt and due_dt < today) else "invoiced"
 
     return enrich_invoice_doc(base, doc["counterparty_email"])
 

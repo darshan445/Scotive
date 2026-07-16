@@ -20,8 +20,18 @@ from seed_scan import (
     list_seed_candidates,
     run_seed_scan,
 )
+from invoice_lifecycle import (
+    apply_stale_transitions,
+    clear_payment_claim_fields,
+    clear_stale_fields,
+    has_pending_payment_claim,
+    migrate_unconfirmed_client_partial_claims,
+    outstanding_balance,
+    payment_claim_amount_value,
+)
 from ledger_reconcile import (
     INVOICE_MONGO_SORT,
+    OPEN_INVOICE_STATUSES,
     REVIEW_MONGO_SORT,
     client_identity_key,
     compute_open_totals,
@@ -32,7 +42,6 @@ from ledger_reconcile import (
 )
 from escalation_scheduler import run_escalation_tick, generate_draft as _gen_escalation_draft
 from digest_sender import send_digest_for_user, build_digest_email, collect_today_sections, _totals as _digest_totals
-from invoice_lifecycle import apply_stale_transitions, clear_stale_fields
 from client_merge import (
     apply_client_merge,
     detect_cross_domain_merge_prompts,
@@ -66,7 +75,7 @@ class ReviewConfirmInput(BaseModel):
     kind: str | None = None
 
 
-_OPEN_STATUSES = ("invoiced", "overdue", "promised", "partially_paid", "promise_broken")
+_OPEN_STATUSES = OPEN_INVOICE_STATUSES
 
 
 class InvoiceActionInput(BaseModel):
@@ -653,7 +662,7 @@ def build_router(db, get_current_user):
                 "emails": {"$addToSet": {"$toLower": "$counterparty_email"}},
                 "names": {"$push": "$counterparty_name"},
                 "invoice_count": {"$sum": 1},
-                "open_by_currency": {"$push": {
+                "open_invoices": {"$push": {
                     "$cond": [
                         {"$and": [
                             {"$in": ["$status", list(_OPEN_STATUSES)]},
@@ -661,7 +670,14 @@ def build_router(db, get_current_user):
                         ]},
                         {
                             "currency": {"$ifNull": ["$currency", "USD"]},
-                            "amount": {"$ifNull": ["$balance_remaining", "$amount"]},
+                            "amount": "$amount",
+                            "balance_remaining": "$balance_remaining",
+                            "status": "$status",
+                            "payment_claim_pending": "$payment_claim_pending",
+                            "payment_claim_amount": "$payment_claim_amount",
+                            "claim_balance_before": "$claim_balance_before",
+                            "claim_paid_before": "$claim_paid_before",
+                            "paid_amount": "$paid_amount",
                         },
                         None,
                     ]
@@ -673,11 +689,11 @@ def build_router(db, get_current_user):
         rows = []
         async for c in db.invoices.aggregate(pipeline):
             totals: dict[str, float] = {}
-            for item in c.get("open_by_currency") or []:
+            for item in c.get("open_invoices") or []:
                 if not item:
                     continue
                 cur = (item.get("currency") or "USD").upper()
-                totals[cur] = round(totals.get(cur, 0) + float(item.get("amount") or 0), 2)
+                totals[cur] = round(totals.get(cur, 0) + outstanding_balance(item), 2)
             names = [n for n in (c.get("names") or []) if n]
             display_name = names[0] if names else None
             emails = sorted(c.get("emails") or [])
@@ -858,44 +874,104 @@ def build_router(db, get_current_user):
             "paid_at": inv.get("paid_at"),
             "chasing_paused": inv.get("chasing_paused", False),
             "tracking_paused": inv.get("tracking_paused", False),
+            "payment_claim_amount": inv.get("payment_claim_amount"),
+            "payment_claim_pending": inv.get("payment_claim_pending"),
+            "payment_claim_quote": inv.get("payment_claim_quote"),
+            "status_before_claim": inv.get("status_before_claim"),
+            "claim_balance_before": inv.get("claim_balance_before"),
+            "claim_paid_before": inv.get("claim_paid_before"),
+            "disputed_claim_amount": inv.get("disputed_claim_amount"),
         }
 
         patch: dict = {"status_updated_at": now}
         if action == "mark_paid":
-            patch["status"] = "paid"
-            patch["paid_at"] = now
-            patch["balance_remaining"] = 0.0
-            patch["paid_amount"] = float(inv.get("amount") or 0)
-            patch["payment_claim_quote"] = None
-            patch["status_before_claim"] = None
-            patch["claim_balance_before"] = None
-            patch["claim_paid_before"] = None
-            patch["chasing_paused"] = False
-            patch["tracking_paused"] = False
-            patch["watching_for_reply"] = False
-            patch["ladder_exhausted"] = False
-            clear_stale_fields(patch)
-            patch["last_activity_at"] = now
-            await ack_followup_prompts(db, user["_id"], [invoice_id])
+            pending = has_pending_payment_claim(inv)
+            claim_amt = payment_claim_amount_value(inv) if pending else None
+            if pending and claim_amt is not None:
+                # Confirm a (full or partial) client payment claim — only this
+                # amount moves into paid_amount (unless a receipt already booked it).
+                bal = float(
+                    inv.get("balance_remaining")
+                    if inv.get("balance_remaining") is not None
+                    else inv.get("amount") or 0
+                )
+                cur_paid = float(inv.get("paid_amount") or 0)
+                snapshot_paid = float(inv.get("claim_paid_before") or 0)
+                money_already_in = cur_paid > snapshot_paid + 0.005
+                if money_already_in:
+                    new_paid = cur_paid
+                    new_bal = bal
+                else:
+                    applied = min(claim_amt, bal if bal > 0.005 else claim_amt)
+                    new_paid = round(cur_paid + applied, 2)
+                    new_bal = round(max(bal - applied, 0), 2)
+                has_dispute = inv.get("disputed_claim_amount") is not None
+                if new_bal <= 0.005:
+                    patch["status"] = "paid"
+                    patch["paid_at"] = now
+                    patch["balance_remaining"] = 0.0
+                    patch["paid_amount"] = float(inv.get("amount") or new_paid)
+                    patch["chasing_paused"] = False
+                    patch["disputed_claim_amount"] = None
+                else:
+                    patch["status"] = "partially_paid"
+                    patch["balance_remaining"] = new_bal
+                    patch["paid_amount"] = new_paid
+                    patch["paid_at"] = inv.get("paid_at")
+                    patch["chasing_paused"] = bool(has_dispute)
+                    if has_dispute:
+                        patch["disputed_claim_amount"] = inv["disputed_claim_amount"]
+                clear_payment_claim_fields(patch)
+                patch["tracking_paused"] = False
+                patch["watching_for_reply"] = False
+                patch["ladder_exhausted"] = False
+                clear_stale_fields(patch)
+                patch["last_activity_at"] = now
+                await ack_followup_prompts(db, user["_id"], [invoice_id])
+            else:
+                # Full mark-paid (manual or legacy full claim without amount).
+                patch["status"] = "paid"
+                patch["paid_at"] = now
+                patch["balance_remaining"] = 0.0
+                patch["paid_amount"] = float(inv.get("amount") or 0)
+                clear_payment_claim_fields(patch)
+                patch["chasing_paused"] = False
+                patch["tracking_paused"] = False
+                patch["watching_for_reply"] = False
+                patch["ladder_exhausted"] = False
+                clear_stale_fields(patch)
+                patch["last_activity_at"] = now
+                await ack_followup_prompts(db, user["_id"], [invoice_id])
         elif action == "deny_payment_claim":
-            prev = inv.get("status_before_claim") or ""
-            if prev == "stale":
-                prev = inv.get("status_before_stale") or ""
-            # Seed-stamped claims have no pre-claim snapshot, and a stored
-            # invoiced/overdue may predate a due-date change — resolve by date.
-            if prev in ("", "paid_unconfirmed", "invoiced", "overdue"):
-                due = _parse_date(inv.get("due_date"))
-                today = datetime.now(timezone.utc).date()
-                prev = "overdue" if (due and due < today) else "invoiced"
-            patch["status"] = prev
-            patch["chasing_paused"] = False
-            patch["payment_claim_quote"] = None
-            patch["status_before_claim"] = None
-            if inv.get("claim_balance_before") is not None:
+            has_dispute = (
+                inv.get("disputed_claim_amount") is not None
+                or inv.get("status") == "disputed"
+            )
+            if has_dispute:
+                # Keep dispute + claim amount as context; stop asking to confirm.
+                patch["status"] = "disputed"
+                patch["chasing_paused"] = True
+                clear_payment_claim_fields(patch, keep_amount=True)
+                patch["payment_claim_pending"] = False
+            else:
+                prev = inv.get("status_before_claim") or ""
+                if prev == "stale":
+                    prev = inv.get("status_before_stale") or ""
+                # Seed-stamped claims have no pre-claim snapshot, and a stored
+                # invoiced/overdue may predate a due-date change — resolve by date.
+                if prev in ("", "paid_unconfirmed", "invoiced", "overdue"):
+                    due = _parse_date(inv.get("due_date"))
+                    today = datetime.now(timezone.utc).date()
+                    prev = "overdue" if (due and due < today) else "invoiced"
+                patch["status"] = prev
+                patch["chasing_paused"] = False
+                clear_payment_claim_fields(patch, keep_amount=True)
+                patch["payment_claim_pending"] = False
+            # Restore money only when a prior path had already applied it
+            # (e.g. receipt → paid_unconfirmed). Client claims never touch money.
+            if inv.get("claim_balance_before") is not None and float(inv.get("paid_amount") or 0) > float(inv.get("claim_paid_before") or 0) + 0.005:
                 patch["balance_remaining"] = float(inv["claim_balance_before"])
                 patch["paid_amount"] = float(inv.get("claim_paid_before") or 0)
-                patch["claim_balance_before"] = None
-                patch["claim_paid_before"] = None
         elif action == "write_off":
             patch["status"] = "written_off"
             patch["watching_for_reply"] = False
@@ -957,12 +1033,14 @@ def build_router(db, get_current_user):
     @router.post("/lifecycle/run")
     async def run_lifecycle(user: dict = Depends(get_current_user)):
         """Recompute stale transitions and merge prompts (past-due runs on hourly sync)."""
+        migrated = await migrate_unconfirmed_client_partial_claims(db, user["_id"])
         stale_updates = await apply_stale_transitions(db, user["_id"])
         merge_prompts = await detect_cross_domain_merge_prompts(db, user["_id"])
         return {
             "ok": True,
             "stale": stale_updates,
             "merge_prompts": merge_prompts,
+            "migrated_partial_claims": migrated,
         }
 
     # ---- Today digest ----------------------------------------------------
@@ -982,7 +1060,9 @@ def build_router(db, get_current_user):
                 continue
             s = inv.get("status")
             row = _serialize(inv)
-            if s == "paid_unconfirmed":
+            # Pending payment claim (full or partial) — one confirm card, even
+            # when a dispute coexists (never two cards for one invoice).
+            if has_pending_payment_claim(inv):
                 confirm_prompts.append(row)
             elif s == "stale" and inv.get("stale_prompt_pending"):
                 stale_prompts.append(row)
@@ -1060,9 +1140,12 @@ def build_router(db, get_current_user):
             raise HTTPException(status_code=404, detail="Invoice not found")
         tone = payload.tone or _tone_for(inv)
         thread_subject = inv.get("source_subject") or ""
-        is_dispute = inv.get("status") == "disputed"
+        is_dispute = inv.get("status") == "disputed" or inv.get("disputed_claim_amount") is not None
         dispute_quote = None
         claim_amt = inv.get("disputed_claim_amount")
+        payment_claim = payment_claim_amount_value(inv)
+        payment_pending = has_pending_payment_claim(inv)
+        confirmed_paid = float(inv.get("paid_amount") or 0)
         if is_dispute:
             ev = await db.invoice_events.find_one(
                 {"user_id": user["_id"], "invoice_id": inv["_id"], "action": "dispute"},
@@ -1080,6 +1163,16 @@ def build_router(db, get_current_user):
                 if is_dispute
                 else ""
             )
+            + (
+                "The client said they sent a payment that is NOT yet confirmed received. "
+                "Say they mentioned sending that amount — do NOT thank them as if the money already arrived. "
+                if payment_pending and payment_claim
+                else (
+                    "A partial payment has been confirmed received — you may thank them for that amount. "
+                    if confirmed_paid > 0.005 and float(inv.get("balance_remaining") or 0) > 0.005
+                    else ""
+                )
+            )
             + "Never sound templated or AI-written. "
             "This is a REPLY in an existing email thread — subject must be 'Re: <original subject>' matching the thread. "
             "Output STRICT JSON: {\"subject\": string, \"body\": string}."
@@ -1090,6 +1183,9 @@ def build_router(db, get_current_user):
             f"Invoice ref: {inv.get('invoice_ref') or 'n/a'}\n"
             f"Amount: {inv.get('amount')} {inv.get('currency','USD')}\n"
             f"Client claimed amount (if disputing): {claim_amt if claim_amt is not None else 'n/a'}\n"
+            f"Client says sent (unconfirmed): {payment_claim if payment_pending and payment_claim else 'n/a'}\n"
+            f"Confirmed paid amount: {confirmed_paid if confirmed_paid > 0.005 else 'n/a'}\n"
+            f"Balance remaining: {inv.get('balance_remaining')}\n"
             f"Due date: {inv.get('due_date') or 'n/a'}\n"
             f"Promise date: {inv.get('promise_date') or 'n/a'}\n"
             f"Status: {inv.get('status')}\n"

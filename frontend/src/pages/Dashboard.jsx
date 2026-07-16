@@ -25,9 +25,9 @@ import { useReceipts } from "@/hooks/useReceipts";
 import { useOnboarding } from "@/hooks/useOnboarding";
 import { useLiveDetection } from "@/hooks/useLiveDetection";
 import { useWorkspaceRefresh } from "@/hooks/useWorkspaceRefresh";
-import { openLedgerInvoices, historyLedgerInvoices, pausedLedgerInvoices } from "@/lib/ledgerInvoices";
+import { openLedgerInvoices, historyLedgerInvoices, pausedLedgerInvoices, outstandingBalance } from "@/lib/ledgerInvoices";
 
-const OPEN_STATUSES = new Set(["invoiced", "overdue", "promised", "partially_paid", "promise_broken", "disputed"]);
+const OPEN_STATUSES = new Set(["invoiced", "overdue", "promised", "partially_paid", "promise_broken", "disputed", "paid_unconfirmed"]);
 
 function greeting() {
     const h = new Date().getHours();
@@ -64,19 +64,24 @@ function StatsStrip({ ledger }) {
         const pastDue = invoices.filter((i) => i.status === "overdue" || i.status === "promise_broken");
         const promised = invoices.filter((i) => i.status === "promised");
         const pastDueByCur = {};
+        const openByCur = {};
+        for (const i of open) {
+            const cur = (i.currency || "USD").toUpperCase();
+            openByCur[cur] = (openByCur[cur] || 0) + outstandingBalance(i);
+        }
         for (const i of pastDue) {
             const cur = (i.currency || "USD").toUpperCase();
             // A past-due row can't owe $0 — a zeroed balance on an unpaid invoice is
-            // a claim artifact ("says paid" → "not yet"); fall back to the amount.
-            let owed = Number(i.balance_remaining ?? i.amount ?? 0);
+            // a claim artifact ("says paid" → "not yet"); fall back via outstandingBalance.
+            let owed = outstandingBalance(i);
             if (owed <= 0) owed = Number(i.amount ?? 0);
             pastDueByCur[cur] = (pastDueByCur[cur] || 0) + owed;
         }
-        return { open, pastDue, promised, pastDueByCur };
+        return { open, pastDue, promised, pastDueByCur, openByCur };
     }, [ledger]);
 
     if (!ledger) return null;
-    const openTotals = ledger.totals_by_currency ?? ledger.total_open;
+    const openTotals = stats.openByCur;
 
     return (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3" data-testid="dashboard-stats">

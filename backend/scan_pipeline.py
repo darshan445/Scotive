@@ -16,7 +16,7 @@ from typing import Optional
 import httpx
 
 # Open-invoice statuses used by receipt reconciliation
-_OPEN_STATUSES = ("invoiced", "overdue", "promised", "partially_paid", "promise_broken")
+from ledger_reconcile import OPEN_INVOICE_STATUSES as _OPEN_STATUSES
 
 # Receipt reconciliation thresholds
 AMOUNT_TOLERANCE_PCT = 0.02  # ±2%
@@ -462,6 +462,12 @@ async def reconcile_receipts(db, user_id) -> dict:
 
     Returns: {"matched": N, "ambiguous": M, "partial": P}
     """
+    from invoice_lifecycle import (
+        clear_payment_claim_fields,
+        has_pending_payment_claim,
+        payment_claim_amount_value,
+    )
+
     now_iso = datetime.now(timezone.utc).isoformat()
     matched = 0
     ambiguous = 0
@@ -481,16 +487,23 @@ async def reconcile_receipts(db, user_id) -> dict:
         candidates = []
         for inv in open_invoices:
             bal = float(inv.get("balance_remaining") or 0)
-            if bal <= 0:
-                continue
-            close_full, valid_partial = _amount_close(rc_amount, bal)
-            if not (close_full or valid_partial):
+            claim = payment_claim_amount_value(inv) if has_pending_payment_claim(inv) else None
+            close_full, valid_partial = _amount_close(rc_amount, bal) if bal > 0 else (False, False)
+            claim_match = False
+            if claim is not None:
+                tol = max(claim * AMOUNT_TOLERANCE_PCT, AMOUNT_TOLERANCE_ABS)
+                if abs(rc_amount - claim) <= tol:
+                    claim_match = True
+            if not (close_full or valid_partial or claim_match):
                 continue
             name_sim = max(
                 _name_similarity(payer, inv.get("counterparty_name")),
                 _name_similarity(payer, inv.get("counterparty_email")),
             )
-            amt_score = 1.0 if close_full else max(0.0, 1.0 - abs(rc_amount - bal) / bal)
+            match_target = claim if claim_match and claim else bal
+            amt_score = 1.0 if (close_full or claim_match) else max(
+                0.0, 1.0 - abs(rc_amount - match_target) / max(match_target, 0.01)
+            )
             score = 0.6 * amt_score + 0.4 * name_sim
             candidates.append({
                 "invoice": inv,
@@ -498,12 +511,14 @@ async def reconcile_receipts(db, user_id) -> dict:
                 "name_sim": name_sim,
                 "close_full": close_full,
                 "valid_partial": valid_partial,
+                "claim_match": claim_match,
             })
 
-        # Filter: require minimum name similarity OR a very tight full match
+        # Filter: require minimum name similarity OR a very tight full/claim match
         candidates = [
             c for c in candidates
-            if c["name_sim"] >= NAME_SIMILARITY_MIN or (c["close_full"] and c["score"] >= 0.7)
+            if c["name_sim"] >= NAME_SIMILARITY_MIN
+            or ((c["close_full"] or c["claim_match"]) and c["score"] >= 0.7)
         ]
 
         if not candidates:
@@ -528,40 +543,72 @@ async def reconcile_receipts(db, user_id) -> dict:
 
         inv = top["invoice"]
         bal = float(inv.get("balance_remaining") or inv.get("amount") or 0)
-        applied = min(rc_amount, bal)
+        claim = payment_claim_amount_value(inv) if has_pending_payment_claim(inv) else None
+        # Receipt on a pending claim amount = same effect as Received.
+        if top.get("claim_match") and claim is not None:
+            applied = min(claim, bal if bal > 0.005 else claim)
+        else:
+            applied = min(rc_amount, bal)
         new_balance = round(bal - applied, 2)
         new_paid = round(float(inv.get("paid_amount") or 0) + applied, 2)
 
-        if top["close_full"] or new_balance <= 0.005:
+        confirm_pending_claim = bool(top.get("claim_match") and claim is not None)
+        if confirm_pending_claim:
+            has_dispute = inv.get("disputed_claim_amount") is not None
+            if new_balance <= 0.005:
+                new_status = "paid"
+                paid_at = now_iso
+            else:
+                new_status = "partially_paid"
+                paid_at = inv.get("paid_at")
+                partial += 1
+            patch = {
+                "status": new_status,
+                "balance_remaining": max(new_balance, 0.0),
+                "paid_amount": new_paid if new_status != "paid" else float(inv.get("amount") or new_paid),
+                "paid_at": paid_at,
+                "status_updated_at": now_iso,
+                "chasing_paused": bool(has_dispute and new_status != "paid"),
+            }
+            if has_dispute and new_status != "paid":
+                patch["disputed_claim_amount"] = inv["disputed_claim_amount"]
+            clear_payment_claim_fields(patch)
+        elif top["close_full"] or new_balance <= 0.005:
             # Auto-match → paid (unconfirmed); user confirms in Today / Payments UI
             new_status = "paid_unconfirmed"
             paid_at = None
+            amt_label = f"{rc.get('currency') or ''} {rc_amount}".strip()
+            patch = {
+                "status": new_status,
+                "balance_remaining": max(new_balance, 0.0),
+                "paid_amount": new_paid,
+                "paid_at": paid_at,
+                "status_updated_at": now_iso,
+                "chasing_paused": True,
+                "payment_claim_pending": True,
+                "payment_claim_amount": applied,
+                "payment_claim_quote": (
+                    f"Payment of {amt_label} from {payer}"
+                    if payer
+                    else f"Processor payment of {amt_label}"
+                ),
+                "status_before_claim": inv.get("status") or "invoiced",
+                "claim_balance_before": bal,
+                "claim_paid_before": float(inv.get("paid_amount") or 0),
+            }
         else:
             new_status = "partially_paid"
             paid_at = inv.get("paid_at")
             partial += 1
+            patch = {
+                "status": new_status,
+                "balance_remaining": max(new_balance, 0.0),
+                "paid_amount": new_paid,
+                "paid_at": paid_at,
+                "status_updated_at": now_iso,
+                "chasing_paused": True,
+            }
 
-        amt_label = f"{rc.get('currency') or ''} {rc_amount}".strip()
-        prev_status = inv.get("status") or "invoiced"
-        prev_bal = bal
-        prev_paid = float(inv.get("paid_amount") or 0)
-        patch: dict = {
-            "status": new_status,
-            "balance_remaining": max(new_balance, 0.0),
-            "paid_amount": new_paid,
-            "paid_at": paid_at,
-            "status_updated_at": now_iso,
-            "chasing_paused": True,
-        }
-        if new_status == "paid_unconfirmed":
-            patch["payment_claim_quote"] = (
-                f"Payment of {amt_label} from {payer}"
-                if payer
-                else f"Processor payment of {amt_label}"
-            )
-            patch["status_before_claim"] = prev_status
-            patch["claim_balance_before"] = prev_bal
-            patch["claim_paid_before"] = prev_paid
         await db.invoices.update_one(
             {"_id": inv["_id"]},
             {"$set": patch},
@@ -587,6 +634,7 @@ async def reconcile_receipts(db, user_id) -> dict:
                 "balance_after": max(new_balance, 0.0),
                 "payer_name": payer,
                 "score": top["score"],
+                "confirmed_claim": confirm_pending_claim,
             },
         })
         from post_chase import clear_watching_on_client_event
@@ -594,6 +642,10 @@ async def reconcile_receipts(db, user_id) -> dict:
         # Reflect the balance update locally so subsequent receipts see it
         inv["balance_remaining"] = max(new_balance, 0.0)
         inv["status"] = new_status
+        inv["paid_amount"] = patch.get("paid_amount", new_paid)
+        inv["payment_claim_pending"] = patch.get("payment_claim_pending", False)
+        if confirm_pending_claim:
+            inv["payment_claim_amount"] = None
         matched += 1
 
     return {"matched": matched, "ambiguous": ambiguous, "partial": partial}

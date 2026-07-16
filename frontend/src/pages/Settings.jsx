@@ -150,9 +150,12 @@ export default function SettingsPage() {
                     onSave={persist}
                 />
 
-                <LateFeeSection settings={settings} saving={saving} onSave={persist} />
+                {/* Late fees hidden for MVP — flip to true to restore. */}
+                {false ? (
+                    <LateFeeSection settings={settings} saving={saving} onSave={persist} />
+                ) : null}
 
-                <ScanWindowSection settings={settings} />
+                {/* Gmail sync info panel removed from Settings — not user-configurable. */}
 
                 <DailyDigestSection
                     settings={settings}
@@ -161,10 +164,13 @@ export default function SettingsPage() {
                     timezones={timezones}
                 />
 
-                <SuppressedSendersSection
-                    senders={suppressed}
-                    onRemove={unsuppress}
-                />
+                {/* Suppressed senders hidden for MVP — flip to true to restore. */}
+                {false ? (
+                    <SuppressedSendersSection
+                        senders={suppressed}
+                        onRemove={unsuppress}
+                    />
+                ) : null}
 
                 <DangerZone
                     email={user?.email}
@@ -507,9 +513,14 @@ function DailyDigestSection({ settings, saving, onSave, timezones }) {
                         <Label htmlFor="digest-tz">Timezone</Label>
                         <Select value={tz} onValueChange={setTz}>
                             <SelectTrigger data-testid="select-digest-tz">
-                                <SelectValue />
+                                <SelectValue placeholder="Select timezone" />
                             </SelectTrigger>
                             <SelectContent className="max-h-72">
+                                {tz && !(timezones || []).some((z) => z.value === tz) ? (
+                                    <SelectItem value={tz} data-testid={`digest-tz-${tz}`}>
+                                        {tz.replace(/_/g, " ")}
+                                    </SelectItem>
+                                ) : null}
                                 {(timezones || []).map((z) => (
                                     <SelectItem key={z.value} value={z.value} data-testid={`digest-tz-${z.value}`}>
                                         {z.label}

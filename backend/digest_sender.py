@@ -62,6 +62,8 @@ def _parse_date(v):
 
 async def collect_today_sections(db, user_id) -> dict:
     """Same buckets as GET /api/digest/today, but pure-python (no HTTP hop)."""
+    from invoice_lifecycle import has_pending_payment_claim
+
     today = datetime.now(timezone.utc).date()
     due_overdue = []
     broken = []
@@ -74,7 +76,7 @@ async def collect_today_sections(db, user_id) -> dict:
         if inv.get("tracking_paused"):
             continue
         s = inv.get("status")
-        if s == "paid_unconfirmed":
+        if has_pending_payment_claim(inv):
             confirm_prompts.append(inv)
         elif s == "stale" and inv.get("stale_prompt_pending"):
             stale_prompts.append(inv)
@@ -125,6 +127,8 @@ async def collect_today_sections(db, user_id) -> dict:
 
 
 def _totals(sections: dict) -> dict:
+    from invoice_lifecycle import outstanding_balance
+
     return {
         "due_overdue": len(sections["due_overdue"]),
         "broken_promises": len(sections["broken_promises"]),
@@ -135,7 +139,7 @@ def _totals(sections: dict) -> dict:
         "followup_prompts": len(sections.get("followup_prompts") or []),
         "resolved": len(sections["resolved"]),
         "total_open_amount": round(sum(
-            float(i.get("balance_remaining") or i.get("amount") or 0)
+            outstanding_balance(i)
             for i in sections["due_overdue"] + sections["broken_promises"]
         ), 2),
     }
@@ -170,9 +174,8 @@ def build_digest_email(user: dict, sections: dict, totals: dict) -> dict:
             return
         lines.append(f"{title} ({len(rows)})")
         for inv in rows[:10]:
-            bal = inv.get("balance_remaining")
-            if bal in (None, 0):
-                bal = inv.get("amount")
+            from invoice_lifecycle import outstanding_balance
+            bal = outstanding_balance(inv)
             lines.append(f"  · {_client_label(inv)} — {_fmt_money(bal, inv.get('currency','USD'))}"
                          + (f" · {inv.get('invoice_ref')}" if inv.get('invoice_ref') else "")
                          + (f" · {label_getter(inv)}" if label_getter(inv) else ""))
@@ -229,9 +232,8 @@ def build_digest_email(user: dict, sections: dict, totals: dict) -> dict:
             return ""
         items = []
         for inv in rows[:10]:
-            bal = inv.get("balance_remaining")
-            if bal in (None, 0):
-                bal = inv.get("amount")
+            from invoice_lifecycle import outstanding_balance
+            bal = outstanding_balance(inv)
             label = label_getter(inv)
             items.append(
                 "<tr>"

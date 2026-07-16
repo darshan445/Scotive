@@ -25,70 +25,8 @@ DEFAULT_SETTINGS: dict = {
     "daily_digest_timezone": "UTC",   # IANA name
 }
 
-
-def _valid_iana_zone(name: str) -> bool:
-    try:
-        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-        ZoneInfo(name)
-        return True
-    except Exception:
-        return False
-
-
-class SettingsPatch(BaseModel):
-    escalation_offsets: Optional[list[int]] = None
-    follow_up_interval_days: Optional[int] = Field(default=None, ge=1, le=30)
-    late_fee_enabled: Optional[bool] = None
-    late_fee_text: Optional[str] = Field(default=None, max_length=280)
-    scan_window_months: Optional[int] = Field(default=None, ge=1, le=36)
-    daily_digest_enabled: Optional[bool] = None
-    daily_digest_hour: Optional[int] = Field(default=None, ge=0, le=23)
-    daily_digest_timezone: Optional[str] = Field(default=None, max_length=64)
-
-    @field_validator("daily_digest_timezone")
-    @classmethod
-    def _valid_tz(cls, v):
-        if v is None:
-            return v
-        if not _valid_iana_zone(v):
-            raise ValueError(f"Unknown IANA timezone: {v}")
-        return v
-
-    @field_validator("escalation_offsets")
-    @classmethod
-    def _sorted_unique(cls, v):
-        if v is None:
-            return v
-        if len(v) > 8:
-            raise ValueError("Too many escalation steps (max 8).")
-        for n in v:
-            if not isinstance(n, int) or n < -30 or n > 90:
-                raise ValueError("Each offset must be between -30 and 90 days.")
-        return sorted(set(v))
-
-
-class DeleteAccountInput(BaseModel):
-    confirm_email: str
-
-
-async def get_settings_doc(db, user_id) -> dict:
-    doc = await db.user_settings.find_one({"user_id": user_id})
-    if not doc:
-        doc = {"user_id": user_id, **DEFAULT_SETTINGS,
-               "created_at": datetime.now(timezone.utc).isoformat()}
-        await db.user_settings.insert_one(doc)
-    # Backward compat: migrate legacy `daily_digest_hour_utc` → `daily_digest_hour`
-    if "daily_digest_hour" not in doc and "daily_digest_hour_utc" in doc:
-        doc["daily_digest_hour"] = doc.get("daily_digest_hour_utc") or 9
-    # Fill in any missing keys with defaults (forward compat)
-    merged = {**DEFAULT_SETTINGS, **{k: v for k, v in doc.items() if k in DEFAULT_SETTINGS}}
-    merged["user_id"] = user_id
-    return merged
-
-
 # Curated list surfaced to the UI. `Intl.supportedValuesOf('timeZone')` in the
-# browser can return 400+; we deliberately keep this focused on the US-service-
-# firm target market.
+# browser can return 400+; we deliberately keep this focused.
 COMMON_TIMEZONES = [
     ("UTC", "UTC"),
     ("America/New_York", "US Eastern (New York)"),
@@ -126,6 +64,140 @@ COMMON_TIMEZONES = [
     ("Australia/Melbourne", "Melbourne"),
     ("Pacific/Auckland", "Auckland"),
 ]
+
+_CURATED_TZ = {z for z, _ in COMMON_TIMEZONES}
+
+# Browsers still return legacy IANA aliases (e.g. Asia/Calcutta). Map them onto
+# the curated dropdown values so Settings Select isn't blank.
+TIMEZONE_ALIASES = {
+    "Asia/Calcutta": "Asia/Kolkata",
+    "US/Eastern": "America/New_York",
+    "US/Central": "America/Chicago",
+    "US/Mountain": "America/Denver",
+    "US/Pacific": "America/Los_Angeles",
+    "US/Arizona": "America/Phoenix",
+    "US/Hawaii": "America/Honolulu",
+    "US/Alaska": "America/Anchorage",
+    "Canada/Eastern": "America/Toronto",
+    "Canada/Pacific": "America/Vancouver",
+    "GMT": "UTC",
+    "Etc/UTC": "UTC",
+    "Etc/GMT": "UTC",
+}
+
+
+def _valid_iana_zone(name: str) -> bool:
+    try:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(name)
+        return True
+    except Exception:
+        return False
+
+
+def resolve_timezone(name: str | None) -> str:
+    """Return a curated IANA zone when possible, else a valid zone, else UTC.
+
+    Prefer dropdown-listed names so Settings always has a matching Select value.
+    """
+    if not name or not isinstance(name, str):
+        return DEFAULT_SETTINGS["daily_digest_timezone"]
+    cleaned = name.strip()
+    if not cleaned:
+        return DEFAULT_SETTINGS["daily_digest_timezone"]
+    cleaned = TIMEZONE_ALIASES.get(cleaned, cleaned)
+    if cleaned in _CURATED_TZ:
+        return cleaned
+    if _valid_iana_zone(cleaned):
+        # Valid but not curated — still store it; UI will add a fallback option.
+        return cleaned
+    return DEFAULT_SETTINGS["daily_digest_timezone"]
+
+
+async def seed_user_settings(db, user_id, *, tz_name: str | None = None) -> dict:
+    """Create default user_settings for a newly registered account.
+
+    Hour stays 9 AM local; timezone is taken from the browser when valid.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "user_id": user_id,
+        **DEFAULT_SETTINGS,
+        "daily_digest_timezone": resolve_timezone(tz_name),
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+    await db.user_settings.update_one(
+        {"user_id": user_id},
+        {"$setOnInsert": doc},
+        upsert=True,
+    )
+    return doc
+
+
+class SettingsPatch(BaseModel):
+    escalation_offsets: Optional[list[int]] = None
+    follow_up_interval_days: Optional[int] = Field(default=None, ge=1, le=30)
+    late_fee_enabled: Optional[bool] = None
+    late_fee_text: Optional[str] = Field(default=None, max_length=280)
+    scan_window_months: Optional[int] = Field(default=None, ge=1, le=36)
+    daily_digest_enabled: Optional[bool] = None
+    daily_digest_hour: Optional[int] = Field(default=None, ge=0, le=23)
+    daily_digest_timezone: Optional[str] = Field(default=None, max_length=64)
+
+    @field_validator("daily_digest_timezone")
+    @classmethod
+    def _valid_tz(cls, v):
+        if v is None:
+            return v
+        resolved = resolve_timezone(v)
+        if not _valid_iana_zone(resolved):
+            raise ValueError(f"Unknown IANA timezone: {v}")
+        return resolved
+
+    @field_validator("escalation_offsets")
+    @classmethod
+    def _sorted_unique(cls, v):
+        if v is None:
+            return v
+        if len(v) > 8:
+            raise ValueError("Too many escalation steps (max 8).")
+        for n in v:
+            if not isinstance(n, int) or n < -30 or n > 90:
+                raise ValueError("Each offset must be between -30 and 90 days.")
+        return sorted(set(v))
+
+
+class DeleteAccountInput(BaseModel):
+    confirm_email: str
+
+
+async def get_settings_doc(db, user_id) -> dict:
+    doc = await db.user_settings.find_one({"user_id": user_id})
+    if not doc:
+        doc = {"user_id": user_id, **DEFAULT_SETTINGS,
+               "created_at": datetime.now(timezone.utc).isoformat()}
+        await db.user_settings.insert_one(doc)
+    # Backward compat: migrate legacy `daily_digest_hour_utc` → `daily_digest_hour`
+    if "daily_digest_hour" not in doc and "daily_digest_hour_utc" in doc:
+        doc["daily_digest_hour"] = doc.get("daily_digest_hour_utc") or 9
+    # Fill in any missing keys with defaults (forward compat)
+    merged = {**DEFAULT_SETTINGS, **{k: v for k, v in doc.items() if k in DEFAULT_SETTINGS}}
+    merged["user_id"] = user_id
+    # Normalize legacy aliases (Asia/Calcutta → Asia/Kolkata) so the Settings
+    # dropdown has a matching option.
+    raw_tz = merged.get("daily_digest_timezone")
+    resolved_tz = resolve_timezone(raw_tz)
+    if resolved_tz != raw_tz:
+        merged["daily_digest_timezone"] = resolved_tz
+        await db.user_settings.update_one(
+            {"user_id": user_id},
+            {"$set": {
+                "daily_digest_timezone": resolved_tz,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+    return merged
 
 
 def build_router(db, get_current_user):

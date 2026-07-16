@@ -12,16 +12,17 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 
-import { invoiceSubject, invoiceStatusDisplay, isJunkInvoiceRef } from "@/lib/invoiceCopy";
 import {
     openLedgerInvoices,
     historyLedgerInvoices,
     historyLedgerSummary,
     pausedLedgerInvoices,
     groupInvoicesByClient,
+    outstandingBalance,
     STATUS_FILTER_CHIPS,
     SORT_OPTIONS,
 } from "@/lib/ledgerInvoices";
+import { invoiceSubject, invoiceStatusDisplay, isJunkInvoiceRef, hasPendingPaymentClaim } from "@/lib/invoiceCopy";
 import { navigateToInvoice } from "@/lib/invoiceNavigation";
 import { resumeInvoiceTracking } from "@/components/InvoiceOverflowMenu";
 import { Button } from "@/components/ui/button";
@@ -42,7 +43,10 @@ const STATUS_STYLES = {
 function StatusPill({ inv }) {
     const status = inv?.status || "invoiced";
     const hasClaim = inv?.disputed_claim_amount != null && Number(inv.disputed_claim_amount) > 0;
-    const styleKey = (status === "partially_paid" && hasClaim) ? "disputed" : status;
+    const pendingPay = hasPendingPaymentClaim(inv);
+    let styleKey = status;
+    if (pendingPay && (status === "disputed" || hasClaim)) styleKey = "paid_unconfirmed";
+    else if (status === "partially_paid" && hasClaim) styleKey = "disputed";
     const cls = STATUS_STYLES[styleKey] || STATUS_STYLES.invoiced;
     return (
         <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border ${cls}`} data-testid="invoice-status-pill">
@@ -102,10 +106,21 @@ export function LedgerCard({ ledger, onChanged, variant = "open" }) {
         () => historyLedgerSummary(allInvoices),
         [allInvoices],
     );
-    if (!ledger) return null;
-    const { totals_by_currency, total_open, client_count = 0 } = ledger;
-    const openTotals = totals_by_currency ?? total_open;
+    // Derive You're Owed from all open invoices so unconfirmed claims never
+    // reduce the total (independent of the status filter chip).
+    const openTotals = useMemo(() => {
+        if (isHistory || isPaused) return ledger?.totals_by_currency ?? ledger?.total_open;
+        const source = openLedgerInvoices(allInvoices);
+        const totals = {};
+        for (const inv of source) {
+            const cur = (inv.currency || "USD").toUpperCase();
+            totals[cur] = Math.round(((totals[cur] || 0) + outstandingBalance(inv)) * 100) / 100;
+        }
+        return totals;
+    }, [allInvoices, isHistory, isPaused, ledger?.totals_by_currency, ledger?.total_open]);
 
+    if (!ledger) return null;
+    const { client_count = 0 } = ledger;
     return (
         <div className="space-y-6" data-testid={isHistory ? "ledger-card-paid" : isPaused ? "ledger-card-paused" : "ledger-card"}>
             <div className="surface-card p-6 md:p-7">
@@ -320,7 +335,8 @@ export function LedgerCard({ ledger, onChanged, variant = "open" }) {
                                                 </td>
                                                 <td className="px-4 py-3 align-top text-right font-mono tabular-nums text-sm">
                                                     <div>{formatMoney(inv.amount, inv.currency || "USD")}</div>
-                                                    {(inv.status === "partially_paid" || Number(inv.paid_amount || 0) > 0.005)
+                                                    {!hasPendingPaymentClaim(inv)
+                                                        && (inv.status === "partially_paid" || Number(inv.paid_amount || 0) > 0.005)
                                                         && inv.balance_remaining != null
                                                         && Number(inv.balance_remaining) < Number(inv.amount || 0)
                                                         && Number(inv.balance_remaining) > 0.005 ? (

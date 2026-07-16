@@ -146,7 +146,8 @@ EVENT_KIND_MAP = {
 
 # partial_payment must run before promise on the same message (T7: partial + implicit promise).
 # dispute after partial so a disputed+partial invoice keeps disputed_claim_amount while
-# status can stay partially_paid (or disputed when no partial landed).
+# status stays disputed with payment_claim_pending (says-paid until user confirms).
+# Confirmed partials (user-stated / Received) keep partially_paid.
 _EVENT_APPLY_ORDER = {
     "partial_payment": 0,
     "promise": 1,
@@ -1055,7 +1056,10 @@ async def _write_event(
     domains: set[str] | None = None,
     email_to_primary: dict[str, str] | None = None,
 ):
-    from invoice_lifecycle import effective_prior_status
+    from invoice_lifecycle import (
+        effective_prior_status,
+        has_pending_payment_claim,
+    )
     from post_chase import clear_watching_on_client_event
     from promise_dates import resolve_stated_date
 
@@ -1103,14 +1107,16 @@ async def _write_event(
             if inv and inv.get("balance_remaining") is not None
             else (inv or {}).get("amount") or 0
         )
-        # Partial payment + promise on remainder stays partially_paid (T7).
+        # Confirmed partial + promise on remainder stays partially_paid (T7).
+        # Unconfirmed client claim + promise keeps the claim status.
         keep_partial = inv and inv.get("status") == "partially_paid" and bal > 0.005
+        keep_claim = inv and has_pending_payment_claim(inv)
         patch: dict[str, Any] = {
             "promise_date": ev.get("date"),
             "chasing_paused": True,
             **activity,
         }
-        if not keep_partial:
+        if not keep_partial and not keep_claim:
             patch["status"] = "promised"
         await db.invoices.update_one({"_id": invoice_id}, {"$set": patch})
         await clear_watching_on_client_event(db, invoice_id, now_iso)
@@ -1121,10 +1127,12 @@ async def _write_event(
             else (inv or {}).get("amount") or 0
         )
         paid = float((inv or {}).get("paid_amount") or 0)
-        # TE-105: dispute + partial on the same message — keep partially_paid
-        # when money already landed, but still record the claim amount.
+        pending_claim = inv and has_pending_payment_claim(inv)
+        # TE-105: dispute + CONFIRMED partial — keep partially_paid when money
+        # already landed. Unconfirmed client claims stay disputed + says-paid.
         keep_partial = (
             inv
+            and not pending_claim
             and paid > 0.005
             and bal > 0.005
             and inv.get("status") in ("partially_paid", "disputed", "invoiced", "overdue", "promised")
@@ -1137,6 +1145,10 @@ async def _write_event(
             patch["status"] = "partially_paid"
         else:
             patch["status"] = "disputed"
+        if pending_claim:
+            patch["payment_claim_pending"] = True
+            if inv.get("payment_claim_amount") is not None:
+                patch["payment_claim_amount"] = inv["payment_claim_amount"]
         if ev.get("claimed_amount") is not None:
             # Reference only — the tracked amount never moves on a client claim.
             patch["disputed_claim_amount"] = float(ev["claimed_amount"])
@@ -1145,47 +1157,68 @@ async def _write_event(
         await db.invoices.update_one({"_id": invoice_id}, {"$set": patch})
         await clear_watching_on_client_event(db, invoice_id, now_iso)
     elif ev_type == "partial_payment" and ev.get("amount"):
-        bal = float(inv.get("balance_remaining") if inv and inv.get("balance_remaining") is not None else inv.get("amount") or 0)
-        applied = min(float(ev["amount"]), bal)
-        new_bal = round(max(bal - applied, 0), 2)
-        new_paid = round(float(inv.get("paid_amount") or 0) + applied, 2)
-        # Preserve an open dispute claim when partial lands on a disputed invoice
-        # (or when dispute will follow in the same batch via apply order).
+        # Client-claimed partials go into the claim bucket — never paid_amount
+        # until the user confirms receipt (Kestrel says-paid pattern).
+        bal = float(
+            inv.get("balance_remaining")
+            if inv and inv.get("balance_remaining") is not None
+            else (inv or {}).get("amount") or 0
+        )
+        applied = min(float(ev["amount"]), bal if bal > 0.005 else float(ev["amount"]))
+        prev_status = effective_prior_status(inv) if inv else "invoiced"
         was_disputed = inv and (
             inv.get("status") == "disputed" or inv.get("disputed_claim_amount") is not None
         )
-        if new_bal <= 0.005:
-            new_status = "paid"
-        else:
-            new_status = "partially_paid"
         patch = {
-            "status": new_status,
-            "balance_remaining": new_bal,
-            "paid_amount": new_paid,
+            "payment_claim_amount": applied,
+            "payment_claim_pending": True,
+            "payment_claim_quote": ev.get("quote"),
+            "status_before_claim": (
+                inv.get("status_before_claim")
+                if inv and inv.get("status") == "paid_unconfirmed"
+                else prev_status
+            ),
+            "claim_balance_before": bal,
+            "claim_paid_before": float((inv or {}).get("paid_amount") or 0),
+            "chasing_paused": True,
             **activity,
         }
-        # Keep disputed_claim_amount so the row can show both facts.
-        if was_disputed and inv.get("disputed_claim_amount") is not None:
-            patch["disputed_claim_amount"] = inv["disputed_claim_amount"]
-            patch["chasing_paused"] = True
-        await db.invoices.update_one(
-            {"_id": invoice_id},
-            {"$set": patch},
-        )
-        if new_status == "paid":
-            await clear_watching_on_client_event(db, invoice_id, now_iso)
+        if was_disputed:
+            patch["status"] = "disputed"
+            if inv.get("disputed_claim_amount") is not None:
+                patch["disputed_claim_amount"] = inv["disputed_claim_amount"]
+        else:
+            patch["status"] = "paid_unconfirmed"
+        # Do NOT change paid_amount / balance_remaining.
+        await db.invoices.update_one({"_id": invoice_id}, {"$set": patch})
+        await clear_watching_on_client_event(db, invoice_id, now_iso)
     elif ev_type == "payment_claimed" and inv:
         prev_status = effective_prior_status(inv)
-        await db.invoices.update_one(
-            {"_id": invoice_id},
-            {"$set": {
-                "status": "paid_unconfirmed",
-                "status_before_claim": prev_status,
-                "payment_claim_quote": ev.get("quote"),
-                "chasing_paused": True,
-                **activity,
-            }},
+        bal = float(
+            inv.get("balance_remaining")
+            if inv.get("balance_remaining") is not None
+            else inv.get("amount") or 0
         )
+        claim_amt = float(ev["amount"]) if ev.get("amount") is not None else bal
+        if claim_amt <= 0.005:
+            claim_amt = bal
+        was_disputed = (
+            inv.get("status") == "disputed" or inv.get("disputed_claim_amount") is not None
+        )
+        patch = {
+            "status": "disputed" if was_disputed else "paid_unconfirmed",
+            "status_before_claim": prev_status,
+            "payment_claim_amount": claim_amt,
+            "payment_claim_pending": True,
+            "payment_claim_quote": ev.get("quote"),
+            "claim_balance_before": bal,
+            "claim_paid_before": float(inv.get("paid_amount") or 0),
+            "chasing_paused": True,
+            **activity,
+        }
+        if was_disputed and inv.get("disputed_claim_amount") is not None:
+            patch["disputed_claim_amount"] = inv["disputed_claim_amount"]
+        await db.invoices.update_one({"_id": invoice_id}, {"$set": patch})
         await clear_watching_on_client_event(db, invoice_id, now_iso)
     elif ev_type == "correction" and inv and ev.get("amount") is not None:
         from ledger_reconcile import apply_invoice_correction

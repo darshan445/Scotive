@@ -21,7 +21,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 from gmail_oauth import build_router as build_gmail_router
 from scan_router import build_router as build_scan_router
-from settings_router import build_router as build_settings_router
+from settings_router import build_router as build_settings_router, seed_user_settings
 from incremental_sync import sync_all_users
 from escalation_scheduler import escalate_all_users
 from digest_sender import send_daily_digests
@@ -187,6 +187,8 @@ class RegisterInput(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=200)
     name: Optional[str] = Field(default=None, max_length=120)
+    # Browser IANA timezone (e.g. Asia/Kolkata) — seeds daily_digest_timezone.
+    timezone: Optional[str] = Field(default=None, max_length=64)
 
 
 class LoginInput(BaseModel):
@@ -312,6 +314,7 @@ async def register(payload: RegisterInput, response: Response):
     }
     result = await db.users.insert_one(user_doc)
     user_doc["_id"] = result.inserted_id
+    await seed_user_settings(db, result.inserted_id, tz_name=payload.timezone)
     access = create_access_token(str(result.inserted_id), email)
     refresh = create_refresh_token(str(result.inserted_id))
     set_auth_cookies(response, access, refresh)
