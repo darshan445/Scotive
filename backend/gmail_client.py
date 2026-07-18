@@ -24,7 +24,6 @@ GMAIL_BATCH_URL = "https://gmail.googleapis.com/batch/gmail/v1"
 GMAIL_FETCH_CONCURRENCY = int(os.environ.get("GMAIL_FETCH_CONCURRENCY", "18"))
 GMAIL_FETCH_RETRIES = int(os.environ.get("GMAIL_FETCH_RETRIES", "4"))
 GMAIL_BATCH_SIZE = min(100, max(1, int(os.environ.get("GMAIL_BATCH_SIZE", "50"))))
-GMAIL_USE_BATCH = os.environ.get("GMAIL_USE_BATCH", "true").lower() not in ("0", "false", "no")
 RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 
 T = TypeVar("T")
@@ -460,7 +459,9 @@ async def get_messages_batch(
     by_id: dict[str, dict] = {}
     missing = list(message_ids)
 
-    if GMAIL_USE_BATCH and len(message_ids) > 1:
+    # Always try Google batch first when fetching more than one message.
+    # Failed / missing IDs fall through to concurrent per-message fetch below.
+    if len(message_ids) > 1:
         chunks = [
             message_ids[i:i + GMAIL_BATCH_SIZE]
             for i in range(0, len(message_ids), GMAIL_BATCH_SIZE)

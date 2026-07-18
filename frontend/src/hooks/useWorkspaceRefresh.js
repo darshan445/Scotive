@@ -5,15 +5,14 @@ import { notifyWorkspaceRefresh } from "@/lib/workspaceRefresh";
  * Combine parent data hooks with a global refresh signal for child views
  * that keep their own fetch state (Today digest, chase queue, sync bar, …).
  */
-export function useWorkspaceRefresh({ refreshLedger, refreshReceipts, refreshOnboarding } = {}) {
+export function useWorkspaceRefresh({ refreshLedger, refreshOnboarding } = {}) {
     const refreshAll = useCallback(async () => {
         notifyWorkspaceRefresh();
         await Promise.all([
             refreshLedger?.(),
-            refreshReceipts?.(),
             refreshOnboarding?.(),
         ].filter(Boolean));
-    }, [refreshLedger, refreshReceipts, refreshOnboarding]);
+    }, [refreshLedger, refreshOnboarding]);
 
     return { refreshAll };
 }

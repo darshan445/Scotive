@@ -6,7 +6,6 @@ import { TopNav } from "@/components/TopNav";
 import { EmptyStateHero } from "@/components/EmptyStateHero";
 import { ConnectGmailButton } from "@/components/ConnectGmailButton";
 import { LedgerCard } from "@/components/LedgerCard";
-import { PaymentsCard } from "@/components/PaymentsCard";
 import { TodayCard } from "@/components/TodayCard";
 import { SyncStatusBar } from "@/components/SyncStatusBar";
 import { SeedScanProgress } from "@/components/SeedScanProgress";
@@ -21,7 +20,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 import { useGmailCallbackToast } from "@/hooks/useGmailCallbackToast";
 import { useLedger } from "@/hooks/useScan";
-import { useReceipts } from "@/hooks/useReceipts";
 import { useOnboarding } from "@/hooks/useOnboarding";
 import { useLiveDetection } from "@/hooks/useLiveDetection";
 import { useWorkspaceRefresh } from "@/hooks/useWorkspaceRefresh";
@@ -130,10 +128,8 @@ export default function DashboardPage() {
         onboarding?.phase === "needs_seed";
 
     const { data: ledger, refresh: refreshLedger } = useLedger(pastOnboarding);
-    const { data: receipts, refresh: refreshReceipts } = useReceipts(pastOnboarding);
     const { refreshAll: refreshWorkspace } = useWorkspaceRefresh({
         refreshLedger,
-        refreshReceipts,
         refreshOnboarding,
     });
 
@@ -360,17 +356,7 @@ export default function DashboardPage() {
                                         <TabsTrigger value="paid" className="rounded-full px-4 py-2 text-sm data-[state=active]:shadow-sm" data-testid="tab-paid">
                                             Paid{paidInvoiceCount ? ` (${paidInvoiceCount})` : ""}
                                         </TabsTrigger>
-                                        <TabsTrigger value="payments" className="rounded-full px-4 py-2 text-sm data-[state=active]:shadow-sm" data-testid="tab-payments">
-                                            Payments
-                                        </TabsTrigger>
                                     </TabsList>
-                                    <TabsContent value="payments" className="mt-4">
-                                        <PaymentsCard
-                                            receipts={receipts}
-                                            ledger={ledger}
-                                            onChanged={refreshAll}
-                                        />
-                                    </TabsContent>
                                     <TabsContent value="paid" className="mt-4">
                                         <LedgerCard ledger={ledger} onChanged={refreshAll} variant="paid" />
                                     </TabsContent>

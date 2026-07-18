@@ -493,20 +493,27 @@ async def on_startup():
     await db.client_merge_prompts.create_index([("user_id", 1), ("pair_key", 1), ("status", 1)])
     await seed_admin()
 
-    # Kick off continuous sync loop (F9a). Interval is configurable via env.
+    # Kick off continuous loops (F9a). Interval 0 disables that loop.
+    # Defaults: sync/escalation hourly; digest check every 15m (send still once/day per user).
     global _sync_task, _escalation_task, _digest_task
     interval = int(os.environ.get("SYNC_INTERVAL_SECONDS", "3600"))
     esc_interval = int(os.environ.get("ESCALATION_INTERVAL_SECONDS", "3600"))
     digest_interval = int(os.environ.get("DIGEST_CHECK_INTERVAL_SECONDS", "900"))
-    if os.environ.get("DISABLE_SYNC_LOOP") != "1":
+    if interval > 0:
         _sync_task = asyncio.create_task(_sync_loop(interval))
         logger.info("Continuous sync loop scheduled every %ss", interval)
-    if os.environ.get("DISABLE_ESCALATION_LOOP") != "1":
+    else:
+        logger.info("Continuous sync loop disabled (SYNC_INTERVAL_SECONDS=0)")
+    if esc_interval > 0:
         _escalation_task = asyncio.create_task(_escalation_loop(esc_interval))
         logger.info("Escalation loop scheduled every %ss", esc_interval)
-    if os.environ.get("DISABLE_DIGEST_LOOP") != "1":
+    else:
+        logger.info("Escalation loop disabled (ESCALATION_INTERVAL_SECONDS=0)")
+    if digest_interval > 0:
         _digest_task = asyncio.create_task(_digest_loop(digest_interval))
         logger.info("Daily digest loop scheduled every %ss", digest_interval)
+    else:
+        logger.info("Daily digest loop disabled (DIGEST_CHECK_INTERVAL_SECONDS=0)")
 
 
 async def _sync_loop(interval_seconds: int):
