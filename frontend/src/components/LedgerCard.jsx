@@ -106,21 +106,30 @@ export function LedgerCard({ ledger, onChanged, variant = "open" }) {
         () => historyLedgerSummary(allInvoices),
         [allInvoices],
     );
+    // Unfiltered open list — keeps status chips visible even when a chip has zero matches.
+    const openUnfiltered = useMemo(
+        () => (isHistory || isPaused ? [] : openLedgerInvoices(allInvoices)),
+        [allInvoices, isHistory, isPaused],
+    );
+    const showOpenToolbar = !isHistory && !isPaused && openUnfiltered.length > 0;
+
     // Derive You're Owed from all open invoices so unconfirmed claims never
     // reduce the total (independent of the status filter chip).
     const openTotals = useMemo(() => {
         if (isHistory || isPaused) return ledger?.totals_by_currency ?? ledger?.total_open;
-        const source = openLedgerInvoices(allInvoices);
         const totals = {};
-        for (const inv of source) {
+        for (const inv of openUnfiltered) {
             const cur = (inv.currency || "USD").toUpperCase();
             totals[cur] = Math.round(((totals[cur] || 0) + outstandingBalance(inv)) * 100) / 100;
         }
         return totals;
-    }, [allInvoices, isHistory, isPaused, ledger?.totals_by_currency, ledger?.total_open]);
+    }, [openUnfiltered, isHistory, isPaused, ledger?.totals_by_currency, ledger?.total_open]);
 
     if (!ledger) return null;
     const { client_count = 0 } = ledger;
+    const filterEmpty = showOpenToolbar && invoices.length === 0 && statusFilter !== "all";
+    const showListShell = showOpenToolbar || invoices.length > 0;
+
     return (
         <div className="space-y-6" data-testid={isHistory ? "ledger-card-paid" : isPaused ? "ledger-card-paused" : "ledger-card"}>
             <div className="surface-card p-6 md:p-7">
@@ -183,27 +192,23 @@ export function LedgerCard({ ledger, onChanged, variant = "open" }) {
                 </div>
             </div>
 
-            {invoices.length === 0 ? (
+            {!showListShell ? (
                 <div className="rounded-xl border border-dashed border-border bg-card/40 p-10 text-center" data-testid="ledger-empty">
                     <h3 className="font-heading font-semibold text-lg">
                         {isHistory
                             ? "No paid invoices yet."
                             : isPaused
                               ? "Nothing paused."
-                              : statusFilter !== "all"
-                                ? "No invoices match this filter."
-                                : "No open invoices."}
+                              : "No open invoices."}
                     </h3>
                     <p className="mt-2 text-sm text-muted-foreground max-w-md mx-auto">
                         {isHistory
                             ? "When you mark invoices paid, they move here for your records."
                             : isPaused
                               ? "Pause tracking from the ⋯ menu when you want an invoice off active lists without marking it paid."
-                              : statusFilter !== "all"
-                                ? "Try another status chip or clear the filter."
-                                : "Scotive is watching your sent mail — send your next invoice like you always do and it will appear here."}
+                              : "Scotive is watching your sent mail — send your next invoice like you always do and it will appear here."}
                     </p>
-                    {!isHistory && !isPaused && statusFilter === "all" ? (
+                    {!isHistory && !isPaused ? (
                         <button
                             onClick={() => setManualOpen(true)}
                             className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-md border border-border bg-card text-sm font-medium hover:bg-muted transition-colors"
@@ -214,7 +219,7 @@ export function LedgerCard({ ledger, onChanged, variant = "open" }) {
                 </div>
             ) : (
                 <div className="rounded-2xl border border-border bg-card overflow-hidden" data-testid="ledger-table-wrapper">
-                    {!isHistory && !isPaused ? (
+                    {showOpenToolbar ? (
                         <div className="px-4 py-3 border-b border-border flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between bg-muted/20" data-testid="ledger-toolbar">
                             <div className="flex flex-wrap gap-1.5" data-testid="ledger-status-filters">
                                 {STATUS_FILTER_CHIPS.map((chip) => (
@@ -259,6 +264,28 @@ export function LedgerCard({ ledger, onChanged, variant = "open" }) {
                             </div>
                         </div>
                     ) : null}
+                    {invoices.length === 0 ? (
+                        <div className="p-10 text-center" data-testid="ledger-empty">
+                            <h3 className="font-heading font-semibold text-lg">
+                                {filterEmpty ? "No invoices match this filter." : "No open invoices."}
+                            </h3>
+                            <p className="mt-2 text-sm text-muted-foreground max-w-md mx-auto">
+                                {filterEmpty
+                                    ? "Try another status chip or clear the filter."
+                                    : "Scotive is watching your sent mail — send your next invoice like you always do and it will appear here."}
+                            </p>
+                            {filterEmpty ? (
+                                <button
+                                    type="button"
+                                    onClick={() => setStatusFilter("all")}
+                                    className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-md border border-border bg-card text-sm font-medium hover:bg-muted transition-colors"
+                                    data-testid="ledger-clear-filter"
+                                >
+                                    Show all
+                                </button>
+                            ) : null}
+                        </div>
+                    ) : (
                     <table className="w-full">
                         <thead>
                             <tr className="border-b border-border bg-muted/40 text-left">
@@ -395,6 +422,7 @@ export function LedgerCard({ ledger, onChanged, variant = "open" }) {
                             ))}
                         </tbody>
                     </table>
+                    )}
                 </div>
             )}
             <ManualInvoiceDialog
