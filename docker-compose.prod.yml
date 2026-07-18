@@ -1,0 +1,55 @@
+# Production stack — single-worker API + MongoDB
+#
+#   cp backend/.env.example backend/.env.production   # fill prod secrets/URLs
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Pin --workers 1 in the image CMD (see backend/Dockerfile production stage).
+# Do not scale the api service (replicas > 1 would duplicate background loops).
+
+name: scotive
+
+services:
+  mongo:
+    image: mongo:7.0
+    restart: unless-stopped
+    # Bind to localhost only — put a reverse proxy / firewall in front of the API.
+    ports:
+      - "127.0.0.1:27017:27017"
+    volumes:
+      - scotive_mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: production
+      args:
+        PYTHON_VERSION: "3.11"
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env.production
+    environment:
+      # Always use the compose network hostname (overrides .env.production if needed).
+      MONGO_URL: mongodb://mongo:27017
+      DB_NAME: ${DB_NAME:-scotive}
+    depends_on:
+      mongo:
+        condition: service_healthy
+    # Never set deploy.replicas > 1 while background loops live in-process.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+
+volumes:
+  scotive_mongo_data:

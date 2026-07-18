@@ -492,6 +492,8 @@ async def on_startup():
     await db.client_merge_prompts.create_index([("user_id", 1), ("status", 1), ("created_at", -1)])
     await db.client_merge_prompts.create_index([("user_id", 1), ("pair_key", 1), ("status", 1)])
     await seed_admin()
+    # Safe only with a single Uvicorn worker — clears crash-stale locks & resumes seed jobs.
+    await recover_interrupted_work()
 
     # Kick off continuous loops (F9a). Interval 0 disables that loop.
     # Defaults: sync/escalation hourly; digest check every 15m (send still once/day per user).
@@ -589,6 +591,40 @@ async def seed_admin():
             {"email": admin_email}, {"$set": {"password_hash": hash_password(admin_password)}}
         )
         logger.info("Updated admin password for %s", admin_email)
+
+
+async def recover_interrupted_work() -> None:
+    """Recover workflow state left inconsistent by a process crash/restart.
+
+    Must run once per boot (Uvicorn --workers 1). Re-reads Mongo for the
+    to-do list — does not rely on in-memory job queues.
+    """
+    from seed_scan import run_seed_scan
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    sync_res = await db.gmail_sync_state.update_many(
+        {"sync_running": True},
+        {"$set": {"sync_running": False, "updated_at": now_iso}},
+    )
+    if sync_res.modified_count:
+        logger.info(
+            "Startup recovery: cleared stuck sync_running on %s user(s)",
+            sync_res.modified_count,
+        )
+
+    resumed = 0
+    async for job in db.seed_jobs.find({"status": {"$in": ["queued", "running"]}}):
+        uid = job.get("user_id")
+        if not uid:
+            continue
+        await db.seed_jobs.update_one(
+            {"_id": job["_id"]},
+            {"$set": {"status": "queued", "phase": "queued", "updated_at": now_iso}},
+        )
+        asyncio.create_task(run_seed_scan(db, uid, job["_id"]))
+        resumed += 1
+    if resumed:
+        logger.info("Startup recovery: resumed %s seed job(s) from Mongo", resumed)
 
 
 @app.on_event("shutdown")
