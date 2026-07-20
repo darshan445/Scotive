@@ -88,11 +88,21 @@ function HeroMockup() {
         green: "text-emerald-600",
     };
     return (
-        <div className="rounded-3xl ink-panel p-3 shadow-2xl shadow-primary/20">
+        <div
+            className="rounded-3xl ink-panel p-3 shadow-2xl shadow-primary/20"
+            role="img"
+            aria-label="Invoice tracking dashboard showing broken promises and unpaid invoices"
+        >
             <div className="rounded-2xl bg-card text-foreground overflow-hidden">
                 <div className="px-5 py-4 border-b border-border flex items-center justify-between gap-3">
                     <div className="flex items-center gap-2.5 min-w-0">
-                        <img src="/scotive-mark.png" alt="" className="w-5 h-5 flex-shrink-0" width={20} height={20} />
+                        <img
+                            src="/scotive-mark.png"
+                            alt="Scotive invoice tracking mark"
+                            className="w-5 h-5 flex-shrink-0"
+                            width={20}
+                            height={20}
+                        />
                         <span className="type-title text-sm truncate">Needs you today</span>
                     </div>
                     <span className="text-[11px] font-medium text-muted-foreground bg-muted rounded-full px-2.5 py-1 flex-shrink-0">
@@ -172,7 +182,11 @@ function StepPickMock() {
 
 function StepApproveMock() {
     return (
-        <div className="rounded-xl border border-border bg-background p-4 space-y-2.5">
+        <div
+            className="rounded-xl border border-border bg-background p-4 space-y-2.5"
+            role="img"
+            aria-label="Follow-up email composer for chasing an unpaid invoice from Gmail"
+        >
             <div className="flex items-center justify-between gap-2 text-xs">
                 <span className="font-semibold text-foreground truncate">Follow up with Acme Studio</span>
                 <span className="text-[10px] font-medium text-muted-foreground border border-border bg-muted/50 rounded-full px-2 py-0.5 flex-shrink-0">
@@ -240,7 +254,7 @@ export default function LandingPage() {
                             <div className="flex items-center gap-3 mb-6">
                                 <img
                                     src="/scotive-mark.png"
-                                    alt=""
+                                    alt="Scotive"
                                     width={44}
                                     height={44}
                                     className="w-11 h-11"
@@ -256,7 +270,7 @@ export default function LandingPage() {
                                 Payment ops inside Gmail.
                             </h1>
                             <p className="type-body mt-5 text-base md:text-lg max-w-xl" data-testid="landing-subhead">
-                                Track invoices you send, read client replies, and draft follow-ups with the right tone — then send from your own Gmail only when you approve.
+                                The invoice tracking tool for freelancers who bill from Gmail — stop chasing unpaid invoices manually.
                             </p>
 
                             <div className="mt-8 flex flex-col sm:flex-row items-start sm:items-center gap-4">
@@ -451,7 +465,7 @@ export default function LandingPage() {
                             <div className="absolute inset-0 dot-grid opacity-40 pointer-events-none" aria-hidden />
                             <div className="relative">
                                 <div className="flex justify-center mb-6">
-                                    <img src="/scotive-icon.png" alt="" width={56} height={56} className="w-14 h-14 rounded-2xl" />
+                                    <img src="/scotive-icon.png" alt="Scotive" width={56} height={56} className="w-14 h-14 rounded-2xl" />
                                 </div>
                                 <h2 className="type-display text-3xl md:text-5xl">
                                     Get paid without the awkward chase.

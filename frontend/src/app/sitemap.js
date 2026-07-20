@@ -1,29 +1,40 @@
+const SITE = (process.env.NEXT_PUBLIC_SITE_URL || "https://www.scotive.com").replace(
+    /\/$/,
+    "",
+);
+
 export default function sitemap() {
-    const site = process.env.NEXT_PUBLIC_SITE_URL || "https://www.scotive.com";
+    const now = new Date();
     return [
         {
-            url: site,
-            lastModified: new Date(),
+            url: SITE,
+            lastModified: now,
             changeFrequency: "weekly",
             priority: 1,
         },
         {
-            url: `${site}/register`,
-            lastModified: new Date(),
+            url: `${SITE}/register`,
+            lastModified: now,
+            changeFrequency: "monthly",
+            priority: 0.8,
+        },
+        {
+            url: `${SITE}/login`,
+            lastModified: now,
             changeFrequency: "monthly",
             priority: 0.5,
         },
         {
-            url: `${site}/privacy`,
-            lastModified: new Date(),
+            url: `${SITE}/terms`,
+            lastModified: now,
             changeFrequency: "yearly",
-            priority: 0.4,
+            priority: 0.3,
         },
         {
-            url: `${site}/terms`,
-            lastModified: new Date(),
+            url: `${SITE}/privacy`,
+            lastModified: now,
             changeFrequency: "yearly",
-            priority: 0.4,
+            priority: 0.3,
         },
     ];
 }

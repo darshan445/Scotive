@@ -12,9 +12,9 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        heading: ["Bricolage Grotesque", "Inter", "ui-sans-serif", "system-ui"],
-        sans: ["Inter", "ui-sans-serif", "system-ui"],
-        mono: ["JetBrains Mono", "ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
+        heading: ["var(--font-heading)", "ui-sans-serif", "system-ui"],
+        sans: ["var(--font-sans)", "ui-sans-serif", "system-ui"],
+        mono: ["var(--font-mono)", "ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
       },
       borderRadius: {
         lg: "var(--radius)",

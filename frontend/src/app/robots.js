@@ -1,11 +1,22 @@
+const SITE = process.env.NEXT_PUBLIC_SITE_URL || "https://www.scotive.com";
+
 export default function robots() {
-    const site = process.env.NEXT_PUBLIC_SITE_URL || "https://www.scotive.com";
     return {
-        rules: {
-            userAgent: "*",
-            allow: ["/", "/login", "/register"],
-            disallow: ["/dashboard", "/clients", "/review", "/settings", "/invoices"],
-        },
-        sitemap: `${site}/sitemap.xml`,
+        rules: [
+            {
+                userAgent: "*",
+                allow: "/",
+                disallow: [
+                    "/dashboard",
+                    "/clients",
+                    "/review",
+                    "/settings",
+                    "/invoices/",
+                    "/api/",
+                ],
+            },
+        ],
+        sitemap: `${SITE.replace(/\/$/, "")}/sitemap.xml`,
+        host: SITE.replace(/\/$/, ""),
     };
 }

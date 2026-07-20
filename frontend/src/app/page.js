@@ -1,17 +1,35 @@
 import LandingPage from "@/views/Landing";
 import { GuestRoute } from "@/components/ProtectedRoute";
+import { JsonLd } from "@/components/JsonLd";
 
 export const metadata = {
-    title: "Payment ops inside Gmail",
+    title: {
+        absolute:
+            "Scotive — Invoice Tracking Tool to Chase Unpaid Invoices | Gmail-Native",
+    },
     description:
-        "Scotive watches your Gmail and tracks who owes you money — automatically detecting invoices you've sent, reading client replies for promises, disputes, and payments. No manual data entry. Nothing is sent without your review.",
+        "Scotive is an invoice tracking tool that watches your Gmail and helps you chase unpaid invoices — automatically detecting invoices you've sent, reading client replies for promises, disputes, and payments.",
     alternates: { canonical: "/" },
+    openGraph: {
+        url: "/",
+        title: "Scotive — Invoice Tracking Tool to Chase Unpaid Invoices | Gmail-Native",
+        description:
+            "Scotive is an invoice tracking tool that watches your Gmail and helps you chase unpaid invoices — detecting invoices you've sent and reading client replies for promises, disputes, and payments.",
+    },
+    twitter: {
+        title: "Scotive — Invoice Tracking Tool to Chase Unpaid Invoices | Gmail-Native",
+        description:
+            "Scotive is an invoice tracking tool that watches your Gmail and helps you chase unpaid invoices.",
+    },
 };
 
 export default function HomePage() {
     return (
-        <GuestRoute>
-            <LandingPage />
-        </GuestRoute>
+        <>
+            <JsonLd />
+            <GuestRoute>
+                <LandingPage />
+            </GuestRoute>
+        </>
     );
 }

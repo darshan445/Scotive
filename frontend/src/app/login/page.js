@@ -5,7 +5,7 @@ import { GuestRoute } from "@/components/ProtectedRoute";
 export const metadata = {
     title: "Log in",
     description: "Log in to Scotive to track invoices and follow-ups from Gmail.",
-    robots: { index: false, follow: false },
+    alternates: { canonical: "/login" },
 };
 
 export default function Page() {
