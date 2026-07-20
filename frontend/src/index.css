@@ -107,7 +107,6 @@
         font-variant-numeric: tabular-nums;
         letter-spacing: -0.03em;
         font-weight: 700;
-        color: hsl(var(--foreground));
     }
     /* Deep-green panel (hero mockups, dark CTA blocks) */
     .ink-panel {

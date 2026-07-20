@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Scotive">
+  <title>Scotive</title>
+  <!-- Direction B: single abstract idea — ascending track steps (motion / watching).
+       One gesture, filled forms only — legible as a clear stair silhouette at 16px. -->
+  <rect width="512" height="512" rx="112" ry="112" fill="#114B3F"/>
+  <g fill="#F7F5F0">
+    <rect x="112" y="292" width="96" height="96" rx="30"/>
+    <rect x="208" y="208" width="96" height="96" rx="30"/>
+    <rect x="304" y="124" width="96" height="96" rx="30"/>
+  </g>
+</svg>

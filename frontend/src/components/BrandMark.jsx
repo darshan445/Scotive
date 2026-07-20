@@ -15,11 +15,11 @@ export function BrandMark({ to = "/", size = "md", showWordmark = true }) {
             data-testid="brand-mark"
         >
             <img
-                src="/scotive-mark.png"
+                src="/scotive-icon.png"
                 alt=""
                 width={32}
                 height={32}
-                className={`${s.img} flex-shrink-0 transition-transform group-hover:scale-105`}
+                className={`${s.img} flex-shrink-0 rounded-[22%] transition-transform group-hover:scale-105`}
                 draggable={false}
             />
             {showWordmark ? (

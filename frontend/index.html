@@ -6,8 +6,13 @@
     <meta name="theme-color" content="#114B3F" />
     <meta
       name="description"
-      content="Scotive — payment ops inside Gmail. Track invoices, read client replies, chase what matters."
+      content="Scotive watches your Gmail and tracks who owes you money — detecting invoices you've sent, reading client replies for promises and payments, and drafting follow-ups you review before anything sends."
     />
+    <meta
+      name="application-name"
+      content="Scotive"
+    />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
@@ -17,11 +22,144 @@
       href="https://fonts.googleapis.com/css2?family=Inter:wght@600&display=swap"
       rel="stylesheet"
     />
-    <title>Scotive</title>
+    <title>Scotive — Payment ops inside Gmail</title>
+    <style>
+      /* Crawlable fallback styles (replaced when the React app mounts). */
+      #seo-fallback {
+        font-family: Inter, system-ui, -apple-system, sans-serif;
+        color: #142824;
+        background: #f7f5f0;
+        margin: 0;
+        min-height: 100vh;
+        line-height: 1.55;
+      }
+      #seo-fallback header,
+      #seo-fallback main,
+      #seo-fallback footer {
+        max-width: 42rem;
+        margin: 0 auto;
+        padding: 1.5rem 1.25rem;
+      }
+      #seo-fallback h1 {
+        font-size: 1.75rem;
+        line-height: 1.2;
+        margin: 0.75rem 0 1rem;
+      }
+      #seo-fallback h2 {
+        font-size: 1.15rem;
+        margin: 1.75rem 0 0.5rem;
+      }
+      #seo-fallback p,
+      #seo-fallback li {
+        color: #3d524c;
+        font-size: 1rem;
+      }
+      #seo-fallback ul {
+        padding-left: 1.25rem;
+      }
+      #seo-fallback a {
+        color: #114b3f;
+      }
+      #seo-fallback .brand {
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+        font-weight: 700;
+        font-size: 1.25rem;
+        color: #142824;
+        text-decoration: none;
+      }
+      #seo-fallback .brand img {
+        width: 36px;
+        height: 36px;
+        border-radius: 8px;
+      }
+    </style>
   </head>
   <body>
-    <noscript>You need to enable JavaScript to run this app.</noscript>
-    <div id="root"></div>
+    <noscript>
+      <div id="seo-fallback">
+        <header>
+          <a class="brand" href="/">
+            <img src="/scotive-icon.png" width="36" height="36" alt="Scotive" />
+            Scotive
+          </a>
+        </header>
+        <main>
+          <h1>Payment ops inside Gmail</h1>
+          <p>
+            Scotive watches your Gmail and tracks who owes you money — automatically
+            detecting invoices you&apos;ve sent, reading client replies for promises,
+            disputes, and payments, so you never lose track of an unpaid invoice.
+            No manual data entry. Nothing is sent without your review.
+          </p>
+          <h2>What Scotive does</h2>
+          <ul>
+            <li>Gmail-native invoice tracking from mail you already send</li>
+            <li>Automatic status detection from client replies</li>
+            <li>Drafted follow-ups you approve before they leave your inbox</li>
+          </ul>
+          <p>
+            <a href="/register">Start free</a> ·
+            <a href="/privacy">Privacy Policy</a> ·
+            <a href="/terms">Terms of Service</a>
+          </p>
+        </main>
+      </div>
+    </noscript>
+
+    <!--
+      Static, crawlable content for OAuth / search reviewers that fetch raw HTML
+      without executing JavaScript. The React app replaces #root on load.
+    -->
+    <div id="root">
+      <div id="seo-fallback">
+        <header>
+          <a class="brand" href="/">
+            <img src="/scotive-icon.png" width="36" height="36" alt="Scotive logo" />
+            Scotive
+          </a>
+        </header>
+        <main>
+          <h1>Scotive — Payment ops inside Gmail</h1>
+          <p>
+            Scotive watches your Gmail and tracks who owes you money — automatically
+            detecting invoices you&apos;ve sent, reading client replies for promises,
+            disputes, and payments, so you never lose track of an unpaid invoice.
+            No manual data entry. Nothing is sent without your review.
+          </p>
+          <h2>Key features</h2>
+          <ul>
+            <li>
+              <strong>Gmail-native invoice tracking</strong> — connect your mailbox;
+              Scotive finds invoices in sent mail and builds your ledger.
+            </li>
+            <li>
+              <strong>Automatic status detection</strong> — reads replies for payment
+              promises, broken promises, disputes, and “says paid” claims.
+            </li>
+            <li>
+              <strong>Drafted follow-ups you control</strong> — state-derived tones
+              (friendly reminder through final notice); you review and approve before
+              anything sends from your own Gmail.
+            </li>
+          </ul>
+          <p>
+            Scotive is built for freelancers and small studios who bill from their inbox
+            and need collections without another spreadsheet.
+          </p>
+          <p>
+            <a href="/register">Start free with Gmail</a> ·
+            <a href="/login">Log in</a> ·
+            <a href="/privacy">Privacy Policy</a> ·
+            <a href="/terms">Terms of Service</a>
+          </p>
+        </main>
+        <footer>
+          <p>© Scotive · Payment ops · Inside Gmail</p>
+        </footer>
+      </div>
+    </div>
     <script type="module" src="/src/index.jsx"></script>
   </body>
 </html>

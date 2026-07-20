@@ -167,7 +167,7 @@ export function TodayCard({ onChanged }) {
                             {actionCount} thing{actionCount === 1 ? "" : "s"} — open any to act
                         </p>
                     </div>
-                    <span className="stat-number inline-flex items-center justify-center min-w-[36px] h-9 rounded-full bg-primary text-primary-foreground text-base font-bold px-3">
+                    <span className="stat-number inline-flex items-center justify-center min-w-[36px] h-9 rounded-full bg-primary text-white text-base font-bold px-3">
                         {actionCount}
                     </span>
                 </div>
