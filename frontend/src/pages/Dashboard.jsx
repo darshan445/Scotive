@@ -258,10 +258,10 @@ export default function DashboardPage() {
                                         ? new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })
                                         : "Setup"}
                                 </div>
-                                <h1 className="font-heading font-bold text-3xl md:text-4xl tracking-tight text-foreground">
+                                <h1 className="type-display text-3xl md:text-4xl">
                                     {pastOnboarding ? greeting() : "Let's find what you're still owed"}
                                 </h1>
-                                <p className="mt-1.5 text-base text-muted-foreground">
+                                <p className="type-body mt-1.5 text-base">
                                     {onboarding?.phase === "scanning"
                                         ? "Scanning sent invoices from the last 90 days…"
                                         : onboarding?.phase === "curating"

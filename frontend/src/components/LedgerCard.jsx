@@ -140,7 +140,7 @@ export function LedgerCard({ ledger, onChanged, variant = "open" }) {
                             <>
                                 <div className="eyebrow">Collected</div>
                                 <div className="mt-1 flex items-baseline gap-4 flex-wrap">
-                                    <span className="stat-number font-bold text-4xl md:text-[2.75rem] tracking-tight text-emerald-700" data-testid="ledger-paid-total">
+                                    <span className="stat-number font-bold text-4xl md:text-[2.75rem] text-emerald-700" data-testid="ledger-paid-total">
                                         {formatOpenTotals(historySummary.totalsByCurrency)}
                                     </span>
                                     <span className="text-muted-foreground text-sm" data-testid="ledger-paid-meta">
@@ -160,7 +160,7 @@ export function LedgerCard({ ledger, onChanged, variant = "open" }) {
                             <>
                                 <div className="eyebrow">Paused</div>
                                 <div className="mt-1 flex items-baseline gap-4 flex-wrap">
-                                    <span className="stat-number font-bold text-4xl md:text-[2.75rem] tracking-tight" data-testid="ledger-paused-count">
+                                    <span className="stat-number font-bold text-4xl md:text-[2.75rem]" data-testid="ledger-paused-count">
                                         {invoices.length}
                                     </span>
                                     <span className="text-muted-foreground text-sm">
@@ -172,7 +172,7 @@ export function LedgerCard({ ledger, onChanged, variant = "open" }) {
                             <>
                                 <div className="eyebrow">You&apos;re owed</div>
                                 <div className="mt-1 flex items-baseline gap-4 flex-wrap">
-                                    <span className="stat-number font-bold text-4xl md:text-[2.75rem] tracking-tight" data-testid="ledger-total">
+                                    <span className="stat-number font-bold text-4xl md:text-[2.75rem]" data-testid="ledger-total">
                                         {formatOpenTotals(openTotals)}
                                     </span>
                                     <span className="text-muted-foreground text-sm" data-testid="ledger-client-count">

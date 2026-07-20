@@ -310,8 +310,8 @@ export default function ReviewQueuePage() {
         <AppShell testId="review-page" width="5xl" mainClassName="py-10 md:py-14 space-y-8">
             <div>
                 <div className="eyebrow mb-2">Review queue</div>
-                <h1 className="font-heading font-bold text-3xl md:text-4xl tracking-tight">Check before it hits the ledger</h1>
-                <p className="mt-2 text-base text-muted-foreground max-w-2xl">
+                <h1 className="type-display text-3xl md:text-4xl">Check before it hits the ledger</h1>
+                <p className="type-body mt-2 text-base max-w-2xl">
                     Low-confidence reads and ambiguous mappings land here with the exact quote and source email.
                     Nothing is tracked until you confirm — edit the fields if something looks off, or dismiss if it&apos;s not payment-related.
                 </p>

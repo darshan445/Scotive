@@ -26,7 +26,7 @@ export default function ClientsPage() {
         <AppShell testId="clients-page" mainClassName="py-10 md:py-14 space-y-8">
             <div>
                 <div className="eyebrow mb-2">Clients</div>
-                <h1 className="font-heading font-bold text-3xl md:text-4xl tracking-tight">Everyone who owes you</h1>
+                <h1 className="type-display text-3xl md:text-4xl">Everyone who owes you</h1>
             </div>
             {err ? <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{err}</div> : null}
             {clients === null ? (

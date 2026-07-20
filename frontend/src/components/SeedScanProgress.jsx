@@ -20,7 +20,7 @@ export function SeedScanProgress({ scanPhase, counts }) {
                 </div>
                 <div>
                     <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">First setup</div>
-                    <h2 className="font-heading font-bold text-xl tracking-tight">Finding invoices you sent</h2>
+                    <h2 className="type-title text-xl">Finding invoices you sent</h2>
                 </div>
             </div>
             <p className="text-sm text-muted-foreground max-w-lg">

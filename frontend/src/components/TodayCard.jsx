@@ -162,7 +162,7 @@ export function TodayCard({ onChanged }) {
             <div className="surface-card overflow-hidden" data-testid="today-card">
                 <div className="px-6 py-5 border-b border-border flex items-center justify-between">
                     <div>
-                        <h2 className="font-heading font-bold text-xl tracking-tight">Needs you today</h2>
+                        <h2 className="type-title text-xl">Needs you today</h2>
                         <p className="text-xs text-muted-foreground mt-0.5">
                             {actionCount} thing{actionCount === 1 ? "" : "s"} — open any to act
                         </p>

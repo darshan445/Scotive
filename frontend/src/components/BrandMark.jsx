@@ -23,7 +23,7 @@ export function BrandMark({ to = "/", size = "md", showWordmark = true }) {
                 draggable={false}
             />
             {showWordmark ? (
-                <span className={`font-heading font-bold ${s.text} tracking-tight text-foreground`}>
+                <span className={`type-title ${s.text}`}>
                     Scotive
                 </span>
             ) : (

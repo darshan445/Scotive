@@ -49,7 +49,7 @@ export function TopNav() {
                 </div>
                 <div className="flex items-center gap-3">
                     <div className="hidden sm:flex items-center gap-2.5">
-                        <span className="w-8 h-8 rounded-full bg-primary/10 text-primary text-xs font-heading font-bold inline-flex items-center justify-center uppercase">
+                        <span className="w-8 h-8 rounded-full bg-primary/10 text-primary text-xs type-title inline-flex items-center justify-center uppercase">
                             {(user?.email || "?").slice(0, 1)}
                         </span>
                         <span className="text-sm font-medium max-w-[180px] truncate" data-testid="nav-user-email">{user?.email}</span>

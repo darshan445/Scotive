@@ -102,7 +102,7 @@ export function CurationScreen({ candidates, onConfirm, busy, scanning = false }
     if (!n) {
         return (
             <div className="rounded-2xl border border-border bg-card p-8 text-center" data-testid="curation-empty">
-                <h2 className="font-heading font-bold text-xl">No sent invoices found in the last 90 days</h2>
+                <h2 className="type-title text-xl">No sent invoices found in the last 90 days</h2>
                 <p className="mt-2 text-sm text-muted-foreground max-w-md mx-auto">
                     Scotive is watching — send your next invoice like you always do and it will appear here.
                 </p>
@@ -118,7 +118,7 @@ export function CurationScreen({ candidates, onConfirm, busy, scanning = false }
         <div className="rounded-2xl border border-border bg-card overflow-hidden" data-testid="curation-screen">
             <div className="p-6 md:p-8 border-b border-border">
                 <div className="eyebrow mb-2">Your last 90 days</div>
-                <h2 className="font-heading font-bold text-2xl md:text-3xl tracking-tight">
+                <h2 className="type-title text-2xl md:text-3xl">
                     {scanning
                         ? `${n} invoice${n === 1 ? "" : "s"} found so far — still scanning…`
                         : `We found ${n} invoice${n === 1 ? "" : "s"} you sent. Which are still unpaid?`}

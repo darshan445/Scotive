@@ -444,7 +444,7 @@ export function InvoiceDetailDrawer({ invoiceId, preview = null, open, onClose, 
                                                     <span className="font-mono"> · {inv.counterparty_email}</span>
                                                 ) : null}
                                             </div>
-                                            <h1 className="font-heading font-bold text-xl md:text-2xl tracking-tight mt-1 break-words whitespace-normal">
+                                            <h1 className="type-title text-xl md:text-2xl mt-1 break-words whitespace-normal">
                                                 {invoiceSubject(inv)}
                                             </h1>
                                             {inv.invoice_ref && !isJunkInvoiceRef(inv.invoice_ref) && inv.invoice_ref !== inv.source_subject ? (

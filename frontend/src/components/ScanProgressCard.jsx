@@ -25,7 +25,7 @@ export function ScanProgressCard({ state }) {
                     <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">
                         {isError ? "Scan interrupted" : state.status === "complete" ? "Scan complete" : "Scanning your inbox"}
                     </div>
-                    <h2 className="font-heading font-bold text-2xl tracking-tight mt-1">
+                    <h2 className="type-title text-2xl mt-1">
                         {isError
                             ? "Something went wrong"
                             : state.status === "complete"

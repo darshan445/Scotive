@@ -20,7 +20,7 @@ function PaymentBehaviorCard({ stats }) {
     const RiskIcon = risk.Icon;
     return (
         <section data-testid="payment-behavior">
-            <h2 className="font-heading font-bold text-xl mb-3">Payment behavior</h2>
+            <h2 className="type-title text-xl mb-3">Payment behavior</h2>
             <div className="rounded-2xl border border-border bg-card p-6">
                 <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border ${risk.cls}`}>
                     <RiskIcon className="w-3.5 h-3.5" />
@@ -68,7 +68,7 @@ function Stat({ label, value, detail, testid }) {
             <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">
                 {label}
             </div>
-            <div className="mt-1 font-heading font-black text-2xl tracking-tight tabular-nums">
+            <div className="mt-1 type-title text-2xl tabular-nums">
                 {value}
             </div>
             <div className="mt-0.5 text-[11px] text-muted-foreground">{detail}</div>
@@ -102,13 +102,13 @@ export default function ClientDetailPage() {
                     <>
                         <div>
                             <div className="eyebrow mb-2">Client</div>
-                            <h1 className="font-heading font-bold text-3xl md:text-4xl tracking-tight" data-testid="client-name">
+                            <h1 className="type-display text-3xl md:text-4xl" data-testid="client-name">
                                 {data.name || data.email}
                             </h1>
                             <div className="mt-1 text-sm text-muted-foreground font-mono">{data.email}</div>
                             <div className="mt-6 surface-card p-6">
                                 <div className="eyebrow">Open balance</div>
-                                <div className="mt-1 stat-number font-bold text-3xl md:text-4xl tracking-tight" data-testid="client-open-balance">
+                                <div className="mt-1 stat-number font-bold text-3xl md:text-4xl" data-testid="client-open-balance">
                                     {formatOpenTotals(data.totals_by_currency ?? data.total_open)}
                                 </div>
                             </div>
@@ -117,7 +117,7 @@ export default function ClientDetailPage() {
                         <PaymentBehaviorCard stats={data.stats} />
 
                         <section>
-                            <h2 className="font-heading font-bold text-xl mb-3">Known email identities</h2>
+                            <h2 className="type-title text-xl mb-3">Known email identities</h2>
                             <ul className="rounded-2xl border border-border bg-card divide-y divide-border" data-testid="identities-list">
                                 {data.identities.map((id) => (
                                     <li key={id.email} className="px-4 py-3 flex items-center justify-between">
@@ -129,7 +129,7 @@ export default function ClientDetailPage() {
                         </section>
 
                         <section>
-                            <h2 className="font-heading font-bold text-xl mb-3">Invoices</h2>
+                            <h2 className="type-title text-xl mb-3">Invoices</h2>
                             <div className="space-y-3" data-testid="client-invoices">
                                 {data.invoices.map((inv) => {
                                     const subject = invoiceSubject(inv);

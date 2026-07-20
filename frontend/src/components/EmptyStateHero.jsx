@@ -2,10 +2,7 @@ import { Check, Lock, Mail } from "lucide-react";
 import { ConnectGmailButton } from "@/components/ConnectGmailButton";
 
 /**
- * Simple, focused empty state shown to authenticated users who haven't
- * connected Gmail yet. The full product pitch lives on the public landing
- * page (`/`) — this is deliberately minimal so users just do the one thing
- * that matters: connect Gmail.
+ * Focused empty state for authenticated users who haven't connected Gmail yet.
  */
 export function EmptyStateHero() {
     return (
@@ -13,30 +10,34 @@ export function EmptyStateHero() {
             className="pt-8 md:pt-16 pb-16 max-w-2xl mx-auto text-center"
             data-testid="empty-state-hero"
         >
-            <div className="pill mb-6">
+            <div className="flex justify-center mb-6">
+                <img src="/scotive-mark.png" alt="" width={48} height={48} className="w-12 h-12" />
+            </div>
+
+            <div className="pill mb-6 mx-auto w-fit">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                 One last step
             </div>
 
             <h1
-                className="font-heading font-bold text-3xl sm:text-4xl leading-tight tracking-tight text-foreground"
+                className="type-display text-3xl sm:text-4xl"
                 data-testid="empty-state-headline"
             >
-                Chase every invoice — automatically.
+                Connect Gmail to start tracking.
             </h1>
 
             <p
-                className="mt-4 text-base md:text-lg text-muted-foreground leading-relaxed"
+                className="type-body mt-4 text-base md:text-lg"
                 data-testid="empty-state-subhead"
             >
-                Scotive watches your Gmail, tracks invoices you send, reads client replies, and drafts the follow-ups. Nothing sends without your approval.
+                Scotive watches invoices you send, reads client replies, and drafts follow-ups with the right tone. Nothing sends without your approval.
             </p>
 
             <div className="mt-8 flex flex-col items-center gap-4">
                 <ConnectGmailButton />
                 <div className="text-xs text-muted-foreground max-w-sm leading-relaxed" data-testid="trust-line">
-                    Read + send-with-approval access only ·{" "}
-                    <span className="text-foreground font-medium">Your emails never train AI models</span> · Disconnect anytime.
+                    Read + send-with-approval only ·{" "}
+                    <span className="text-foreground font-medium">Not used to train Scotive&apos;s models</span> · Disconnect anytime.
                 </div>
             </div>
 
@@ -47,7 +48,7 @@ export function EmptyStateHero() {
                 </span>
                 <span className="inline-flex items-center gap-1.5">
                     <Check className="w-3.5 h-3.5" strokeWidth={2} />
-                    SOC 2-grade encryption at rest
+                    Tokens encrypted at rest
                 </span>
                 <span className="inline-flex items-center gap-1.5">
                     <Mail className="w-3.5 h-3.5" strokeWidth={2} />

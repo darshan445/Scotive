@@ -19,11 +19,11 @@ export function AuthShell({ eyebrow, title, subtitle, children, footer }) {
                             {eyebrow}
                         </div>
                     ) : null}
-                    <h1 className="font-heading font-bold text-4xl md:text-[2.75rem] leading-[1.05] tracking-tight text-foreground">
+                    <h1 className="type-display text-4xl md:text-[2.75rem]">
                         {title}
                     </h1>
                     {subtitle ? (
-                        <p className="mt-3 text-base text-muted-foreground leading-relaxed">
+                        <p className="type-body mt-3 text-base">
                             {subtitle}
                         </p>
                     ) : null}

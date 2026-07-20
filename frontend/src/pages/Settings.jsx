@@ -172,10 +172,10 @@ export default function SettingsPage() {
                     <div className="eyebrow mb-2">
                         Workspace
                     </div>
-                    <h1 className="font-heading font-bold text-3xl md:text-4xl tracking-tight">
+                    <h1 className="type-display text-3xl md:text-4xl">
                         Settings
                     </h1>
-                    <p className="mt-2 text-sm text-muted-foreground">
+                    <p className="type-body mt-2 text-sm">
                         Fine-tune when Scotive drafts each chase step. Due dates come from your invoices only.
                     </p>
                 </div>
@@ -227,7 +227,7 @@ export default function SettingsPage() {
 function GmailAccountSection({ status }) {
     return (
         <section data-testid="settings-gmail-account">
-            <h2 className="font-heading font-bold text-xl">Gmail account</h2>
+            <h2 className="type-title text-xl">Gmail account</h2>
             <p className="mt-1 text-sm text-muted-foreground">
                 Connect read + send access so Scotive can scan sent invoices and draft chasers from your inbox.
             </p>
@@ -601,7 +601,7 @@ function SuppressedSendersSection({ senders, onRemove }) {
 function DangerZone({ email, onDeleteClick }) {
     return (
         <section data-testid="danger-zone">
-            <h2 className="font-heading font-bold text-xl mb-3 text-red-800">Danger zone</h2>
+            <h2 className="type-title text-xl mb-3 text-red-800">Danger zone</h2>
             <div className="rounded-2xl border border-red-200 bg-red-50/40 p-6">
                 <div className="flex items-start gap-3">
                     <AlertTriangle className="w-5 h-5 text-red-700 flex-shrink-0 mt-0.5" />
@@ -631,7 +631,7 @@ function DangerZone({ email, onDeleteClick }) {
 function Section({ title, subtitle, children }) {
     return (
         <section>
-            <h2 className="font-heading font-bold text-xl">{title}</h2>
+            <h2 className="type-title text-xl">{title}</h2>
             {subtitle ? <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p> : null}
             <Separator className="my-4" />
             <div className="rounded-2xl border border-border bg-card p-6">{children}</div>
