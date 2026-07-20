@@ -1,7 +1,5 @@
-/** Open `/invoices/:id` as a modal route so the current page stays mounted. */
-export function navigateToInvoice(navigate, location, invoiceId) {
+/** Open invoice detail at /invoices/:id (Next intercepting route shows as modal when available). */
+export function navigateToInvoice(router, _locationOrPathname, invoiceId) {
     if (!invoiceId) return;
-    navigate(`/invoices/${invoiceId}`, {
-        state: { backgroundLocation: location.state?.backgroundLocation || location },
-    });
+    router.push(`/invoices/${invoiceId}`);
 }

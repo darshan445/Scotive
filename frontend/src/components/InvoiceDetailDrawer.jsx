@@ -1,5 +1,6 @@
+"use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import Link from "next/link";
 import { ExternalLink, Send, X } from "lucide-react";
 import { toast } from "sonner";
 import * as SheetPrimitive from "@radix-ui/react-dialog";
@@ -434,7 +435,7 @@ export function InvoiceDetailDrawer({ invoiceId, preview = null, open, onClose, 
                                         <div className="min-w-0">
                                             <div className="text-xs text-muted-foreground">
                                                 <Link
-                                                    to={`/clients/${encodeURIComponent(inv.counterparty_email || "")}`}
+                                                    href={`/clients/${encodeURIComponent(inv.counterparty_email || "")}`}
                                                     className="hover:underline"
                                                     onClick={(e) => e.stopPropagation()}
                                                 >

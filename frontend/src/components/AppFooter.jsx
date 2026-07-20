@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import Link from "next/link";
 
 export function AppFooter({ compact = false }) {
     return (
@@ -10,10 +10,10 @@ export function AppFooter({ compact = false }) {
             >
                 <span>© {new Date().getFullYear()} Scotive</span>
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                    <Link to="/terms" className="hover:text-foreground transition-colors">
+                    <Link href="/terms" className="hover:text-foreground transition-colors">
                         Terms
                     </Link>
-                    <Link to="/privacy" className="hover:text-foreground transition-colors">
+                    <Link href="/privacy" className="hover:text-foreground transition-colors">
                         Privacy
                     </Link>
                     <span className="hidden sm:inline">Payment ops · Inside Gmail</span>

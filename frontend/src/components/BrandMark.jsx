@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import Link from "next/link";
 
 const SIZES = {
     sm: { img: "h-6 w-6", text: "text-base", gap: "gap-2" },
@@ -10,7 +10,7 @@ export function BrandMark({ to = "/", size = "md", showWordmark = true }) {
     const s = SIZES[size] || SIZES.md;
     return (
         <Link
-            to={to}
+            href={to}
             className={`inline-flex items-center ${s.gap} group`}
             data-testid="brand-mark"
         >

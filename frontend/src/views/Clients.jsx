@@ -1,5 +1,6 @@
+"use client";
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { ClientsTableSkeleton } from "@/components/PageSkeletons";
 import { api, extractError } from "@/lib/api";
@@ -7,7 +8,7 @@ import { formatDate, formatOpenTotals } from "@/components/LedgerCard";
 import { useWorkspaceRefreshEffect } from "@/lib/workspaceRefresh";
 
 export default function ClientsPage() {
-    const navigate = useNavigate();
+    const router = useRouter();
     const [clients, setClients] = useState(null);
     const [err, setErr] = useState("");
 
@@ -19,7 +20,7 @@ export default function ClientsPage() {
     useWorkspaceRefreshEffect(load);
 
     function openClient(email) {
-        navigate(`/clients/${encodeURIComponent(email)}`);
+        router.push(`/clients/${encodeURIComponent(email)}`);
     }
 
     return (

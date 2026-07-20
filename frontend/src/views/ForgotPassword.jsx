@@ -1,5 +1,6 @@
+"use client";
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import Link from "next/link";
 import { ArrowRight, Loader2 } from "lucide-react";
 import { AuthShell } from "@/components/AuthShell";
 import { useAuth } from "@/contexts/AuthContext";
@@ -39,7 +40,7 @@ export default function ForgotPasswordPage() {
             footer={
                 <span>
                     Remembered it?{" "}
-                    <Link to="/login" className="text-foreground font-semibold underline underline-offset-4 hover:text-accent" data-testid="link-back-to-login">
+                    <Link href="/login" className="text-foreground font-semibold underline underline-offset-4 hover:text-accent" data-testid="link-back-to-login">
                         Back to sign in
                     </Link>
                 </span>

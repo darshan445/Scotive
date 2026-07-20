@@ -1,5 +1,7 @@
+"use client";
 import { useMemo, Fragment, useState } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { PlusCircle } from "lucide-react";
 import { ManualInvoiceDialog } from "@/components/ManualInvoiceDialog";
 import { InvoiceOverflowMenu } from "@/components/InvoiceOverflowMenu";
@@ -82,8 +84,7 @@ export function formatDate(iso) {
 }
 
 export function LedgerCard({ ledger, onChanged, variant = "open" }) {
-    const navigate = useNavigate();
-    const location = useLocation();
+    const router = useRouter();
     const [manualOpen, setManualOpen] = useState(false);
     const [statusFilter, setStatusFilter] = useState("all");
     const [sortKey, setSortKey] = useState("due_soonest");
@@ -337,12 +338,12 @@ export function LedgerCard({ ledger, onChanged, variant = "open" }) {
                                             <tr
                                                 key={inv._id}
                                                 className="border-b border-border/60 hover:bg-muted/30 transition-colors cursor-pointer"
-                                                onClick={() => navigateToInvoice(navigate, location, inv._id)}
+                                                onClick={() => navigateToInvoice(router, null, inv._id)}
                                                 data-testid="ledger-row"
                                             >
                                                 <td className="px-4 py-3 align-top">
                                                     <Link
-                                                        to={`/clients/${encodeURIComponent(inv.counterparty_email || "")}`}
+                                                        href={`/clients/${encodeURIComponent(inv.counterparty_email || "")}`}
                                                         onClick={(e) => e.stopPropagation()}
                                                         className="text-sm font-medium hover:underline"
                                                         data-testid="ledger-client-link"

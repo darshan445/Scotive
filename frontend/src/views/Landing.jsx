@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import Link from "next/link";
 import {
     AlertTriangle,
     ArrowRight,
@@ -214,14 +214,14 @@ export default function LandingPage() {
                     <BrandMark size="md" />
                     <nav className="flex items-center gap-2 sm:gap-4">
                         <Link
-                            to="/login"
+                            href="/login"
                             className="text-sm font-medium px-3 py-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
                             data-testid="landing-signin"
                         >
                             Log in
                         </Link>
                         <Link
-                            to="/register"
+                            href="/register"
                             className="inline-flex items-center gap-1.5 text-sm font-semibold bg-primary text-primary-foreground px-4 py-2 rounded-xl hover:bg-primary/90 transition-colors shadow-sm"
                             data-testid="landing-signup"
                         >
@@ -261,7 +261,7 @@ export default function LandingPage() {
 
                             <div className="mt-8 flex flex-col sm:flex-row items-start sm:items-center gap-4">
                                 <Link
-                                    to="/register"
+                                    href="/register"
                                     className="group inline-flex items-center gap-3 rounded-xl bg-primary text-primary-foreground pl-2 pr-6 py-2 font-semibold text-base transition-all shadow-md hover:shadow-lg active:scale-[0.98] hover:bg-primary/90"
                                     data-testid="landing-cta-primary"
                                 >
@@ -272,7 +272,7 @@ export default function LandingPage() {
                                     <ArrowRight className="w-4 h-4 opacity-70 transition-transform group-hover:translate-x-0.5" />
                                 </Link>
                                 <Link
-                                    to="/login"
+                                    href="/login"
                                     className="text-sm font-medium text-muted-foreground hover:text-foreground"
                                     data-testid="landing-cta-secondary"
                                 >
@@ -461,7 +461,7 @@ export default function LandingPage() {
                                 </p>
                                 <div className="mt-9 flex flex-col sm:flex-row items-center justify-center gap-4">
                                     <Link
-                                        to="/register"
+                                        href="/register"
                                         className="inline-flex items-center gap-2.5 rounded-xl bg-background text-foreground px-7 py-3.5 font-semibold text-base hover:opacity-95 transition-opacity shadow-lg"
                                         data-testid="landing-cta-final"
                                     >
@@ -492,15 +492,15 @@ export default function LandingPage() {
                     <div>
                         <div className="type-title text-sm mb-3">Product</div>
                         <ul className="space-y-2 text-sm text-muted-foreground">
-                            <li><Link to="/register" className="hover:text-foreground">Get started</Link></li>
-                            <li><Link to="/login" className="hover:text-foreground">Log in</Link></li>
+                            <li><Link href="/register" className="hover:text-foreground">Get started</Link></li>
+                            <li><Link href="/login" className="hover:text-foreground">Log in</Link></li>
                         </ul>
                     </div>
                     <div>
                         <div className="type-title text-sm mb-3">Legal</div>
                         <ul className="space-y-2 text-sm text-muted-foreground">
-                            <li><Link to="/terms" className="hover:text-foreground">Terms of Service</Link></li>
-                            <li><Link to="/privacy" className="hover:text-foreground">Privacy Policy</Link></li>
+                            <li><Link href="/terms" className="hover:text-foreground">Terms of Service</Link></li>
+                            <li><Link href="/privacy" className="hover:text-foreground">Privacy Policy</Link></li>
                             <li>OAuth 2.0 · disconnect anytime</li>
                         </ul>
                     </div>
@@ -509,8 +509,8 @@ export default function LandingPage() {
                     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5 flex flex-wrap justify-between items-center gap-3 text-xs text-muted-foreground">
                         <span>© {new Date().getFullYear()} Scotive. All rights reserved.</span>
                         <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                            <Link to="/terms" className="hover:text-foreground">Terms</Link>
-                            <Link to="/privacy" className="hover:text-foreground">Privacy</Link>
+                            <Link href="/terms" className="hover:text-foreground">Terms</Link>
+                            <Link href="/privacy" className="hover:text-foreground">Privacy</Link>
                             <span>Payment ops · Inside Gmail</span>
                         </div>
                     </div>

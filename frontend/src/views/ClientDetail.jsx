@@ -1,5 +1,7 @@
+"use client";
 import { useEffect, useState } from "react";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import Link from "next/link";
+import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, TrendingUp, AlertTriangle, Clock } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { ClientDetailSkeleton } from "@/components/PageSkeletons";
@@ -78,8 +80,7 @@ function Stat({ label, value, detail, testid }) {
 
 export default function ClientDetailPage() {
     const { email } = useParams();
-    const navigate = useNavigate();
-    const location = useLocation();
+    const router = useRouter();
     const [data, setData] = useState(null);
     const [err, setErr] = useState("");
 
@@ -91,7 +92,7 @@ export default function ClientDetailPage() {
 
     return (
         <AppShell testId="client-detail-page" mainClassName="py-10 md:py-14 space-y-8">
-                <Link to="/clients" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground" data-testid="back-to-clients">
+                <Link href="/clients" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground" data-testid="back-to-clients">
                     <ArrowLeft className="w-4 h-4" /> All clients
                 </Link>
 
@@ -138,7 +139,7 @@ export default function ClientDetailPage() {
                                         <button
                                             key={inv._id}
                                             type="button"
-                                            onClick={() => navigateToInvoice(navigate, location, inv._id)}
+                                            onClick={() => navigateToInvoice(router, null, inv._id)}
                                             className="w-full text-left rounded-xl border border-border bg-card p-4 hover:bg-muted/30 transition-colors"
                                             data-testid="client-invoice-row"
                                         >

@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import Link from "next/link";
 import { BrandMark } from "@/components/BrandMark";
 import { AppFooter } from "@/components/AppFooter";
 
@@ -9,14 +9,14 @@ export function LegalShell({ title, updated, children, testId }) {
                 <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
                     <BrandMark />
                     <nav className="flex items-center gap-4 text-sm">
-                        <Link to="/terms" className="text-muted-foreground hover:text-foreground transition-colors">
+                        <Link href="/terms" className="text-muted-foreground hover:text-foreground transition-colors">
                             Terms
                         </Link>
-                        <Link to="/privacy" className="text-muted-foreground hover:text-foreground transition-colors">
+                        <Link href="/privacy" className="text-muted-foreground hover:text-foreground transition-colors">
                             Privacy
                         </Link>
                         <Link
-                            to="/login"
+                            href="/login"
                             className="font-medium text-muted-foreground hover:text-foreground transition-colors"
                         >
                             Log in

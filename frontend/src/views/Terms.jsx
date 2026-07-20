@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import Link from "next/link";
 import { LegalSection, LegalShell } from "@/components/LegalShell";
 
 const UPDATED = "July 20, 2026";
@@ -13,7 +13,7 @@ export default function TermsPage() {
                     (the “Service”), including our website at scotive.com and related APIs.
                     By creating an account, connecting Gmail, or otherwise using the Service,
                     you agree to these Terms and to our{" "}
-                    <Link to="/privacy">Privacy Policy</Link>.
+                    <Link href="/privacy">Privacy Policy</Link>.
                 </p>
                 <p>
                     If you use Scotive on behalf of a company or other entity, you represent that
@@ -212,7 +212,7 @@ export default function TermsPage() {
                 </p>
                 <p>
                     Privacy questions: see our{" "}
-                    <Link to="/privacy">Privacy Policy</Link> or email{" "}
+                    <Link href="/privacy">Privacy Policy</Link> or email{" "}
                     <a href="mailto:privacy@scotive.com">privacy@scotive.com</a>.
                 </p>
             </LegalSection>

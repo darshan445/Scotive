@@ -1,5 +1,7 @@
+"use client";
 import { useState } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowRight, Loader2 } from "lucide-react";
 import { AuthShell } from "@/components/AuthShell";
 import { useAuth } from "@/contexts/AuthContext";
@@ -9,9 +11,10 @@ import { Button } from "@/components/ui/button";
 
 export default function LoginPage() {
     const { login } = useAuth();
-    const navigate = useNavigate();
-    const location = useLocation();
-    const from = location.state?.from?.pathname || "/dashboard";
+    const router = useRouter();
+    const searchParams = useSearchParams();
+    const rawNext = searchParams.get("next") || "/dashboard";
+    const next = rawNext.startsWith("/") ? rawNext : "/dashboard";
 
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
@@ -28,7 +31,7 @@ export default function LoginPage() {
             setError(res.error);
             return;
         }
-        navigate(from, { replace: true });
+        router.replace(next);
     }
 
     return (
@@ -39,7 +42,7 @@ export default function LoginPage() {
             footer={
                 <span>
                     New to Scotive?{" "}
-                    <Link to="/register" className="text-foreground font-semibold underline underline-offset-4 hover:text-accent" data-testid="link-to-register">
+                    <Link href="/register" className="text-foreground font-semibold underline underline-offset-4 hover:text-accent" data-testid="link-to-register">
                         Create an account
                     </Link>
                 </span>
@@ -68,7 +71,7 @@ export default function LoginPage() {
                             Password
                         </Label>
                         <Link
-                            to="/forgot-password"
+                            href="/forgot-password"
                             className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
                             data-testid="link-to-forgot"
                         >

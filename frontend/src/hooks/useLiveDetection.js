@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef } from "react";
 import { api } from "@/lib/api";
 import { useWorkspaceRefreshEffect } from "@/lib/workspaceRefresh";
 
-const POLL_MS = Number(import.meta.env.VITE_SYNC_STATE_POLL_MS) || 120_000;
+const POLL_MS =
+    Number(process.env.NEXT_PUBLIC_SYNC_STATE_POLL_MS || process.env.VITE_SYNC_STATE_POLL_MS) ||
+    120_000;
 
 /**
  * Polls sync-state for new invoice detections (from hourly / manual sync).

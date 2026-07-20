@@ -1,5 +1,6 @@
+"use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import Link from "next/link";
 import { AlertTriangle, ArrowUpRight, CalendarClock, Loader2, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/AppShell";
@@ -423,7 +424,7 @@ function GmailIssueBanner({ status }) {
                         )}
                     </div>
                     <Link
-                        to="/settings"
+                        href="/settings"
                         className="inline-flex items-center gap-1 mt-2 text-xs font-semibold text-amber-900 underline underline-offset-2 hover:text-amber-950">
                         Gmail settings <ArrowUpRight className="w-3 h-3" />
                     </Link>

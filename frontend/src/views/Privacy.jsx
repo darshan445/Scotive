@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import Link from "next/link";
 import { LegalSection, LegalShell } from "@/components/LegalShell";
 
 const UPDATED = "July 20, 2026";
@@ -18,7 +18,7 @@ export default function PrivacyPage() {
                 </p>
                 <p>
                     By using the Service you acknowledge this Policy. Related terms are in our{" "}
-                    <Link to="/terms">Terms of Service</Link>.
+                    <Link href="/terms">Terms of Service</Link>.
                 </p>
             </LegalSection>
 

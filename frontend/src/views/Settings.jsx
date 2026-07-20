@@ -1,3 +1,4 @@
+"use client";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { AlertTriangle, Loader2, Save, Trash2 } from "lucide-react";

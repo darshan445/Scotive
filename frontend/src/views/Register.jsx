@@ -1,5 +1,7 @@
+"use client";
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { ArrowRight, Loader2 } from "lucide-react";
 import { AuthShell } from "@/components/AuthShell";
 import { useAuth } from "@/contexts/AuthContext";
@@ -9,7 +11,7 @@ import { Button } from "@/components/ui/button";
 
 export default function RegisterPage() {
     const { register } = useAuth();
-    const navigate = useNavigate();
+    const router = useRouter();
 
     const [name, setName] = useState("");
     const [email, setEmail] = useState("");
@@ -37,7 +39,7 @@ export default function RegisterPage() {
             setError(res.error);
             return;
         }
-        navigate("/dashboard", { replace: true });
+        router.replace("/dashboard");
     }
 
     return (
@@ -48,7 +50,7 @@ export default function RegisterPage() {
             footer={
                 <span>
                     Already have an account?{" "}
-                    <Link to="/login" className="text-foreground font-semibold underline underline-offset-4 hover:text-accent" data-testid="link-to-login">
+                    <Link href="/login" className="text-foreground font-semibold underline underline-offset-4 hover:text-accent" data-testid="link-to-login">
                         Sign in
                     </Link>
                 </span>
@@ -129,11 +131,11 @@ export default function RegisterPage() {
 
                 <p className="text-xs text-muted-foreground leading-relaxed">
                     By creating an account you agree to Scotive&apos;s{" "}
-                    <Link to="/terms" className="underline underline-offset-2 hover:text-foreground">
+                    <Link href="/terms" className="underline underline-offset-2 hover:text-foreground">
                         Terms
                     </Link>{" "}
                     and{" "}
-                    <Link to="/privacy" className="underline underline-offset-2 hover:text-foreground">
+                    <Link href="/privacy" className="underline underline-offset-2 hover:text-foreground">
                         Privacy Policy
                     </Link>
                     . Your emails are never used to train Scotive&apos;s AI models.

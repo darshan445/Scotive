@@ -1,5 +1,7 @@
+"use client";
 import { useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowRight, Loader2 } from "lucide-react";
 import { AuthShell } from "@/components/AuthShell";
 import { useAuth } from "@/contexts/AuthContext";
@@ -11,7 +13,7 @@ export default function ResetPasswordPage() {
     const [params] = useSearchParams();
     const token = params.get("token") || "";
     const { resetPassword } = useAuth();
-    const navigate = useNavigate();
+    const router = useRouter();
 
     const [password, setPassword] = useState("");
     const [confirm, setConfirm] = useState("");
@@ -42,7 +44,7 @@ export default function ResetPasswordPage() {
             return;
         }
         setDone(true);
-        setTimeout(() => navigate("/login", { replace: true }), 1500);
+        setTimeout(() => router.replace("/login"), 1500);
     }
 
     return (
@@ -52,7 +54,7 @@ export default function ResetPasswordPage() {
             subtitle={done ? "Redirecting you to sign in…" : "Make it something you'll remember."}
             footer={
                 <span>
-                    <Link to="/login" className="text-foreground font-semibold underline underline-offset-4 hover:text-accent" data-testid="link-back-to-login">
+                    <Link href="/login" className="text-foreground font-semibold underline underline-offset-4 hover:text-accent" data-testid="link-back-to-login">
                         Back to sign in
                     </Link>
                 </span>

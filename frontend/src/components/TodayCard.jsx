@@ -1,5 +1,6 @@
+"use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useRouter } from "next/navigation";
 import { AlertTriangle, Clock, HelpCircle, MessageSquareWarning, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { api, extractError } from "@/lib/api";
@@ -79,8 +80,7 @@ function chipClass(r, sectionKey, sectionTone) {
 }
 
 export function TodayCard({ onChanged }) {
-    const navigate = useNavigate();
-    const location = useLocation();
+    const router = useRouter();
     const [data, setData] = useState(null);
     const [busyId, setBusyId] = useState(null);
 
@@ -185,11 +185,11 @@ export function TodayCard({ onChanged }) {
                                     <div
                                         role="button"
                                         tabIndex={0}
-                                        onClick={() => navigateToInvoice(navigate, location, r._id)}
+                                        onClick={() => navigateToInvoice(router, null, r._id)}
                                         onKeyDown={(e) => {
                                             if (e.key === "Enter" || e.key === " ") {
                                                 e.preventDefault();
-                                                navigateToInvoice(navigate, location, r._id);
+                                                navigateToInvoice(router, null, r._id);
                                             }
                                         }}
                                         className="w-full text-left px-6 py-4 flex items-start gap-3 hover:bg-muted/40 transition-colors cursor-pointer"

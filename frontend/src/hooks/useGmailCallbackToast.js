@@ -1,5 +1,6 @@
+"use client";
 import { useEffect } from "react";
-import { useSearchParams } from "react-router-dom";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 
 /**
@@ -7,10 +8,12 @@ import { toast } from "sonner";
  * result values: connected | send_missing | cancelled | read_missing | state_invalid | error
  */
 export function useGmailCallbackToast(onResolved) {
-    const [params, setParams] = useSearchParams();
+    const searchParams = useSearchParams();
+    const router = useRouter();
+    const pathname = usePathname();
 
     useEffect(() => {
-        const result = params.get("gmail");
+        const result = searchParams.get("gmail");
         if (!result) return;
 
         switch (result) {
@@ -49,8 +52,10 @@ export function useGmailCallbackToast(onResolved) {
             default:
                 break;
         }
+        const params = new URLSearchParams(searchParams.toString());
         params.delete("gmail");
-        setParams(params, { replace: true });
+        const qs = params.toString();
+        router.replace(qs ? `${pathname}?${qs}` : pathname);
         onResolved?.(result);
-    }, [params, setParams, onResolved]);
+    }, [searchParams, router, pathname, onResolved]);
 }
