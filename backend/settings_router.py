@@ -9,6 +9,7 @@ from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, field_validator
 
+from feature_flags import chasing_timing_enabled
 from scan_settings import attach_scan_metadata
 
 logger = logging.getLogger("scotive.settings")
@@ -203,15 +204,23 @@ async def get_settings_doc(db, user_id) -> dict:
 def build_router(db, get_current_user):
     router = APIRouter(tags=["settings"])
 
+    def _with_flags(s: dict) -> dict:
+        out = attach_scan_metadata(s)
+        out["chasing_timing_enabled"] = chasing_timing_enabled()
+        return out
+
     @router.get("/settings")
     async def get_settings(user: dict = Depends(get_current_user)):
         s = await get_settings_doc(db, user["_id"])
         s.pop("user_id", None)
-        return attach_scan_metadata(s)
+        return _with_flags(s)
 
     @router.patch("/settings")
     async def patch_settings(payload: SettingsPatch, user: dict = Depends(get_current_user)):
         patch = payload.model_dump(exclude_none=True)
+        if not chasing_timing_enabled():
+            patch.pop("escalation_offsets", None)
+            patch.pop("follow_up_interval_days", None)
         if not patch:
             raise HTTPException(status_code=400, detail="No changes provided.")
         patch["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -220,7 +229,7 @@ def build_router(db, get_current_user):
         )
         s = await get_settings_doc(db, user["_id"])
         s.pop("user_id", None)
-        return attach_scan_metadata(s)
+        return _with_flags(s)
 
     @router.get("/settings/timezones")
     async def list_timezones():

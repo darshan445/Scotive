@@ -1386,6 +1386,9 @@ def build_router(db, get_current_user):
 
     @router.post("/escalation/run")
     async def escalation_run(user: dict = Depends(get_current_user)):
+        from feature_flags import chasing_timing_enabled
+        if not chasing_timing_enabled():
+            return {"ok": True, "disabled": True, "drafts_generated": 0}
         counts = await run_escalation_tick(db, user["_id"])
         return {"ok": True, **counts}
 

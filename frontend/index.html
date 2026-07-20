@@ -23,8 +23,18 @@
       rel="stylesheet"
     />
     <title>Scotive — Payment ops inside Gmail</title>
+    <!--
+      Hide the crawlable #seo-fallback before first paint when JS is available,
+      so real users never flash marketing copy while the SPA boots.
+      Raw HTML (curl / OAuth reviewers) still contains the full text.
+    -->
+    <script>document.documentElement.classList.add("js");</script>
     <style>
-      /* Crawlable fallback styles (replaced when the React app mounts). */
+      html, body {
+        margin: 0;
+        background: #f7f5f0;
+      }
+      /* Crawlable fallback — visible only without JS */
       #seo-fallback {
         font-family: Inter, system-ui, -apple-system, sans-serif;
         color: #142824;
@@ -32,6 +42,9 @@
         margin: 0;
         min-height: 100vh;
         line-height: 1.55;
+      }
+      html.js #seo-fallback {
+        display: none !important;
       }
       #seo-fallback header,
       #seo-fallback main,

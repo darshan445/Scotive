@@ -112,7 +112,12 @@ async def _next_step_index(inv: dict) -> int:
 
 async def run_post_chase_tick(db, user_id) -> dict[str, Any]:
     """If no client reply since last chase, queue the next ladder draft + user prompt."""
+    from feature_flags import chasing_timing_enabled
+
     counts = {"prompts_created": 0, "ladder_exhausted": 0, "skipped": 0}
+    if not chasing_timing_enabled():
+        counts["disabled"] = True
+        return counts
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat()
     interval_days = await get_follow_up_interval_days(db, user_id)

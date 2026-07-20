@@ -184,9 +184,13 @@ async def _draft_exists(db, user_id, invoice_id, step_key) -> bool:
 
 async def run_escalation_tick(db, user_id) -> dict:
     """Generate any missing chase drafts for this user based on today's date + config."""
+    from feature_flags import chasing_timing_enabled
     from invoice_lifecycle import apply_stale_transitions
 
     counts = {"drafts_generated": 0, "skipped_existing": 0, "invoices_scanned": 0, "stale": 0}
+    if not chasing_timing_enabled():
+        counts["disabled"] = True
+        return counts
     counts["stale"] = await apply_stale_transitions(db, user_id)
 
     settings = await db.user_settings.find_one({"user_id": user_id}) or {}
@@ -294,7 +298,12 @@ async def run_escalation_tick(db, user_id) -> dict:
 
 
 async def escalate_all_users(db) -> dict:
+    from feature_flags import chasing_timing_enabled
+
     totals = {"users": 0, "drafts_generated": 0}
+    if not chasing_timing_enabled():
+        totals["disabled"] = True
+        return totals
     async for conn in db.gmail_connections.find({"status": "connected"}):
         uid = conn.get("user_id")
         if not uid:

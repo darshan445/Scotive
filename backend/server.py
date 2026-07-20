@@ -506,9 +506,13 @@ async def on_startup():
         logger.info("Continuous sync loop scheduled every %ss", interval)
     else:
         logger.info("Continuous sync loop disabled (SYNC_INTERVAL_SECONDS=0)")
-    if esc_interval > 0:
+    from feature_flags import chasing_timing_enabled
+
+    if chasing_timing_enabled() and esc_interval > 0:
         _escalation_task = asyncio.create_task(_escalation_loop(esc_interval))
         logger.info("Escalation loop scheduled every %ss", esc_interval)
+    elif not chasing_timing_enabled():
+        logger.info("Escalation loop disabled (ENABLE_CHASING_TIMING=false)")
     else:
         logger.info("Escalation loop disabled (ESCALATION_INTERVAL_SECONDS=0)")
     if digest_interval > 0:

@@ -176,17 +176,21 @@ export default function SettingsPage() {
                         Settings
                     </h1>
                     <p className="type-body mt-2 text-sm">
-                        Fine-tune when Scotive drafts each chase step. Due dates come from your invoices only.
+                        {settings.chasing_timing_enabled
+                            ? "Fine-tune when Scotive drafts each chase step. Due dates come from your invoices only."
+                            : "Gmail connection, digests, and account controls."}
                     </p>
                 </div>
 
                 <GmailAccountSection status={gmailStatus} />
 
-                <ChasingTimingSection
-                    settings={settings}
-                    saving={saving}
-                    onSave={persist}
-                />
+                {settings.chasing_timing_enabled ? (
+                    <ChasingTimingSection
+                        settings={settings}
+                        saving={saving}
+                        onSave={persist}
+                    />
+                ) : null}
 
                 {/* Late fees hidden for MVP — flip to true to restore. */}
                 {false ? (
