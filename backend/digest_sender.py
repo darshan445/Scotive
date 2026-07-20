@@ -145,164 +145,361 @@ def _totals(sections: dict) -> dict:
     }
 
 
+def _action_count(totals: dict) -> int:
+    """Items that need a decision — excludes passive 'watching' and resolved."""
+    return (
+        int(totals.get("due_overdue") or 0)
+        + int(totals.get("broken_promises") or 0)
+        + int(totals.get("needs_reply") or 0)
+        + int(totals.get("confirm_prompts") or 0)
+        + int(totals.get("stale_prompts") or 0)
+        + int(totals.get("followup_prompts") or 0)
+    )
+
+
+def _row_amount(row: dict) -> str:
+    from invoice_lifecycle import outstanding_balance
+
+    if "amount" in row and "status" not in row and "due_date" not in row:
+        # follow-up prompt shape
+        return _fmt_money(row.get("amount"), row.get("currency") or "USD")
+    try:
+        return _fmt_money(outstanding_balance(row), row.get("currency") or "USD")
+    except Exception:
+        return _fmt_money(row.get("amount") or row.get("balance_remaining"), row.get("currency") or "USD")
+
+
+def _row_client(row: dict) -> str:
+    return row.get("counterparty_name") or row.get("counterparty_email") or "Unknown client"
+
+
+def _fmt_short_date(d) -> str:
+    if not d:
+        return "—"
+    return d.strftime("%b %d, %Y")
+
+
+_LOGO_CID = "scotive-logo@scotive"
+
+
+def _digest_logo_bytes() -> bytes | None:
+    """Load the squircle mark shipped with the frontend (for CID-inline in digests)."""
+    from pathlib import Path
+
+    here = Path(__file__).resolve().parent
+    candidates = [
+        here / "static" / "scotive-icon.png",
+        here.parent / "frontend" / "public" / "scotive-icon.png",
+    ]
+    for path in candidates:
+        try:
+            if path.is_file():
+                return path.read_bytes()
+        except OSError:
+            continue
+    return None
+
+
+def _digest_logo_url() -> str:
+    base = (os.environ.get("FRONTEND_URL") or "").rstrip("/")
+    return f"{base}/scotive-icon.png" if base else ""
+
+
 def build_digest_email(user: dict, sections: dict, totals: dict) -> dict:
     """Return {subject, body_text, body_html}."""
-    date_str = datetime.now(timezone.utc).strftime("%A, %b %d")
-    subject_bits = []
-    if totals["due_overdue"]:
-        subject_bits.append(f"{totals['due_overdue']} due")
-    if totals["broken_promises"]:
-        subject_bits.append(f"{totals['broken_promises']} broken")
-    if totals["needs_reply"]:
-        subject_bits.append(f"{totals['needs_reply']} needs reply")
-    if totals.get("confirm_prompts"):
-        subject_bits.append(f"{totals['confirm_prompts']} to confirm")
-    if totals.get("stale_prompts"):
-        subject_bits.append(f"{totals['stale_prompts']} gone quiet")
-    if totals.get("followup_prompts"):
-        subject_bits.append(f"{totals['followup_prompts']} follow-up?")
-    if totals.get("watching"):
-        subject_bits.append(f"{totals['watching']} watching")
-    subject_summary = " · ".join(subject_bits) if subject_bits else "You're all caught up"
-    subject = f"Scotive · {subject_summary} · {date_str}"
+    now = datetime.now(timezone.utc)
+    date_str = now.strftime("%A, %b %d")
+    date_short = now.strftime("%b %d")
+    actions = _action_count(totals)
+
+    # Short, scannable subject — no middle-dot (encoding-safe) and no watching noise.
+    if actions == 0:
+        subject = f"Scotive digest: you're caught up ({date_short})"
+    elif actions == 1:
+        subject = f"Scotive digest: 1 item needs you ({date_short})"
+    else:
+        subject = f"Scotive digest: {actions} items need you ({date_short})"
+
+    def _due_note(inv):
+        d = _parse_date(inv.get("due_date"))
+        return f"Due {_fmt_short_date(d)}" if d else "Past due"
+
+    def _promise_note(inv):
+        d = _parse_date(inv.get("promise_date"))
+        return f"Promised {_fmt_short_date(d)}" if d else "Broken promise"
+
+    def _resolved_note(inv):
+        d = _parse_date(inv.get("paid_at"))
+        return f"Paid {_fmt_short_date(d)}" if d else "Paid"
+
+    def _followup_note(p):
+        step = (p.get("step_label") or "follow-up").replace("_", " ")
+        return f"No reply yet — {step}"
+
+    def _status_note(inv):
+        return (inv.get("status") or "open").replace("_", " ")
+
+    # Ordered action sections (same urgency as the Today card).
+    buckets = [
+        ("Past due", sections.get("due_overdue") or [], _due_note),
+        ("Broken promises", sections.get("broken_promises") or [], _promise_note),
+        ("Confirm payment", sections.get("confirm_prompts") or [], lambda _i: "Client says paid"),
+        ("Gone quiet", sections.get("stale_prompts") or [], lambda _i: "No activity 120+ days"),
+        ("Needs your reply", sections.get("needs_reply") or [], _status_note),
+        ("Follow-up ready", sections.get("followup_prompts") or [], _followup_note),
+    ]
+    resolved = sections.get("resolved") or []
+    watching_n = len(sections.get("watching") or [])
 
     # --------- Plain text -------------------------------------------------
-    lines = [f"Scotive daily digest · {date_str}", ""]
+    lines = [
+        "SCOTIVE DAILY DIGEST",
+        date_str,
+        "",
+        f"{actions} item{'s' if actions != 1 else ''} need your attention"
+        if actions
+        else "Nothing needs you right now.",
+        "",
+    ]
+    if totals.get("total_open_amount") and (totals.get("due_overdue") or totals.get("broken_promises")):
+        lines.append(f"At risk (past due + broken): {_fmt_money(totals['total_open_amount'])}")
+        lines.append("")
 
-    def bucket_text(title, rows, label_getter):
+    for title, rows, note_fn in buckets:
         if not rows:
-            return
-        lines.append(f"{title} ({len(rows)})")
-        for inv in rows[:10]:
-            from invoice_lifecycle import outstanding_balance
-            bal = outstanding_balance(inv)
-            lines.append(f"  · {_client_label(inv)} — {_fmt_money(bal, inv.get('currency','USD'))}"
-                         + (f" · {inv.get('invoice_ref')}" if inv.get('invoice_ref') else "")
-                         + (f" · {label_getter(inv)}" if label_getter(inv) else ""))
-        if len(rows) > 10:
-            lines.append(f"  · … and {len(rows) - 10} more")
+            continue
+        lines.append(f"{title.upper()} ({len(rows)})")
+        lines.append("-" * 40)
+        for row in rows[:12]:
+            ref = f"  [{row.get('invoice_ref')}]" if row.get("invoice_ref") else ""
+            lines.append(
+                f"  {_row_client(row)}{ref}"
+                f"\n    {_row_amount(row)}  |  {note_fn(row)}"
+            )
+        if len(rows) > 12:
+            lines.append(f"  ... and {len(rows) - 12} more")
         lines.append("")
 
-    def _due_label(inv):
-        d = _parse_date(inv.get("due_date"))
-        if not d:
-            return ""
-        name = inv.get("counterparty_name") or inv.get("counterparty_email") or "Client"
-        return f"{name} was due {d.isoformat()} — has it arrived?"
-
-    def _promise_label(inv):
-        d = _parse_date(inv.get("promise_date"))
-        if not d:
-            return "broken promise"
-        return f"promised {d.isoformat()}"
-
-    def _resolved_label(inv):
-        d = _parse_date(inv.get("paid_at"))
-        return f"paid {d.isoformat()}" if d else "paid"
-
-    def _watching_label(inv):
-        if inv.get("ladder_exhausted"):
-            return "still open — no further auto-drafts"
-        if inv.get("watching_for_reply"):
-            return "awaiting reply after your follow-up"
-        return ""
-
-    def _followup_label(p):
-        name = p.get("counterparty_name") or p.get("counterparty_email") or "Client"
-        return f"No reply from {name} yet — send this follow-up?"
-
-    bucket_text("Past due", sections["due_overdue"], _due_label)
-    bucket_text("Follow-up ready", sections.get("followup_prompts") or [], _followup_label)
-    bucket_text("Broken promises", sections["broken_promises"], _promise_label)
-    bucket_text("Watching", sections.get("watching") or [], _watching_label)
-    bucket_text("Confirm payment", sections.get("confirm_prompts") or [], lambda i: "says paid — confirm?")
-    bucket_text("Gone quiet", sections.get("stale_prompts") or [], lambda i: "120+ days — still chasing?")
-    bucket_text("Needs reply", sections["needs_reply"], lambda i: i.get("status") or "")
-    bucket_text("Resolved (last 24h)", sections["resolved"], _resolved_label)
-
-    if totals["due_overdue"] or totals["broken_promises"]:
-        lines.append(f"Total open in these buckets: {_fmt_money(totals['total_open_amount'])}")
+    if resolved:
+        lines.append(f"RESOLVED (last 24h): {len(resolved)}")
+        for inv in resolved[:5]:
+            lines.append(f"  {_row_client(inv)}  {_row_amount(inv)}  {_resolved_note(inv)}")
         lines.append("")
-    lines.append(f"Open the dashboard: {os.environ.get('FRONTEND_URL', '')}/dashboard")
+
+    if watching_n:
+        lines.append(f"Also watching {watching_n} open invoice{'s' if watching_n != 1 else ''} (no action needed).")
+        lines.append("")
+
+    dash = (os.environ.get("FRONTEND_URL") or "").rstrip("/")
+    if dash:
+        lines.append(f"Open dashboard: {dash}/dashboard")
     body_text = "\n".join(lines)
 
     # --------- HTML -------------------------------------------------------
-    def html_bucket(title, rows, color, label_getter):
+    BRAND = "#114B3F"
+    CREAM = "#F7F5F0"
+    INK = "#142824"
+    MUTED = "#5A6B66"
+    BORDER = "#E4E0D8"
+
+    def html_section(title: str, rows: list, note_fn) -> str:
         if not rows:
             return ""
-        items = []
-        for inv in rows[:10]:
-            from invoice_lifecycle import outstanding_balance
-            bal = outstanding_balance(inv)
-            label = label_getter(inv)
-            items.append(
+        head = (
+            f"<tr>"
+            f"<td style='padding:10px 12px;font-size:11px;font-weight:700;letter-spacing:.06em;"
+            f"text-transform:uppercase;color:{MUTED};border-bottom:1px solid {BORDER}'>Client</td>"
+            f"<td style='padding:10px 12px;font-size:11px;font-weight:700;letter-spacing:.06em;"
+            f"text-transform:uppercase;color:{MUTED};border-bottom:1px solid {BORDER};text-align:right'>Amount</td>"
+            f"<td style='padding:10px 12px;font-size:11px;font-weight:700;letter-spacing:.06em;"
+            f"text-transform:uppercase;color:{MUTED};border-bottom:1px solid {BORDER}'>Detail</td>"
+            f"</tr>"
+        )
+        body_rows = []
+        for row in rows[:12]:
+            client = html.escape(_row_client(row))
+            ref = row.get("invoice_ref")
+            if ref:
+                client = (
+                    f"{client}<br>"
+                    f"<span style='font-size:12px;color:{MUTED}'>{html.escape(str(ref))}</span>"
+                )
+            body_rows.append(
                 "<tr>"
-                f"<td style='padding:6px 0;color:#111;font-weight:500'>{html.escape(_client_label(inv))}</td>"
-                f"<td style='padding:6px 0;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;color:#111'>{html.escape(_fmt_money(bal, inv.get('currency','USD')))}</td>"
-                f"<td style='padding:6px 0 6px 16px;color:#6b7280;font-size:12px'>{html.escape(label or '')}</td>"
+                f"<td style='padding:12px;border-bottom:1px solid {BORDER};color:{INK};font-size:14px;"
+                f"vertical-align:top'>{client}</td>"
+                f"<td style='padding:12px;border-bottom:1px solid {BORDER};color:{INK};font-size:14px;"
+                f"font-weight:600;text-align:right;white-space:nowrap;vertical-align:top;"
+                f"font-variant-numeric:tabular-nums'>{html.escape(_row_amount(row))}</td>"
+                f"<td style='padding:12px;border-bottom:1px solid {BORDER};color:{MUTED};font-size:13px;"
+                f"vertical-align:top'>{html.escape(note_fn(row) or '')}</td>"
                 "</tr>"
             )
-        overflow = ""
-        if len(rows) > 10:
-            overflow = f"<div style='margin-top:6px;color:#6b7280;font-size:12px'>… and {len(rows)-10} more</div>"
+        more = ""
+        if len(rows) > 12:
+            more = (
+                f"<div style='padding:10px 12px;font-size:12px;color:{MUTED}'>"
+                f"And {len(rows) - 12} more in this section</div>"
+            )
         return (
-            f"<div style='margin:20px 0'>"
-            f"<div style='color:{color};font-size:12px;letter-spacing:.2em;text-transform:uppercase;font-weight:600;margin-bottom:6px'>"
-            f"{html.escape(title)} · {len(rows)}</div>"
-            f"<table style='width:100%;border-collapse:collapse'>{''.join(items)}</table>"
-            f"{overflow}</div>"
+            f"<div style='margin:0 0 22px 0'>"
+            f"<div style='margin:0 0 8px 0;font-size:15px;font-weight:700;color:{INK}'>"
+            f"{html.escape(title)}"
+            f"<span style='margin-left:8px;display:inline-block;padding:2px 8px;border-radius:999px;"
+            f"background:{CREAM};color:{BRAND};font-size:12px;font-weight:700'>{len(rows)}</span>"
+            f"</div>"
+            f"<table role='presentation' width='100%' cellpadding='0' cellspacing='0' "
+            f"style='width:100%;border-collapse:collapse;background:#ffffff;"
+            f"border:1px solid {BORDER};border-radius:10px;overflow:hidden'>"
+            f"{head}{''.join(body_rows)}</table>{more}</div>"
         )
 
-    frontend = os.environ.get("FRONTEND_URL", "")
-    hero_bits = " · ".join([f"<span style='color:#111;font-weight:600'>{b}</span>" for b in subject_bits]) or "<span style='color:#059669;font-weight:600'>You're all caught up</span>"
-    body_html = (
-        "<html><body style='font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:#fff;color:#111;margin:0;padding:24px'>"
-        "<div style='max-width:640px;margin:0 auto'>"
-        f"<div style='color:#6b7280;font-size:12px;letter-spacing:.2em;text-transform:uppercase;margin-bottom:4px'>Scotive · {html.escape(date_str)}</div>"
-        f"<h1 style='font-size:22px;margin:4px 0 0 0'>{hero_bits}</h1>"
-        f"{html_bucket('Past due', sections['due_overdue'], '#b91c1c', _due_label)}"
-        f"{html_bucket('Follow-up ready', sections.get('followup_prompts') or [], '#7c3aed', _followup_label)}"
-        f"{html_bucket('Broken promises', sections['broken_promises'], '#b45309', _promise_label)}"
-        f"{html_bucket('Watching', sections.get('watching') or [], '#64748b', _watching_label)}"
-        f"{html_bucket('Confirm payment', sections.get('confirm_prompts') or [], '#6d28d9', lambda i: 'says paid')}"
-        f"{html_bucket('Gone quiet', sections.get('stale_prompts') or [], '#57534e', lambda i: '120+ days idle')}"
-        f"{html_bucket('Needs reply', sections['needs_reply'], '#1d4ed8', lambda i: i.get('status') or '')}"
-        f"{html_bucket('Resolved (last 24h)', sections['resolved'], '#059669', _resolved_label)}"
-    )
-    if totals["due_overdue"] or totals["broken_promises"]:
-        body_html += (
-            f"<div style='margin-top:20px;padding:12px 14px;border:1px solid #e5e7eb;border-radius:8px;color:#111;font-size:14px'>"
-            f"Total open in these buckets: <b>{html.escape(_fmt_money(totals['total_open_amount']))}</b></div>"
+    summary_chips = []
+    chip_defs = [
+        ("Past due", totals.get("due_overdue") or 0),
+        ("Broken", totals.get("broken_promises") or 0),
+        ("Confirm", totals.get("confirm_prompts") or 0),
+        ("Quiet", totals.get("stale_prompts") or 0),
+        ("Reply", totals.get("needs_reply") or 0),
+        ("Follow-up", totals.get("followup_prompts") or 0),
+    ]
+    for label, n in chip_defs:
+        if not n:
+            continue
+        summary_chips.append(
+            f"<span style='display:inline-block;margin:0 8px 8px 0;padding:6px 10px;"
+            f"border-radius:8px;background:{CREAM};color:{INK};font-size:13px'>"
+            f"<b>{n}</b> {html.escape(label)}</span>"
         )
-    if frontend:
-        body_html += (
-            f"<div style='margin-top:20px'><a href='{html.escape(frontend)}/dashboard' "
-            f"style='display:inline-block;padding:10px 16px;background:#111;color:#fff;text-decoration:none;border-radius:6px;font-size:14px'>Open dashboard</a></div>"
-        )
-    body_html += (
-        "<div style='margin-top:32px;color:#9ca3af;font-size:11px'>Sent by Scotive · You're getting this because daily digest is on in Settings.</div>"
-        "</div></body></html>"
+
+    hero_line = (
+        f"{actions} item{'s' if actions != 1 else ''} need your attention"
+        if actions
+        else "You're caught up — nothing needs action today."
     )
+
+    sections_html = "".join(html_section(t, rows, fn) for t, rows, fn in buckets)
+
+    resolved_html = ""
+    if resolved:
+        bits = ", ".join(
+            f"{html.escape(_row_client(i))} ({html.escape(_row_amount(i))})"
+            for i in resolved[:5]
+        )
+        extra = f" +{len(resolved) - 5} more" if len(resolved) > 5 else ""
+        resolved_html = (
+            f"<div style='margin:0 0 22px 0;padding:12px 14px;border-radius:10px;"
+            f"background:#ECF6F1;color:{BRAND};font-size:13px'>"
+            f"<b>Resolved in the last 24h ({len(resolved)}):</b> {bits}{extra}"
+            f"</div>"
+        )
+
+    watching_html = ""
+    if watching_n:
+        watching_html = (
+            f"<div style='margin:0 0 22px 0;font-size:13px;color:{MUTED}'>"
+            f"Also watching <b style='color:{INK}'>{watching_n}</b> open invoice"
+            f"{'s' if watching_n != 1 else ''} — no action needed."
+            f"</div>"
+        )
+
+    at_risk_html = ""
+    if totals.get("total_open_amount") and (totals.get("due_overdue") or totals.get("broken_promises")):
+        at_risk_html = (
+            f"<div style='margin:0 0 22px 0;padding:14px 16px;border-radius:10px;"
+            f"border:1px solid {BORDER};background:#fff'>"
+            f"<div style='font-size:12px;color:{MUTED};text-transform:uppercase;"
+            f"letter-spacing:.06em;font-weight:700'>At risk right now</div>"
+            f"<div style='margin-top:4px;font-size:22px;font-weight:700;color:{INK};"
+            f"font-variant-numeric:tabular-nums'>"
+            f"{html.escape(_fmt_money(totals['total_open_amount']))}</div>"
+            f"<div style='margin-top:2px;font-size:12px;color:{MUTED}'>"
+            f"Past due + broken promises</div></div>"
+        )
+
+    cta = ""
+    if dash:
+        cta = (
+            f"<div style='margin:28px 0 8px 0'>"
+            f"<a href='{html.escape(dash)}/dashboard' "
+            f"style='display:inline-block;padding:12px 18px;background:{BRAND};color:#F7F5F0;"
+            f"text-decoration:none;border-radius:10px;font-size:14px;font-weight:600'>"
+            f"Open Scotive dashboard</a></div>"
+        )
+
+    logo_url = _digest_logo_url()
+    # Prefer CID (attached inline); fall back to hosted URL if attach fails at send time.
+    logo_src = f"cid:{_LOGO_CID}" if _digest_logo_bytes() else (logo_url or "")
+    if logo_src:
+        brand_header = (
+            f"<table role='presentation' cellpadding='0' cellspacing='0' border='0' style='margin:0 0 4px 0'>"
+            f"<tr>"
+            f"<td style='vertical-align:middle;padding:0 10px 0 0'>"
+            f"<img src='{html.escape(logo_src)}' width='36' height='36' alt='Scotive' "
+            f"style='display:block;width:36px;height:36px;border:0;border-radius:8px;'/>"
+            f"</td>"
+            f"<td style='vertical-align:middle;'>"
+            f"<div style='font-size:16px;font-weight:700;color:{BRAND};letter-spacing:-0.01em;line-height:1.2;'>Scotive</div>"
+            f"<div style='font-size:12px;color:{MUTED};margin-top:2px;'>Daily digest</div>"
+            f"</td>"
+            f"</tr></table>"
+        )
+    else:
+        brand_header = (
+            f"<div style='font-size:13px;font-weight:700;color:{BRAND};letter-spacing:.04em;'>SCOTIVE</div>"
+        )
+
+    body_html = f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:{CREAM};color:{INK};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <div style="max-width:640px;margin:0 auto;padding:28px 16px 40px 16px;">
+    {brand_header}
+    <div style="margin-top:14px;font-size:12px;color:{MUTED};">{html.escape(date_str)}</div>
+    <h1 style="margin:8px 0 8px 0;font-size:24px;line-height:1.25;color:{INK};font-weight:700;">
+      {html.escape(hero_line)}
+    </h1>
+    <div style="margin:12px 0 24px 0;">{"".join(summary_chips)}</div>
+    {at_risk_html}
+    {sections_html}
+    {resolved_html}
+    {watching_html}
+    {cta}
+    <div style="margin-top:28px;padding-top:16px;border-top:1px solid {BORDER};font-size:11px;color:{MUTED};line-height:1.5;">
+      Sent by Scotive to {html.escape(user.get("email") or "you")}.
+      You can turn this off anytime in Settings → Daily digest.
+    </div>
+  </div>
+</body>
+</html>"""
 
     return {"subject": subject, "body_text": body_text, "body_html": body_html}
 
 
-def _mime_message(from_addr, to_addr, subject, body_text, body_html):
-    boundary = "sctvbndry" + os.urandom(4).hex()
-    return (
-        f"From: {from_addr}\r\n"
-        f"To: {to_addr}\r\n"
-        f"Subject: {subject}\r\n"
-        f"MIME-Version: 1.0\r\n"
-        f"Content-Type: multipart/alternative; boundary=\"{boundary}\"\r\n\r\n"
-        f"--{boundary}\r\n"
-        f"Content-Type: text/plain; charset=UTF-8\r\n\r\n"
-        f"{body_text}\r\n"
-        f"--{boundary}\r\n"
-        f"Content-Type: text/html; charset=UTF-8\r\n\r\n"
-        f"{body_html}\r\n"
-        f"--{boundary}--"
-    )
+def _mime_message(from_addr, to_addr, subject, body_text, body_html) -> bytes:
+    """Build a proper MIME message with RFC 2047-encoded subject + inline logo."""
+    from email.message import EmailMessage
+
+    msg = EmailMessage()
+    msg["From"] = from_addr
+    msg["To"] = to_addr
+    msg["Subject"] = subject
+    msg.set_content(body_text)
+    msg.add_alternative(body_html, subtype="html")
+
+    logo = _digest_logo_bytes()
+    if logo:
+        # Attach as related to the HTML part so cid:scotive-logo@scotive resolves.
+        html_part = msg.get_payload()[-1]
+        html_part.add_related(
+            logo,
+            maintype="image",
+            subtype="png",
+            cid=_LOGO_CID,
+            filename="scotive-icon.png",
+            disposition="inline",
+        )
+    return msg.as_bytes()
 
 
 async def send_digest_for_user(db, user_id, force: bool = False) -> dict:
@@ -355,7 +552,7 @@ async def send_digest_for_user(db, user_id, force: bool = False) -> dict:
     from_addr = conn.get("email")
     to_addr = user.get("email")  # digest goes to the app-account email
     raw = _mime_message(from_addr, to_addr, email["subject"], email["body_text"], email["body_html"])
-    encoded = base64.urlsafe_b64encode(raw.encode("utf-8")).decode("utf-8").rstrip("=")
+    encoded = base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
 
     try:
         async with httpx.AsyncClient(timeout=20.0) as c:
