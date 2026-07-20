@@ -79,9 +79,31 @@ def decrypt_token(ciphertext: str) -> str:
 class GmailStatus(BaseModel):
     connected: bool
     email: Optional[str] = None
+    account_name: Optional[str] = None
     can_send: bool = False
     connected_at: Optional[datetime] = None
     status: str = "disconnected"  # disconnected | connected | revoked | send_missing
+
+
+def name_from_userinfo(userinfo: dict) -> Optional[str]:
+    """Prefer Google profile display name, then given name."""
+    if not userinfo:
+        return None
+    for key in ("name", "given_name"):
+        val = (userinfo.get(key) or "").strip()
+        if val:
+            return val
+    return None
+
+
+def signer_fallback_from_email(email: Optional[str]) -> Optional[str]:
+    """Last-resort sign-off when Google profile name is unavailable."""
+    if not email or "@" not in email:
+        return None
+    local = email.split("@", 1)[0].strip()
+    if not local:
+        return None
+    return local.replace(".", " ").replace("_", " ").title()
 
 
 class OAuthStartResponse(BaseModel):
@@ -101,7 +123,14 @@ def scopes_include_read(scope_str: str) -> bool:
     return GMAIL_SCOPE_READ in granted
 
 
-async def upsert_gmail_connection(db, user_id, email, tokens, granted_scopes: str):
+async def upsert_gmail_connection(
+    db,
+    user_id,
+    email,
+    tokens,
+    granted_scopes: str,
+    account_name: Optional[str] = None,
+):
     now = datetime.now(timezone.utc)
     doc = {
         "user_id": user_id,
@@ -114,6 +143,8 @@ async def upsert_gmail_connection(db, user_id, email, tokens, granted_scopes: st
         "status": "connected",
         "updated_at": now.isoformat(),
     }
+    if account_name:
+        doc["account_name"] = account_name.strip()
     # Preserve stored refresh_token if Google didn't send a new one on re-consent
     if tokens.get("refresh_token"):
         doc["refresh_token_enc"] = encrypt_token(tokens["refresh_token"])
@@ -124,8 +155,40 @@ async def upsert_gmail_connection(db, user_id, email, tokens, granted_scopes: st
     else:
         if "refresh_token_enc" not in doc and existing.get("refresh_token_enc"):
             doc["refresh_token_enc"] = existing["refresh_token_enc"]
+        # Keep prior account_name if this reconnect didn't return a profile name
+        if "account_name" not in doc and existing.get("account_name"):
+            doc["account_name"] = existing["account_name"]
         await db.gmail_connections.update_one({"user_id": user_id}, {"$set": doc})
     return doc
+
+
+async def ensure_gmail_account_name(db, user_id) -> Optional[str]:
+    """Return stored Gmail profile name, backfilling from Google userinfo if missing."""
+    conn = await db.gmail_connections.find_one({"user_id": user_id})
+    if not conn:
+        return None
+    existing = (conn.get("account_name") or "").strip()
+    if existing:
+        return existing
+
+    # Lazy import — gmail_client imports decrypt helpers from this module.
+    try:
+        from gmail_client import get_access_token
+        access = await get_access_token(db, user_id)
+        info = await fetch_userinfo(access)
+        name = name_from_userinfo(info)
+    except Exception as e:
+        logger.warning("Could not backfill Gmail account_name for %s: %s", user_id, e)
+        name = None
+
+    if name:
+        await db.gmail_connections.update_one(
+            {"user_id": user_id},
+            {"$set": {"account_name": name}},
+        )
+        return name
+
+    return signer_fallback_from_email(conn.get("email"))
 
 
 def _make_status(conn: Optional[dict]) -> GmailStatus:
@@ -135,10 +198,12 @@ def _make_status(conn: Optional[dict]) -> GmailStatus:
     connected_at = conn.get("connected_at")
     if isinstance(connected_at, str):
         connected_at = datetime.fromisoformat(connected_at)
+    account_name = (conn.get("account_name") or "").strip() or None
     if status_val == "revoked":
         return GmailStatus(
             connected=False,
             email=conn.get("email"),
+            account_name=account_name,
             can_send=False,
             connected_at=connected_at,
             status="revoked",
@@ -147,6 +212,7 @@ def _make_status(conn: Optional[dict]) -> GmailStatus:
     return GmailStatus(
         connected=True,
         email=conn.get("email"),
+        account_name=account_name,
         can_send=can_send,
         connected_at=connected_at,
         status="connected" if can_send else "send_missing",
@@ -273,7 +339,10 @@ def build_router(db, get_current_user):
                 return RedirectResponse(f"{frontend}/dashboard?gmail=read_missing")
             userinfo = await fetch_userinfo(tokens["access_token"])
             email = (userinfo.get("email") or "").lower()
-            await upsert_gmail_connection(db, user_id, email, tokens, granted)
+            account_name = name_from_userinfo(userinfo)
+            await upsert_gmail_connection(
+                db, user_id, email, tokens, granted, account_name=account_name,
+            )
         except HTTPException as e:
             logger.warning("OAuth callback error: %s", e.detail)
             return RedirectResponse(f"{frontend}/dashboard?gmail=error")

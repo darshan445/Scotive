@@ -3,6 +3,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { ConnectGmailButton } from "@/components/ConnectGmailButton";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 
 function formatDate(iso) {
@@ -35,9 +36,14 @@ export function ConnectionPanel({ status }) {
 
     if (!status) {
         return (
-            <div className="rounded-xl border border-border bg-card p-6 flex items-center gap-3 text-sm text-muted-foreground" data-testid="connection-panel-loading">
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Checking Gmail connection…
+            <div className="rounded-xl border border-border bg-card p-6 space-y-3" data-testid="connection-panel-loading">
+                <div className="flex items-center gap-3">
+                    <Skeleton className="h-10 w-10 rounded-lg flex-shrink-0" />
+                    <div className="space-y-2 flex-1">
+                        <Skeleton className="h-4 w-40" />
+                        <Skeleton className="h-3 w-56 max-w-full" />
+                    </div>
+                </div>
             </div>
         );
     }
@@ -121,8 +127,11 @@ export function ConnectionPanel({ status }) {
                     <div className="min-w-0">
                         <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">Gmail connected</div>
                         <div className="font-heading font-semibold text-lg text-foreground truncate" data-testid="connected-gmail-email">
-                            {status.email}
+                            {status.account_name || status.email}
                         </div>
+                        {status.account_name && status.email ? (
+                            <div className="text-xs font-mono text-muted-foreground truncate">{status.email}</div>
+                        ) : null}
                         <div className="text-xs text-muted-foreground mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1">
                             <span className="inline-flex items-center gap-1"><Mail className="w-3 h-3" /> Read + Send</span>
                             <span className="inline-flex items-center gap-1"><Plug className="w-3 h-3" /> Since {formatDate(status.connected_at)}</span>

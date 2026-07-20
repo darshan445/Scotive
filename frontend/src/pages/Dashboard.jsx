@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { AlertTriangle, ArrowUpRight, CalendarClock, Loader2, Wallet } from "lucide-react";
 import { toast } from "sonner";
-import { TopNav } from "@/components/TopNav";
+import { AppShell } from "@/components/AppShell";
 import { EmptyStateHero } from "@/components/EmptyStateHero";
 import { ConnectGmailButton } from "@/components/ConnectGmailButton";
 import { LedgerCard } from "@/components/LedgerCard";
@@ -16,6 +16,11 @@ import { DueDatePromptBanner } from "@/components/DueDatePromptBanner";
 import { FollowUpPromptBanner } from "@/components/FollowUpPromptBanner";
 import { ChaseDialog } from "@/components/ChaseDialog";
 import { formatMoney, formatOpenTotals } from "@/components/LedgerCard";
+import {
+    DashboardContentSkeleton,
+    DashboardSkeleton,
+    StatsStripSkeleton,
+} from "@/components/PageSkeletons";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 import { useGmailCallbackToast } from "@/hooks/useGmailCallbackToast";
@@ -78,7 +83,7 @@ function StatsStrip({ ledger }) {
         return { open, pastDue, promised, pastDueByCur, openByCur };
     }, [ledger]);
 
-    if (!ledger) return null;
+    if (!ledger) return <StatsStripSkeleton />;
     const openTotals = stats.openByCur;
 
     return (
@@ -121,11 +126,14 @@ export default function DashboardPage() {
         refresh: refreshOnboarding,
     } = useOnboarding({ enabled: connected });
 
+    const onboardingReady = onboarding != null;
     const pastOnboarding = onboarding?.phase === "complete" || onboarding?.phase === "watching";
     const onboardingActive =
         onboarding?.phase === "scanning" ||
         onboarding?.phase === "curating" ||
         onboarding?.phase === "needs_seed";
+    // Wait for Gmail + onboarding before choosing setup vs greeting UI (avoids headline flash).
+    const bootstrapping = status === null || (connected && !onboardingReady);
 
     const { data: ledger, refresh: refreshLedger } = useLedger(pastOnboarding);
     const { refreshAll: refreshWorkspace } = useWorkspaceRefresh({
@@ -228,14 +236,19 @@ export default function DashboardPage() {
     }
 
     return (
-        <div className="min-h-screen bg-background text-foreground" data-testid="dashboard-root">
-            <TopNav />
-            <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                {status === null ? (
-                    <div className="py-32 flex items-center justify-center text-muted-foreground text-sm" data-testid="dashboard-loading">
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        Loading your workspace…
-                    </div>
+        <AppShell
+            testId="dashboard-root"
+            afterMain={(
+                <ChaseDialog
+                    invoice={chaseInvoice}
+                    open={!!chaseInvoice}
+                    onOpenChange={(o) => !o && setChaseInvoice(null)}
+                    onSent={refreshAll}
+                />
+            )}
+        >
+                {bootstrapping ? (
+                    <DashboardSkeleton />
                 ) : connected ? (
                     <div className="py-8 md:py-12 space-y-6" data-testid="connected-dashboard">
                         <div className="animate-fade-up flex flex-wrap items-end justify-between gap-4">
@@ -313,84 +326,73 @@ export default function DashboardPage() {
                         ) : null}
 
                         {pastOnboarding ? (
-                            <>
-                                <InvoiceDetectedBanner detection={latestDetection} onDismiss={dismissDetection} />
+                            ledger == null ? (
+                                <DashboardContentSkeleton />
+                            ) : (
+                                <>
+                                    <InvoiceDetectedBanner detection={latestDetection} onDismiss={dismissDetection} />
 
-                                <DueDatePromptBanner
-                                    prompt={dueDatePrompt}
-                                    onDismiss={() => setDueDatePrompt(null)}
-                                    onChanged={refreshAll}
-                                />
+                                    <DueDatePromptBanner
+                                        prompt={dueDatePrompt}
+                                        onDismiss={() => setDueDatePrompt(null)}
+                                        onChanged={refreshAll}
+                                    />
 
-                                <FollowUpPromptBanner
-                                    prompt={followUpPrompt}
-                                    onDismiss={() => setFollowUpPrompt(null)}
-                                    onChanged={refreshAll}
-                                    onReview={(prompt) => {
-                                        const inv = (ledger?.invoices || []).find((i) => i._id === prompt.invoice_id);
-                                        if (inv) {
-                                            setChaseInvoice(inv);
-                                            setFollowUpPrompt(null);
-                                        }
-                                    }}
-                                />
+                                    <FollowUpPromptBanner
+                                        prompt={followUpPrompt}
+                                        onDismiss={() => setFollowUpPrompt(null)}
+                                        onChanged={refreshAll}
+                                        onReview={(prompt) => {
+                                            const inv = (ledger?.invoices || []).find((i) => i._id === prompt.invoice_id);
+                                            if (inv) {
+                                                setChaseInvoice(inv);
+                                                setFollowUpPrompt(null);
+                                            }
+                                        }}
+                                    />
 
-                                {hasOpenInvoices ? <StatsStrip ledger={ledger} /> : null}
+                                    {hasOpenInvoices ? <StatsStrip ledger={ledger} /> : null}
 
-                                {onboarding?.phase === "watching" && !hasOpenInvoices ? (
-                                    <WatchingEmptyState onChanged={refreshAll} />
-                                ) : (
-                                    <TodayCard onChanged={refreshAll} />
-                                )}
+                                    {onboarding?.phase === "watching" && !hasOpenInvoices ? (
+                                        <WatchingEmptyState onChanged={refreshAll} />
+                                    ) : (
+                                        <TodayCard onChanged={refreshAll} />
+                                    )}
 
-                                <Tabs defaultValue="ledger" className="w-full" data-testid="dashboard-tabs">
-                                    <TabsList className="bg-muted/60 rounded-full h-auto p-1">
-                                        <TabsTrigger value="ledger" className="rounded-full px-4 py-2 text-sm data-[state=active]:shadow-sm" data-testid="tab-ledger">
-                                            Open{openInvoiceCount ? ` (${openInvoiceCount})` : ""}
-                                        </TabsTrigger>
-                                        {pausedInvoiceCount > 0 ? (
-                                            <TabsTrigger value="paused" className="rounded-full px-4 py-2 text-sm data-[state=active]:shadow-sm" data-testid="tab-paused">
-                                                Paused ({pausedInvoiceCount})
+                                    <Tabs defaultValue="ledger" className="w-full" data-testid="dashboard-tabs">
+                                        <TabsList className="bg-muted/60 rounded-full h-auto p-1">
+                                            <TabsTrigger value="ledger" className="rounded-full px-4 py-2 text-sm data-[state=active]:shadow-sm" data-testid="tab-ledger">
+                                                Open{openInvoiceCount ? ` (${openInvoiceCount})` : ""}
                                             </TabsTrigger>
-                                        ) : null}
-                                        <TabsTrigger value="paid" className="rounded-full px-4 py-2 text-sm data-[state=active]:shadow-sm" data-testid="tab-paid">
-                                            Paid{paidInvoiceCount ? ` (${paidInvoiceCount})` : ""}
-                                        </TabsTrigger>
-                                    </TabsList>
-                                    <TabsContent value="paid" className="mt-4">
-                                        <LedgerCard ledger={ledger} onChanged={refreshAll} variant="paid" />
-                                    </TabsContent>
-                                    {pausedInvoiceCount > 0 ? (
-                                        <TabsContent value="paused" className="mt-4">
-                                            <LedgerCard ledger={ledger} onChanged={refreshAll} variant="paused" />
+                                            {pausedInvoiceCount > 0 ? (
+                                                <TabsTrigger value="paused" className="rounded-full px-4 py-2 text-sm data-[state=active]:shadow-sm" data-testid="tab-paused">
+                                                    Paused ({pausedInvoiceCount})
+                                                </TabsTrigger>
+                                            ) : null}
+                                            <TabsTrigger value="paid" className="rounded-full px-4 py-2 text-sm data-[state=active]:shadow-sm" data-testid="tab-paid">
+                                                Paid{paidInvoiceCount ? ` (${paidInvoiceCount})` : ""}
+                                            </TabsTrigger>
+                                        </TabsList>
+                                        <TabsContent value="paid" className="mt-4">
+                                            <LedgerCard ledger={ledger} onChanged={refreshAll} variant="paid" />
                                         </TabsContent>
-                                    ) : null}
-                                    <TabsContent value="ledger" className="mt-4">
-                                        <LedgerCard ledger={ledger} onChanged={refreshAll} variant="open" />
-                                    </TabsContent>
-                                </Tabs>
-                            </>
+                                        {pausedInvoiceCount > 0 ? (
+                                            <TabsContent value="paused" className="mt-4">
+                                                <LedgerCard ledger={ledger} onChanged={refreshAll} variant="paused" />
+                                            </TabsContent>
+                                        ) : null}
+                                        <TabsContent value="ledger" className="mt-4">
+                                            <LedgerCard ledger={ledger} onChanged={refreshAll} variant="open" />
+                                        </TabsContent>
+                                    </Tabs>
+                                </>
+                            )
                         ) : null}
                     </div>
                 ) : (
                     <EmptyStateHero />
                 )}
-            </main>
-
-            <ChaseDialog
-                invoice={chaseInvoice}
-                open={!!chaseInvoice}
-                onOpenChange={(o) => !o && setChaseInvoice(null)}
-                onSent={refreshAll}
-            />
-
-            <footer className="border-t border-border">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-wrap justify-between items-center gap-3 text-xs text-muted-foreground">
-                    <span>© {new Date().getFullYear()} Scotive</span>
-                    <span>Payment ops · Inside Gmail</span>
-                </div>
-            </footer>
-        </div>
+        </AppShell>
     );
 }
 

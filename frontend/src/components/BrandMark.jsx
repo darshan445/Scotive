@@ -1,18 +1,34 @@
 import { Link } from "react-router-dom";
 
-export function BrandMark({ to = "/", size = "md" }) {
-    const box = size === "lg" ? "w-8 h-8 text-base" : "w-7 h-7 text-sm";
-    const text = size === "lg" ? "text-2xl" : "text-lg";
+const SIZES = {
+    sm: { img: "h-6 w-6", text: "text-base", gap: "gap-2" },
+    md: { img: "h-7 w-7", text: "text-lg", gap: "gap-2.5" },
+    lg: { img: "h-8 w-8", text: "text-2xl", gap: "gap-2.5" },
+};
+
+export function BrandMark({ to = "/", size = "md", showWordmark = true }) {
+    const s = SIZES[size] || SIZES.md;
     return (
-        <Link to={to} className="inline-flex items-center gap-2.5 group" data-testid="brand-mark">
-            <span
-                className={`${box} rounded-lg bg-primary text-primary-foreground font-heading font-bold inline-flex items-center justify-center transition-transform group-hover:scale-105`}
-            >
-                S
-            </span>
-            <span className={`font-heading font-bold ${text} tracking-tight text-foreground`}>
-                Scotive
-            </span>
+        <Link
+            to={to}
+            className={`inline-flex items-center ${s.gap} group`}
+            data-testid="brand-mark"
+        >
+            <img
+                src="/scotive-mark.png"
+                alt=""
+                width={32}
+                height={32}
+                className={`${s.img} flex-shrink-0 transition-transform group-hover:scale-105`}
+                draggable={false}
+            />
+            {showWordmark ? (
+                <span className={`font-heading font-bold ${s.text} tracking-tight text-foreground`}>
+                    Scotive
+                </span>
+            ) : (
+                <span className="sr-only">Scotive</span>
+            )}
         </Link>
     );
 }

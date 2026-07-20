@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, TrendingUp, AlertTriangle, Clock } from "lucide-react";
-import { TopNav } from "@/components/TopNav";
+import { AppShell } from "@/components/AppShell";
+import { ClientDetailSkeleton } from "@/components/PageSkeletons";
 import { api, extractError } from "@/lib/api";
 import { formatMoney, formatOpenTotals } from "@/components/LedgerCard";
 import { invoiceStatusDateLine, invoiceSubject, isJunkInvoiceRef } from "@/lib/invoiceCopy";
@@ -89,15 +90,13 @@ export default function ClientDetailPage() {
     }, [email]);
 
     return (
-        <div className="min-h-screen bg-background text-foreground" data-testid="client-detail-page">
-            <TopNav />
-            <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 md:py-14 space-y-8">
+        <AppShell testId="client-detail-page" mainClassName="py-10 md:py-14 space-y-8">
                 <Link to="/clients" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground" data-testid="back-to-clients">
                     <ArrowLeft className="w-4 h-4" /> All clients
                 </Link>
 
                 {err ? <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{err}</div> : null}
-                {!data && !err ? <div className="text-sm text-muted-foreground">Loading…</div> : null}
+                {!data && !err ? <ClientDetailSkeleton /> : null}
 
                 {data ? (
                     <>
@@ -160,7 +159,6 @@ export default function ClientDetailPage() {
                         </section>
                     </>
                 ) : null}
-            </main>
-        </div>
+        </AppShell>
     );
 }

@@ -41,6 +41,8 @@ from ledger_reconcile import (
     sort_by_due_promise_date,
 )
 from escalation_scheduler import run_escalation_tick, generate_draft as _gen_escalation_draft
+from draft_tone import resolve_draft_tone, tone_instruction
+from gmail_oauth import ensure_gmail_account_name
 from digest_sender import send_digest_for_user, build_digest_email, collect_today_sections, _totals as _digest_totals
 from client_merge import (
     apply_client_merge,
@@ -1122,12 +1124,6 @@ def build_router(db, get_current_user):
         }
 
     # ---- Chase drafts (Feature 7) ----------------------------------------
-    def _tone_for(inv: dict) -> str:
-        s = inv.get("status")
-        if s == "promise_broken": return "firm"
-        if s == "overdue": return "firm"
-        return "friendly"
-
     @router.post("/invoices/{invoice_id}/draft-chase")
     async def draft_chase(invoice_id: str, payload: ChaseDraftInput, user: dict = Depends(get_current_user)):
         from scan_pipeline import OPENROUTER_URL, OPENROUTER_MODEL
@@ -1138,9 +1134,29 @@ def build_router(db, get_current_user):
             raise HTTPException(status_code=404, detail="Invoice not found")
         if not inv:
             raise HTTPException(status_code=404, detail="Invoice not found")
-        tone = payload.tone or _tone_for(inv)
+
+        settings = await db.user_settings.find_one({"user_id": user["_id"]}) or {}
+        offsets = settings.get("escalation_offsets") or [-3, 0, 3, 10]
+        dispute_rounds = await db.invoice_events.count_documents({
+            "user_id": user["_id"],
+            "invoice_id": inv["_id"],
+            "action": "dispute",
+        })
+        # State-derived tone always wins over any client-supplied tone field.
+        # Regenerate `note` may nudge register for this generation only.
+        tone_info = resolve_draft_tone(
+            inv,
+            offsets=offsets,
+            dispute_rounds=int(dispute_rounds or 0),
+            note=payload.note,
+        )
+        tone = tone_info["tone"]
+        tone_label = tone_info["tone_label"]
+        signer_name = await ensure_gmail_account_name(db, user["_id"])
+
         thread_subject = inv.get("source_subject") or ""
         is_dispute = inv.get("status") == "disputed" or inv.get("disputed_claim_amount") is not None
+        is_clarifying = tone == "clarifying" or tone_info.get("is_reply")
         dispute_quote = None
         claim_amt = inv.get("disputed_claim_amount")
         payment_claim = payment_claim_amount_value(inv)
@@ -1152,15 +1168,28 @@ def build_router(db, get_current_user):
                 sort=[("at", -1)],
             )
             dispute_quote = ((ev or {}).get("meta") or {}).get("quote")
+        sign_rule = (
+            f"Always end the body with a short professional sign-off (e.g. Best regards,) "
+            f"then the sender's name on its own line, exactly: {signer_name}. "
+            if signer_name
+            else "Always end the body with a short professional sign-off and the sender's name. "
+        )
         sys = (
             "You draft short, professional payment follow-up emails for a small business owner. "
-            "Under 120 words. Plain professional tone. No 'hope this finds you well'. "
+            "Under 120 words. No 'hope this finds you well'. "
             "Always include invoice ref (if any), amount, due date. On a broken promise, quote the client's own stated date verbatim. "
+            + tone_instruction(tone) + " "
+            + sign_rule
             + (
                 "The client has DISPUTED this invoice — do not demand payment. Acknowledge their concern, "
                 "reference what they said, and if a claimed amount is provided, confirm you'll adjust the invoice "
                 "to that amount (e.g. 'you're right — adjusting to $X'). Propose resolving it briefly. "
                 if is_dispute
+                else ""
+            )
+            + (
+                "The client asked a question that needs an answer — reply to that, do not chase. "
+                if is_clarifying and not is_dispute
                 else ""
             )
             + (
@@ -1175,6 +1204,7 @@ def build_router(db, get_current_user):
             )
             + "Never sound templated or AI-written. "
             "This is a REPLY in an existing email thread — subject must be 'Re: <original subject>' matching the thread. "
+            "Facts (amount, dates, promises) always come from the ledger below — a user note may only adjust delivery/register, never invent different numbers. "
             "Output STRICT JSON: {\"subject\": string, \"body\": string}."
         )
         user_msg = (
@@ -1189,9 +1219,13 @@ def build_router(db, get_current_user):
             f"Due date: {inv.get('due_date') or 'n/a'}\n"
             f"Promise date: {inv.get('promise_date') or 'n/a'}\n"
             f"Status: {inv.get('status')}\n"
-            f"Tone: {tone}\n"
+            f"Ladder step: {tone_info.get('step_label') or 'n/a'}\n"
+            f"Dispute rounds so far: {int(dispute_rounds or 0)}\n"
+            f"Tone label: {tone_label}\n"
+            f"Tone register: {tone}\n"
+            f"Sign emails as: {signer_name or 'n/a'}\n"
             f"Client's own words (broken promise or dispute): {dispute_quote or inv.get('evidence_sentence') or ''}\n"
-            f"User extra note: {payload.note or ''}"
+            f"User extra note (one-time delivery steer only): {payload.note or ''}"
         )
         api_key = os.environ.get("OPENROUTER_API_KEY")
         if not api_key:
@@ -1204,9 +1238,16 @@ def build_router(db, get_current_user):
                 raise HTTPException(status_code=502, detail="AI draft failed")
             content = r.json()["choices"][0]["message"]["content"]
             draft = json.loads(content)
-        return {"subject": draft.get("subject",""), "body": draft.get("body",""), "tone": tone,
-                "to": inv.get("counterparty_email"), "thread_id": inv.get("source_thread_id"),
-                "invoice_id": str(inv["_id"])}
+        return {
+            "subject": draft.get("subject", ""),
+            "body": draft.get("body", ""),
+            "tone": tone,
+            "tone_label": tone_label,
+            "is_reply": bool(tone_info.get("is_reply")),
+            "to": inv.get("counterparty_email"),
+            "thread_id": inv.get("source_thread_id"),
+            "invoice_id": str(inv["_id"]),
+        }
 
     @router.post("/invoices/{invoice_id}/send-chase")
     async def send_chase(invoice_id: str, payload: ChaseSendInput, user: dict = Depends(get_current_user)):
@@ -1260,11 +1301,20 @@ def build_router(db, get_current_user):
             raise HTTPException(status_code=404, detail="Invoice not found")
         if not inv:
             raise HTTPException(status_code=404, detail="Invoice not found")
+        signer_name = await ensure_gmail_account_name(db, user["_id"])
+        sign_rule = (
+            f"Always end the body with a short professional sign-off then the sender's name "
+            f"on its own line, exactly: {signer_name}. "
+            if signer_name
+            else "Always end the body with a short professional sign-off and the sender's name. "
+        )
         sys = ("Expand the user's rough intent into a polished professional email under 120 words. "
                "Honor every point the user made. Add nothing substantive they didn't say. No fluff. "
-               "Output STRICT JSON: {\"subject\": string, \"body\": string}.")
+               + sign_rule
+               + "Output STRICT JSON: {\"subject\": string, \"body\": string}.")
         user_msg = (f"Client: {inv.get('counterparty_name') or inv.get('counterparty_email')}\n"
                     f"Invoice: {inv.get('invoice_ref') or 'n/a'} · {inv.get('amount')} {inv.get('currency','USD')}\n"
+                    f"Sign emails as: {signer_name or 'n/a'}\n"
                     f"User rough intent: {payload.intent}")
         api_key = os.environ.get("OPENROUTER_API_KEY")
         async with httpx.AsyncClient(timeout=30.0) as c:
@@ -1396,9 +1446,14 @@ def build_router(db, get_current_user):
             raise HTTPException(status_code=404, detail="Invoice missing")
         settings = await db.user_settings.find_one({"user_id": user["_id"]}) or {}
         late_fee_text = settings.get("late_fee_text") if settings.get("late_fee_enabled") else None
-        new_draft = await _gen_escalation_draft(inv, draft.get("tone") or "friendly",
-                                                draft.get("step_label") or "step",
-                                                late_fee_text)
+        signer_name = await ensure_gmail_account_name(db, user["_id"])
+        new_draft = await _gen_escalation_draft(
+            inv,
+            draft.get("tone") or "friendly",
+            draft.get("step_label") or "step",
+            late_fee_text,
+            signer_name=signer_name,
+        )
         if not new_draft:
             raise HTTPException(status_code=502, detail="AI draft failed")
         await db.chase_drafts.update_one(

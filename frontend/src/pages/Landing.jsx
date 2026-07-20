@@ -225,7 +225,7 @@ function HowItWorksStep({ index, title, description, mock }) {
 
 export default function LandingPage() {
     return (
-        <div className="min-h-screen bg-background text-foreground" data-testid="landing-page">
+        <div className="min-h-screen bg-background text-foreground flex flex-col" data-testid="landing-page">
             {/* ------------------------------------------------ header */}
             <header className="border-b border-border/70 bg-background/80 backdrop-blur-md sticky top-0 z-30">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
@@ -250,7 +250,7 @@ export default function LandingPage() {
                 </div>
             </header>
 
-            <main>
+            <main className="flex-1">
                 {/* -------------------------------------------- hero */}
                 <section className="relative overflow-hidden" data-testid="landing-hero">
                     <div className="absolute inset-0 dot-grid pointer-events-none" aria-hidden />
@@ -511,7 +511,7 @@ export default function LandingPage() {
             </main>
 
             {/* ------------------------------------------------ footer */}
-            <footer className="border-t border-border">
+            <footer className="border-t border-border mt-auto">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 grid gap-10 md:grid-cols-4">
                     <div className="md:col-span-2">
                         <BrandMark />
@@ -527,18 +527,22 @@ export default function LandingPage() {
                         </ul>
                     </div>
                     <div>
-                        <div className="text-sm font-semibold mb-3">Trust</div>
+                        <div className="text-sm font-semibold mb-3">Legal</div>
                         <ul className="space-y-2 text-sm text-muted-foreground">
-                            <li>OAuth 2.0 · two permissions only</li>
-                            <li>Emails never train AI models</li>
-                            <li>Disconnect anytime</li>
+                            <li><Link to="/terms" className="hover:text-foreground">Terms of Service</Link></li>
+                            <li><Link to="/privacy" className="hover:text-foreground">Privacy Policy</Link></li>
+                            <li>OAuth 2.0 · disconnect anytime</li>
                         </ul>
                     </div>
                 </div>
                 <div className="border-t border-border">
                     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5 flex flex-wrap justify-between items-center gap-3 text-xs text-muted-foreground">
                         <span>© {new Date().getFullYear()} Scotive. All rights reserved.</span>
-                        <span>Payment ops · Inside Gmail</span>
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                            <Link to="/terms" className="hover:text-foreground">Terms</Link>
+                            <Link to="/privacy" className="hover:text-foreground">Privacy</Link>
+                            <span>Payment ops · Inside Gmail</span>
+                        </div>
                     </div>
                 </div>
             </footer>

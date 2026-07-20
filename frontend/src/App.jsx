@@ -8,6 +8,8 @@ import RegisterPage from "@/pages/Register";
 import ForgotPasswordPage from "@/pages/ForgotPassword";
 import ResetPasswordPage from "@/pages/ResetPassword";
 import LandingPage from "@/pages/Landing";
+import TermsPage from "@/pages/Terms";
+import PrivacyPage from "@/pages/Privacy";
 import DashboardPage from "@/pages/Dashboard";
 import ClientsPage from "@/pages/Clients";
 import ClientDetailPage from "@/pages/ClientDetail";
@@ -52,6 +54,8 @@ function AppRoutes() {
         <>
             <Routes location={background || location}>
                 <Route path="/" element={<GuestRoute><LandingPage /></GuestRoute>} />
+                <Route path="/terms" element={<TermsPage />} />
+                <Route path="/privacy" element={<PrivacyPage />} />
                 <Route path="/login" element={<GuestRoute><LoginPage /></GuestRoute>} />
                 <Route path="/register" element={<GuestRoute><RegisterPage /></GuestRoute>} />
                 <Route path="/forgot-password" element={<GuestRoute><ForgotPasswordPage /></GuestRoute>} />

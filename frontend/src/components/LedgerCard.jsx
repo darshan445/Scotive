@@ -26,6 +26,7 @@ import { invoiceSubject, invoiceStatusDisplay, isJunkInvoiceRef, hasPendingPayme
 import { navigateToInvoice } from "@/lib/invoiceNavigation";
 import { resumeInvoiceTracking } from "@/components/InvoiceOverflowMenu";
 import { Button } from "@/components/ui/button";
+import { LedgerCardSkeleton } from "@/components/PageSkeletons";
 
 const STATUS_STYLES = {
     invoiced: "bg-gray-100 text-gray-700 border-gray-200",
@@ -125,7 +126,7 @@ export function LedgerCard({ ledger, onChanged, variant = "open" }) {
         return totals;
     }, [openUnfiltered, isHistory, isPaused, ledger?.totals_by_currency, ledger?.total_open]);
 
-    if (!ledger) return null;
+    if (!ledger) return <LedgerCardSkeleton />;
     const { client_count = 0 } = ledger;
     const filterEmpty = showOpenToolbar && invoices.length === 0 && statusFilter !== "all";
     const showListShell = showOpenToolbar || invoices.length > 0;

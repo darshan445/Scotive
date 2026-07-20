@@ -253,11 +253,13 @@ def build_router(db, get_current_user):
             raise HTTPException(status_code=400, detail="Email confirmation does not match.")
         uid = user["_id"]
 
-        # Wipe every per-user collection we've built.
+        # Wipe every per-user collection we've built (keep in sync with Privacy Policy §7).
         for coll in (
             "invoices", "receipts", "invoice_events", "review_items",
-            "suppressed_senders", "gmail_connections", "scan_jobs",
-            "chase_sends", "user_settings", "login_attempts",
+            "suppressed_senders", "gmail_connections", "gmail_sync_state",
+            "scan_jobs", "seed_jobs", "chase_drafts", "chase_sends",
+            "client_merges", "client_merge_prompts",
+            "user_settings", "login_attempts",
             "oauth_states", "password_reset_tokens",
         ):
             try:

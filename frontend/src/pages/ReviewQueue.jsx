@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Check, ChevronUp, Pencil, Quote, ShieldOff, X } from "lucide-react";
 import { toast } from "sonner";
-import { TopNav } from "@/components/TopNav";
+import { AppShell } from "@/components/AppShell";
+import { ReviewQueueSkeleton } from "@/components/PageSkeletons";
 import { api, extractError } from "@/lib/api";
 import { formatDate, formatMoney } from "@/components/LedgerCard";
 import { Button } from "@/components/ui/button";
@@ -306,36 +307,33 @@ export default function ReviewQueuePage() {
     useWorkspaceRefreshEffect(load);
 
     return (
-        <div className="min-h-screen bg-background text-foreground" data-testid="review-page">
-            <TopNav />
-            <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-10 md:py-14 space-y-8">
-                <div>
-                    <div className="eyebrow mb-2">Review queue</div>
-                    <h1 className="font-heading font-bold text-3xl md:text-4xl tracking-tight">Check before it hits the ledger</h1>
-                    <p className="mt-2 text-base text-muted-foreground max-w-2xl">
-                        Low-confidence reads and ambiguous mappings land here with the exact quote and source email.
-                        Nothing is tracked until you confirm — edit the fields if something looks off, or dismiss if it&apos;s not payment-related.
-                    </p>
+        <AppShell testId="review-page" width="5xl" mainClassName="py-10 md:py-14 space-y-8">
+            <div>
+                <div className="eyebrow mb-2">Review queue</div>
+                <h1 className="font-heading font-bold text-3xl md:text-4xl tracking-tight">Check before it hits the ledger</h1>
+                <p className="mt-2 text-base text-muted-foreground max-w-2xl">
+                    Low-confidence reads and ambiguous mappings land here with the exact quote and source email.
+                    Nothing is tracked until you confirm — edit the fields if something looks off, or dismiss if it&apos;s not payment-related.
+                </p>
+            </div>
+            {err ? (
+                <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{err}</div>
+            ) : null}
+            {items === null ? (
+                <ReviewQueueSkeleton />
+            ) : items.length === 0 ? (
+                <div
+                    className="rounded-xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground"
+                    data-testid="review-empty">
+                    Nothing to review — no uncertain extractions waiting on you.
                 </div>
-                {err ? (
-                    <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{err}</div>
-                ) : null}
-                {items === null ? (
-                    <div className="text-sm text-muted-foreground">Loading…</div>
-                ) : items.length === 0 ? (
-                    <div
-                        className="rounded-xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground"
-                        data-testid="review-empty">
-                        Nothing to review — no uncertain extractions waiting on you.
-                    </div>
-                ) : (
-                    <ul className="space-y-4" data-testid="review-list">
-                        {items.map((it) => (
-                            <ReviewCard key={it._id} item={it} onChanged={refresh} />
-                        ))}
-                    </ul>
-                )}
-            </main>
-        </div>
+            ) : (
+                <ul className="space-y-4" data-testid="review-list">
+                    {items.map((it) => (
+                        <ReviewCard key={it._id} item={it} onChanged={refresh} />
+                    ))}
+                </ul>
+            )}
+        </AppShell>
     );
 }

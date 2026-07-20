@@ -128,7 +128,15 @@ export default function RegisterPage() {
                 </Button>
 
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                    {`By creating an account you agree to Scotive's Terms and Privacy policy. Your emails are never used to train AI models.`}
+                    By creating an account you agree to Scotive&apos;s{" "}
+                    <Link to="/terms" className="underline underline-offset-2 hover:text-foreground">
+                        Terms
+                    </Link>{" "}
+                    and{" "}
+                    <Link to="/privacy" className="underline underline-offset-2 hover:text-foreground">
+                        Privacy Policy
+                    </Link>
+                    . Your emails are never used to train Scotive&apos;s AI models.
                 </p>
             </form>
         </AuthShell>

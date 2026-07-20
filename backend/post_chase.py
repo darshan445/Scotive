@@ -119,6 +119,9 @@ async def run_post_chase_tick(db, user_id) -> dict[str, Any]:
     settings = await db.user_settings.find_one({"user_id": user_id}) or {}
     late_fee_text = settings.get("late_fee_text") if settings.get("late_fee_enabled") else None
 
+    from gmail_oauth import ensure_gmail_account_name
+    signer_name = await ensure_gmail_account_name(db, user_id)
+
     state = await db.gmail_sync_state.find_one({"user_id": user_id}) or {}
     pending = list(state.get("pending_followup_prompts") or [])
     pending_ids = {p.get("invoice_id") for p in pending}
@@ -165,7 +168,9 @@ async def run_post_chase_tick(db, user_id) -> dict[str, Any]:
 
         tone = _tone_for_step(next_step, inv.get("status"))
         label = _step_label(next_step)
-        draft = await generate_draft(inv, tone, label, late_fee_text)
+        draft = await generate_draft(
+            inv, tone, label, late_fee_text, signer_name=signer_name,
+        )
         if not draft:
             counts["skipped"] += 1
             continue

@@ -80,8 +80,14 @@ def _step_label(step_index):
     return f"step_{step_index}"
 
 
-async def generate_draft(inv: dict, tone: str, step_label: str,
-                          late_fee_text: Optional[str], note: str = "") -> Optional[dict]:
+async def generate_draft(
+    inv: dict,
+    tone: str,
+    step_label: str,
+    late_fee_text: Optional[str],
+    note: str = "",
+    signer_name: Optional[str] = None,
+) -> Optional[dict]:
     """Ask the LLM for a short professional chase email. Returns {subject, body}.
 
     Never raises — returns None on failure so the scheduler can skip and retry.
@@ -90,12 +96,19 @@ async def generate_draft(inv: dict, tone: str, step_label: str,
     if not api_key:
         return None
 
+    sign_rule = (
+        f"Always end the body with a short professional sign-off (e.g. Best regards,) "
+        f"then the sender's name on its own line, exactly: {signer_name}. "
+        if signer_name
+        else "Always end the body with a short professional sign-off and the sender's name. "
+    )
     system = (
         "You draft short, professional payment follow-up emails for a small business owner. "
         "Under 120 words. Plain professional tone. No 'hope this finds you well'. "
         "Always include invoice ref (if any), amount, due date. "
         "On a broken promise, quote the client's own stated date verbatim. "
-        "Never sound templated or AI-written. "
+        + sign_rule
+        + "Never sound templated or AI-written. "
         "Output STRICT JSON: {\"subject\": string, \"body\": string}."
     )
 
@@ -114,6 +127,8 @@ async def generate_draft(inv: dict, tone: str, step_label: str,
         f"Tone: {tone}",
         f"Client's own words (if broken promise): {inv.get('evidence_sentence') or ''}",
     ]
+    if signer_name:
+        lines.append(f"Sign emails as: {signer_name}")
     if inv.get("client_approved"):
         quote = inv.get("approval_quote")
         lines.append(
@@ -179,6 +194,9 @@ async def run_escalation_tick(db, user_id) -> dict:
     late_fee_enabled = bool(settings.get("late_fee_enabled"))
     late_fee_text = settings.get("late_fee_text") if late_fee_enabled else None
 
+    from gmail_oauth import ensure_gmail_account_name
+    signer_name = await ensure_gmail_account_name(db, user_id)
+
     today = datetime.now(timezone.utc).date()
 
     async for inv in db.invoices.find({
@@ -209,7 +227,9 @@ async def run_escalation_tick(db, user_id) -> dict:
                     continue
                 tone = _tone_for_step(i, inv.get("status"))
                 label = _step_label(i)
-                draft = await generate_draft(inv, tone, label, late_fee_text)
+                draft = await generate_draft(
+                    inv, tone, label, late_fee_text, signer_name=signer_name,
+                )
                 if not draft:
                     continue
                 await db.chase_drafts.insert_one({
@@ -243,7 +263,9 @@ async def run_escalation_tick(db, user_id) -> dict:
             promise = _parse_date(inv.get("promise_date"))
             if promise and promise > today:
                 continue  # promise still in the future — nothing to escalate
-            draft = await generate_draft(inv, "firm", "promise_broken", None)
+            draft = await generate_draft(
+                inv, "firm", "promise_broken", None, signer_name=signer_name,
+            )
             if not draft:
                 continue
             await db.chase_drafts.insert_one({

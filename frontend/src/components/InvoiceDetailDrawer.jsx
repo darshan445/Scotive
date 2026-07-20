@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import * as SheetPrimitive from "@radix-ui/react-dialog";
 import { ChaseComposer, confirmDiscardComposer } from "@/components/ChaseComposer";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { api, extractError } from "@/lib/api";
 import { formatDate, formatMoney } from "@/components/LedgerCard";
 import {
@@ -214,10 +215,10 @@ function headerFactLine(inv) {
 
 function HeaderSkeleton() {
     return (
-        <div className="space-y-3 animate-pulse" data-testid="invoice-detail-skeleton">
-            <div className="h-3 w-40 rounded bg-muted" />
-            <div className="h-7 w-3/4 rounded bg-muted" />
-            <div className="h-4 w-24 rounded bg-muted" />
+        <div className="space-y-3" data-testid="invoice-detail-skeleton">
+            <Skeleton className="h-3 w-40" />
+            <Skeleton className="h-7 w-3/4" />
+            <Skeleton className="h-4 w-24" />
         </div>
     );
 }
@@ -542,11 +543,11 @@ export function InvoiceDetailDrawer({ invoiceId, preview = null, open, onClose, 
                                     </div>
 
                                     {loadingThread ? (
-                                        <div className="px-5 py-10 space-y-4 animate-pulse">
-                                            <div className="h-3 w-1/3 rounded bg-muted" />
-                                            <div className="h-16 w-full rounded bg-muted" />
-                                            <div className="h-3 w-1/4 rounded bg-muted" />
-                                            <div className="h-20 w-full rounded bg-muted" />
+                                        <div className="px-5 py-10 space-y-4">
+                                            <Skeleton className="h-3 w-1/3" />
+                                            <Skeleton className="h-16 w-full" />
+                                            <Skeleton className="h-3 w-1/4" />
+                                            <Skeleton className="h-20 w-full" />
                                         </div>
                                     ) : null}
 

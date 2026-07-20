@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { AlertTriangle, Loader2, Save, Trash2 } from "lucide-react";
-import { TopNav } from "@/components/TopNav";
+import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -28,6 +28,7 @@ import {
 import { api, extractError } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { ConnectionPanel } from "@/components/ConnectionPanel";
+import { SettingsSkeleton } from "@/components/PageSkeletons";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 
 const ESCALATION_LABELS = ["Pre-due nudge", "Due-date reminder", "Firm follow-up", "Final notice"];
@@ -104,32 +105,69 @@ export default function SettingsPage() {
 
     if (err && !settings) {
         return (
-            <div className="min-h-screen bg-background text-foreground">
-                <TopNav />
-                <main className="max-w-3xl mx-auto p-8">
-                    <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                        {err}
-                    </div>
-                </main>
-            </div>
+            <AppShell width="3xl" mainClassName="py-10 md:py-14">
+                <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                    {err}
+                </div>
+            </AppShell>
         );
     }
 
     if (!settings) {
         return (
-            <div className="min-h-screen bg-background text-foreground">
-                <TopNav />
-                <main className="max-w-3xl mx-auto p-8 text-sm text-muted-foreground">
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin inline" /> Loading settings…
-                </main>
-            </div>
+            <AppShell width="3xl" mainClassName="py-10 md:py-14">
+                <SettingsSkeleton />
+            </AppShell>
         );
     }
 
     return (
-        <div className="min-h-screen bg-background text-foreground" data-testid="settings-page">
-            <TopNav />
-            <main className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-10 md:py-14 space-y-10">
+        <AppShell
+            testId="settings-page"
+            width="3xl"
+            mainClassName="py-10 md:py-14 space-y-10"
+            afterMain={(
+                <AlertDialog open={confirmDelete} onOpenChange={(o) => !deleting && setConfirmDelete(o)}>
+                    <AlertDialogContent data-testid="delete-account-dialog">
+                        <AlertDialogHeader>
+                            <AlertDialogTitle>Delete your Scotive account?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                                This permanently removes your account, ledger, receipts, chase history,
+                                Gmail connection and all extracted evidence. It cannot be undone.
+                            </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <div className="space-y-2">
+                            <Label htmlFor="confirm-email" className="text-xs font-mono uppercase tracking-widest text-muted-foreground">
+                                Type your email to confirm
+                            </Label>
+                            <Input
+                                id="confirm-email"
+                                data-testid="delete-confirm-email"
+                                value={confirmEmail}
+                                onChange={(e) => setConfirmEmail(e.target.value)}
+                                placeholder={user?.email}
+                                autoFocus
+                            />
+                        </div>
+                        <AlertDialogFooter>
+                            <AlertDialogCancel disabled={deleting} data-testid="delete-cancel">
+                                Cancel
+                            </AlertDialogCancel>
+                            <AlertDialogAction
+                                onClick={(e) => {
+                                    e.preventDefault();
+                                    doDelete();
+                                }}
+                                disabled={deleting || confirmEmail.trim().toLowerCase() !== (user?.email || "").toLowerCase()}
+                                className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
+                                data-testid="delete-confirm-action">
+                                {deleting ? "Deleting…" : "Delete forever"}
+                            </AlertDialogAction>
+                        </AlertDialogFooter>
+                    </AlertDialogContent>
+                </AlertDialog>
+            )}
+        >
                 <div>
                     <div className="eyebrow mb-2">
                         Workspace
@@ -179,48 +217,7 @@ export default function SettingsPage() {
                         setConfirmDelete(true);
                     }}
                 />
-            </main>
-
-            <AlertDialog open={confirmDelete} onOpenChange={(o) => !deleting && setConfirmDelete(o)}>
-                <AlertDialogContent data-testid="delete-account-dialog">
-                    <AlertDialogHeader>
-                        <AlertDialogTitle>Delete your Scotive account?</AlertDialogTitle>
-                        <AlertDialogDescription>
-                            This permanently removes your account, ledger, receipts, chase history,
-                            Gmail connection and all extracted evidence. It cannot be undone.
-                        </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <div className="space-y-2">
-                        <Label htmlFor="confirm-email" className="text-xs font-mono uppercase tracking-widest text-muted-foreground">
-                            Type your email to confirm
-                        </Label>
-                        <Input
-                            id="confirm-email"
-                            data-testid="delete-confirm-email"
-                            value={confirmEmail}
-                            onChange={(e) => setConfirmEmail(e.target.value)}
-                            placeholder={user?.email}
-                            autoFocus
-                        />
-                    </div>
-                    <AlertDialogFooter>
-                        <AlertDialogCancel disabled={deleting} data-testid="delete-cancel">
-                            Cancel
-                        </AlertDialogCancel>
-                        <AlertDialogAction
-                            onClick={(e) => {
-                                e.preventDefault();
-                                doDelete();
-                            }}
-                            disabled={deleting || confirmEmail.trim().toLowerCase() !== (user?.email || "").toLowerCase()}
-                            className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
-                            data-testid="delete-confirm-action">
-                            {deleting ? "Deleting…" : "Delete forever"}
-                        </AlertDialogAction>
-                    </AlertDialogFooter>
-                </AlertDialogContent>
-            </AlertDialog>
-        </div>
+        </AppShell>
     );
 }
 

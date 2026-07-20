@@ -123,6 +123,7 @@ export function TodayCard({ onChanged }) {
             .filter((s) => s.rows.length > 0);
     }, [data]);
 
+    // Stay invisible until loaded — empty digests must not flash a skeleton then vanish.
     if (!data) return null;
 
     const actionCount = actionSections.reduce((n, s) => n + s.rows.length, 0);

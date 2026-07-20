@@ -26,6 +26,8 @@ export function ChaseComposer({
     const [sending, setSending] = useState(false);
     const [subject, setSubject] = useState("");
     const [body, setBody] = useState("");
+    const [toneLabel, setToneLabel] = useState(null);
+    const [isReplyDraft, setIsReplyDraft] = useState(false);
     const [steerOpen, setSteerOpen] = useState(false);
     const [steerNote, setSteerNote] = useState("");
     const baselineRef = useRef({ subject: "", body: "" });
@@ -48,6 +50,9 @@ export function ChaseComposer({
             const { data } = await api.post(endpoint, payload);
             setSubject(data.subject);
             setBody(data.body);
+            // tone_label is state-derived server-side; regenerate note may nudge for this draft only.
+            setToneLabel(data.tone_label || null);
+            setIsReplyDraft(Boolean(data.is_reply));
             baselineRef.current = { subject: data.subject || "", body: data.body || "" };
             onDirtyChange?.(false);
         } catch (e) {
@@ -63,6 +68,8 @@ export function ChaseComposer({
         loadedForRef.current = key;
         setSubject("");
         setBody("");
+        setToneLabel(null);
+        setIsReplyDraft(false);
         setSteerNote("");
         setSteerOpen(false);
         baselineRef.current = { subject: "", body: "" };
@@ -103,7 +110,9 @@ export function ChaseComposer({
         setSending(false);
     }
 
-    const title = invoice?.status === "disputed" ? "Reply to" : "Follow up with";
+    const title = (isReplyDraft || invoice?.status === "disputed" || invoice?.needs_reply)
+        ? "Reply to"
+        : "Follow up with";
     const name = invoice?.counterparty_name || invoice?.counterparty_email || "client";
 
     return (
@@ -172,6 +181,14 @@ export function ChaseComposer({
                     </PopoverContent>
                 </Popover>
             </div>
+
+            {toneLabel && !loading ? (
+                <div className="mb-3" data-testid="chase-tone-label">
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border border-border bg-muted/50 text-muted-foreground">
+                        {toneLabel}
+                    </span>
+                </div>
+            ) : null}
 
             {loading ? (
                 <div className="py-12 flex items-center justify-center text-muted-foreground text-sm">

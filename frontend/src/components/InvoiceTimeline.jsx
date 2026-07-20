@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { api, extractError } from "@/lib/api";
 import { formatTimelineEntry, gmailThreadUrl } from "@/lib/invoiceTimeline";
+import { Skeleton } from "@/components/ui/skeleton";
 
 export function InvoiceTimeline({ invoiceId, className = "" }) {
     const [data, setData] = useState(null);
@@ -16,7 +17,18 @@ export function InvoiceTimeline({ invoiceId, className = "" }) {
     }, [invoiceId]);
 
     if (err) return <div className="text-sm text-red-700">{err}</div>;
-    if (!data) return <div className="text-sm text-muted-foreground">Loading timeline…</div>;
+    if (!data) {
+        return (
+            <div className="space-y-3" data-testid="timeline-skeleton">
+                {[0, 1, 2].map((i) => (
+                    <div key={i} className="grid grid-cols-[4.5rem_1fr] gap-x-3">
+                        <Skeleton className="h-3 w-12" />
+                        <Skeleton className="h-4 w-full max-w-xs" />
+                    </div>
+                ))}
+            </div>
+        );
+    }
 
     const invoice = data.invoice || {};
     const events = data.events || [];
