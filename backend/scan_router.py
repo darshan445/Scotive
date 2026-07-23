@@ -1359,7 +1359,23 @@ def build_router(db, get_current_user):
             {"_id": inv["_id"]},
             {"$inc": {"chase_count": 1}},
         )
-        return {"ok": True}
+        # Same Stage 4 path as agreeing in Gmail (dispute accept / amount correction).
+        reeval = {}
+        try:
+            from incremental_sync import reeval_after_user_outbound_send
+            reeval = await reeval_after_user_outbound_send(
+                db, user["_id"], inv,
+                access=access,
+                my_email=from_addr or "",
+                subject=sent.get("subject") or payload.subject,
+                body=payload.body,
+                gmail_message_id=sent.get("gmail_message_id"),
+                thread_id=sent.get("thread_id") or inv.get("source_thread_id"),
+            )
+        except Exception:
+            logger.exception("post-send reeval failed inv=%s", inv["_id"])
+            reeval = {"skipped": "error"}
+        return {"ok": True, "reeval": reeval}
 
     @router.post("/quick-compose")
     async def quick_compose(payload: QuickComposeInput, user: dict = Depends(get_current_user)):
@@ -1597,7 +1613,25 @@ def build_router(db, get_current_user):
             {"$inc": {"chase_count": 1}},
         )
         await ack_followup_prompts(db, user["_id"], [str(draft.get("invoice_id"))])
-        return {"ok": True, "sent_at": now_iso}
+        reeval = {}
+        if inv:
+            try:
+                from incremental_sync import reeval_after_user_outbound_send
+                reeval = await reeval_after_user_outbound_send(
+                    db, user["_id"], inv,
+                    access=access,
+                    my_email=from_addr or "",
+                    subject=sent.get("subject") or draft.get("subject", ""),
+                    body=draft.get("body", ""),
+                    gmail_message_id=sent.get("gmail_message_id"),
+                    thread_id=sent.get("thread_id")
+                        or draft.get("thread_id")
+                        or inv.get("source_thread_id"),
+                )
+            except Exception:
+                logger.exception("post-send reeval failed draft=%s", draft_id)
+                reeval = {"skipped": "error"}
+        return {"ok": True, "sent_at": now_iso, "reeval": reeval}
 
     # ---- Daily digest (Feature 9c) ---------------------------------------
     @router.post("/digest/send-now")

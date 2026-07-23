@@ -300,3 +300,54 @@ async def import_unpaid_invoices(db, user_id) -> dict[str, Any]:
     )
     logger.info("QBO import user=%s counts=%s", user_id, counts)
     return counts
+
+
+async def _purge_invoice_satellites(db, user_id, invoice_id) -> None:
+    """Remove drafts/events/etc. tied to a ledger invoice."""
+    oid = invoice_id
+    oid_str = str(invoice_id)
+    await db.invoice_events.delete_many({"user_id": user_id, "invoice_id": oid})
+    await db.chase_drafts.delete_many({"user_id": user_id, "invoice_id": oid})
+    await db.chase_sends.delete_many({"user_id": user_id, "invoice_id": oid})
+    # Some rows store invoice_id as string
+    await db.chase_drafts.delete_many({"user_id": user_id, "invoice_id": oid_str})
+    await db.chase_sends.delete_many({"user_id": user_id, "invoice_id": oid_str})
+    await db.receipts.update_many(
+        {"user_id": user_id, "matched_invoice_id": oid},
+        {"$unset": {"matched_invoice_id": ""}, "$set": {"match_status": "unmatched"}},
+    )
+    await db.review_items.delete_many({
+        "user_id": user_id,
+        "$or": [{"invoice_id": oid}, {"invoice_id": oid_str}],
+    })
+
+
+async def remove_qbo_invoices_from_ledger(
+    db,
+    user_id,
+    qbo_ids: list[str],
+) -> dict[str, Any]:
+    """Delete Scotive ledger rows linked to the given QuickBooks Invoice Ids.
+
+    Used when QBO reports Invoice Delete (webhook) or CDC status=Deleted.
+    Cascades events, chase drafts/sends, and review items; unmatches receipts.
+    """
+    ids = [str(i).strip() for i in (qbo_ids or []) if str(i).strip()]
+    counts: dict[str, Any] = {"requested": len(ids), "deleted": 0, "missing": 0}
+    if not ids:
+        return counts
+
+    unique = list(dict.fromkeys(ids))
+    for qbo_id in unique:
+        inv = await db.invoices.find_one({"user_id": user_id, "qbo_id": qbo_id})
+        if not inv:
+            counts["missing"] += 1
+            continue
+        await _purge_invoice_satellites(db, user_id, inv["_id"])
+        await db.invoices.delete_one({"_id": inv["_id"], "user_id": user_id})
+        counts["deleted"] += 1
+        logger.info(
+            "qbo.delete removed ledger qbo_id=%s inv=%s user=%s",
+            qbo_id, inv["_id"], user_id,
+        )
+    return counts

@@ -13,7 +13,11 @@ from typing import Any
 from invoice_lifecycle import apply_past_due_transitions
 from qbo_client import cdc_changes, fetch_customers_by_ids
 from qbo_oauth import QboAuthError, get_qbo_access_token
-from qbo_import import map_qbo_invoice_to_doc, upsert_qbo_ledger_invoice
+from qbo_import import (
+    map_qbo_invoice_to_doc,
+    remove_qbo_invoices_from_ledger,
+    upsert_qbo_ledger_invoice,
+)
 
 logger = logging.getLogger("scotive.qbo_sync")
 
@@ -103,9 +107,12 @@ async def sync_qbo_cdc(db, user_id) -> dict[str, Any]:
     counts["payments_seen"] = len(payments)
 
     unpaid_rows = []
+    deleted_qbo_ids: list[str] = []
     for inv in invoices:
         if (inv.get("status") or "").lower() == "deleted":
-            counts["deleted"] += 1
+            qid = str(inv.get("Id") or "").strip()
+            if qid:
+                deleted_qbo_ids.append(qid)
             continue
         try:
             bal = float(inv.get("Balance") or 0)
@@ -114,6 +121,15 @@ async def sync_qbo_cdc(db, user_id) -> dict[str, Any]:
             continue
         if bal > 0.005:
             unpaid_rows.append(inv)
+
+    if deleted_qbo_ids:
+        try:
+            rem = await remove_qbo_invoices_from_ledger(db, user_id, deleted_qbo_ids)
+            counts["deleted"] = rem.get("deleted", 0)
+            counts["delete_missing"] = rem.get("missing", 0)
+        except Exception as e:
+            logger.exception("qbo.cdc delete fail user=%s: %s", user_id, e)
+            counts["delete_errors"] = 1
 
     cust_ids = []
     for inv in unpaid_rows:
@@ -167,6 +183,7 @@ async def sync_qbo_cdc(db, user_id) -> dict[str, Any]:
     logger.info("qbo.cdc DONE user=%s since=%s counts=%s", user_id, since, {
         k: counts[k] for k in (
             "invoices_seen", "payments_seen", "created", "updated", "merged", "skipped",
+            "deleted", "delete_missing",
         ) if k in counts
     })
     return counts

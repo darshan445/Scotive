@@ -91,7 +91,7 @@ def _entities_from_payload(payload: dict) -> list[tuple[str, str, str, str]]:
 
 async def _process_entities(db, entities: list[tuple[str, str, str, str]]) -> None:
     from qbo_conversation import enqueue_qbo_conversation_match
-    from qbo_import import import_unpaid_invoices
+    from qbo_import import import_unpaid_invoices, remove_qbo_invoices_from_ledger
     from qbo_paid_sync import sync_qbo_paid_status
 
     # Group by realm
@@ -108,13 +108,29 @@ async def _process_entities(db, entities: list[tuple[str, str, str, str]]) -> No
             logger.info("qbo.webhook skip realm=%s (no connected user)", realm)
             continue
         user_id = conn["user_id"]
-        names = {n for n, _, _ in items}
         try:
-            if "Invoice" in names:
+            delete_ids = [
+                eid for name, eid, op in items
+                if name == "Invoice" and (op or "").lower() in ("delete", "deleted")
+            ]
+            if delete_ids:
+                rem = await remove_qbo_invoices_from_ledger(db, user_id, delete_ids)
+                logger.info(
+                    "qbo.webhook delete realm=%s user=%s result=%s",
+                    realm, user_id, rem,
+                )
+
+            invoice_upsert = any(
+                name == "Invoice" and (op or "").lower() not in ("delete", "deleted")
+                for name, _, op in items
+            )
+            payment_touch = any(name == "Payment" for name, _, _ in items)
+
+            if invoice_upsert:
                 # Upsert open invoices; paid sync catches Balance=0 on known rows
                 await import_unpaid_invoices(db, user_id)
                 await enqueue_qbo_conversation_match(db, user_id)
-            if "Payment" in names or "Invoice" in names:
+            if payment_touch or invoice_upsert:
                 await sync_qbo_paid_status(db, user_id)
         except Exception:
             logger.exception("qbo.webhook process fail realm=%s user=%s", realm, user_id)
@@ -134,7 +150,8 @@ def build_webhook_routes(db) -> APIRouter:
             "verifier_token_configured": token_set,
             "hint": (
                 "In Intuit Developer → your app → Webhooks (Sandbox), "
-                "paste webhook_url, subscribe to Invoice + Payment (Create, Update), "
+                "paste webhook_url, subscribe to Invoice + Payment "
+                "(Create, Update, Delete), "
                 "copy the Verifier Token into QBO_WEBHOOK_VERIFIER_TOKEN, restart backend."
             ),
         }

@@ -144,6 +144,141 @@ def _should_trigger_user_reeval(msg: dict, inv: dict) -> bool:
     return False
 
 
+async def reeval_after_user_outbound_send(
+    db,
+    user_id,
+    inv: dict,
+    *,
+    access: str,
+    my_email: str,
+    subject: str,
+    body: str,
+    gmail_message_id: str | None,
+    thread_id: str | None = None,
+) -> dict[str, Any]:
+    """Run the same Stage 4 path as Gmail dispute-accept / amount-correction.
+
+    Used right after Scotive sends a chase/reply so ledger amount/status update
+    without waiting for the next incremental sync. Plain chases (no correction
+    / dispute-acceptance language) are skipped — identical gate to sync.
+    """
+    out: dict[str, Any] = {"triggered": False, "applied": False}
+    if not inv or not inv.get("_id"):
+        out["skipped"] = "no_invoice"
+        return out
+    if inv.get("status") not in OPEN_INVOICE_STATUSES:
+        out["skipped"] = "not_open"
+        return out
+    if not os.environ.get("OPENROUTER_API_KEY"):
+        out["skipped"] = "no_ai"
+        return out
+
+    my = (my_email or "").strip().lower()
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    mid = (gmail_message_id or "").strip() or f"scotive-send:{inv['_id']}:{int(now.timestamp())}"
+    msg = {
+        "id": mid,
+        "subject": subject or "",
+        "body": body or "",
+        "snippet": (body or "")[:240],
+        "from": my,
+        "thread_id": thread_id or inv.get("source_thread_id"),
+        "date": now.strftime("%a, %d %b %Y %H:%M:%S +0000"),
+    }
+    if not _should_trigger_user_reeval(msg, inv):
+        out["skipped"] = "not_correction"
+        return out
+
+    out["triggered"] = True
+    logger.info(
+        "reeval POST-SEND inv=%s msg=%s status=%s",
+        inv["_id"], mid, inv.get("status"),
+    )
+
+    thread_msgs: list[dict] = []
+    tid = inv.get("source_thread_id") or thread_id
+    if tid:
+        try:
+            thread_msgs = await get_thread_messages(access, tid)
+        except Exception as e:
+            logger.warning("reeval post-send thread fetch fail inv=%s err=%s", inv["_id"], e)
+
+    combined = _merge_client_messages([], thread_msgs, [])
+    # Ensure the just-sent body is present even if Gmail thread lag omits it.
+    if not any(m.get("id") == mid for m in combined):
+        combined = list(combined) + [msg]
+    else:
+        # Prefer the body we just sent (fresher than a thin Gmail snippet).
+        combined = [
+            {**m, "body": body or m.get("body"), "subject": subject or m.get("subject")}
+            if m.get("id") == mid else m
+            for m in combined
+        ]
+
+    client = (inv.get("counterparty_email") or "").lower()
+    conv_ids = [m["id"] for m in combined if m.get("id")]
+    processed_ids = await _invoice_processed_message_ids(db, user_id, inv, conv_ids)
+    if mid in processed_ids:
+        has_event = await db.invoice_events.find_one({
+            "user_id": user_id,
+            "invoice_id": inv["_id"],
+            "meta.message_id": mid,
+        }, {"_id": 1})
+        if not has_event:
+            processed_ids = [x for x in processed_ids if x != mid]
+
+    tracked = build_tracked_state(inv, processed_ids)
+    prepared = build_reeval_input(
+        my_email=my,
+        client_email=client,
+        messages=combined,
+        tracked_state=tracked,
+        anchor_ids=[inv.get("source_message_id")] if inv.get("source_message_id") else None,
+    )
+    result = await extract_reeval_with_rulebook(client, prepared)
+    if not result:
+        out["skipped"] = "ai_empty"
+        logger.warning("reeval post-send AI-EMPTY inv=%s", inv["_id"])
+        return out
+
+    await _mark_reeval_seen(db, inv["_id"], [mid])
+    await _mark_processed(db, user_id, [mid])
+
+    events = rulebook_events_to_write_events(
+        result,
+        invoice_ref=inv.get("invoice_ref_normalized") or inv.get("invoice_ref"),
+    )
+    for e in events:
+        if e.get("type") == "correction" and e.get("old_amount") is None:
+            e["old_amount"] = float(inv.get("amount") or 0)
+
+    if not events:
+        await _apply_reeval_top_level(db, inv, result, now_iso)
+        out["events"] = []
+        return out
+
+    events = sorted(
+        events,
+        key=lambda e: (_EVENT_APPLY_ORDER.get(e.get("type") or "", 99), e.get("message_id") or ""),
+    )
+    messages_by_id = {m["id"]: m for m in combined if m.get("id")}
+    for ev in events:
+        await _write_event(
+            db, user_id, inv["_id"], ev, messages_by_id, now_iso,
+            my_email=my,
+        )
+    inv_after = await db.invoices.find_one({"_id": inv["_id"]}) or inv
+    await _apply_reeval_top_level(db, inv_after, result, now_iso)
+    out["applied"] = True
+    out["events"] = [e.get("type") for e in events]
+    logger.info(
+        "reeval post-send APPLY inv=%s events=%s",
+        inv["_id"], out["events"],
+    )
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Processed-message registry — every ingested Gmail id is stored exactly once
 # ---------------------------------------------------------------------------

@@ -113,6 +113,7 @@ Every incremental cycle (and via webhooks where available):
 |---|---|
 | **New QBO invoices** | Prefer **webhook** to create/update ledger row; attempt conversation match. Incremental poll as backup for missed events. While unpaid → full Scotive tracking/UI. |
 | **QBO still unpaid** | No special path. Same state machine, drafts, claim/remittance confirm prompts (“has it arrived?” / Received / Not yet) as Gmail-native invoices. |
+| **QBO invoice deleted** | Webhook Delete (and CDC `status=Deleted`) remove the matching Scotive ledger row by `qbo_id` (events/drafts cascaded). |
 | **QBO paid** | Poll / webhook `paid=true` every cycle, independent of Gmail activity → status **Paid** immediately; no confirm-payment prompt **for this QBO-driven transition**. Clear any pending claim UI. |
 | **QBO invoice conversations** | Query Gmail by **QBO client email**, messages **on/after the invoice date**; then Stage 4 re-eval → promised / disputed / partially_paid / `paid_unconfirmed` / etc., same as Gmail-native rows. |
 
