@@ -26,6 +26,7 @@ export const COMPETITOR_KEYWORDS = [
     "Upflow alternative",
     "invoice collection software",
     "accounts receivable software for freelancers",
+    "accounts receivable software for agencies",
     "payment reminder software",
 ];
 
@@ -44,6 +45,13 @@ export const DEFAULT_DESCRIPTION =
 export const DEFAULT_TITLE =
     "Scotive — Invoice Chasing Software to Get Paid Faster";
 
+/** Who Scotive is for — keep marketing copy broad, not freelancer-only. */
+export const AUDIENCE_BLURB =
+    "For freelancers, agencies, consultants, professional services, and any team that bills clients and chases payment.";
+
+export const AUDIENCE_SHORT =
+    "freelancers, agencies, and teams that bill clients";
+
 export function absoluteUrl(path = "/") {
     const p = path.startsWith("/") ? path : `/${path}`;
     return `${SITE_URL}${p === "/" ? "" : p}`;
@@ -56,7 +64,6 @@ export function pageMetadata({
     keywords = [],
 }) {
     const fullTitle = title.includes("Scotive") ? title : `${title} · Scotive`;
-    const url = absoluteUrl(path);
     const kw = [
         ...new Set([
             ...PRIMARY_KEYWORDS,

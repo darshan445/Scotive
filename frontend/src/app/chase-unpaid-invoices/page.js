@@ -21,6 +21,13 @@ export default function ChaseUnpaidInvoicesPage() {
 
             <section className="py-14 md:py-16 max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
                 <div>
+                    <h2 className="type-title text-2xl md:text-3xl">Who chases unpaid invoices with Scotive</h2>
+                    <p className="type-body mt-3 text-muted-foreground">
+                        Freelancers, agencies, consultants, studios, professional services, and small businesses —
+                        anyone whose cash flow depends on clients paying invoices on time.
+                    </p>
+                </div>
+                <div>
                     <h2 className="type-title text-2xl md:text-3xl">Why unpaid invoices slip</h2>
                     <p className="type-body mt-3 text-muted-foreground">
                         Promises live in reply chains. Disputes change the amount. Accounting shows open balances

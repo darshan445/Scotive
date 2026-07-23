@@ -21,7 +21,7 @@ export default function FreshBooksInvoiceChasingPage() {
             <MarketingHero
                 eyebrow="FreshBooks · Coming soon"
                 title="Payment follow-up for FreshBooks invoices"
-                description="Scotive will treat FreshBooks as another accounting source for unpaid invoices — same ledger, same reply intelligence, same approve-before-send chase. Built for multi-tool freelancers, not one vendor lock-in."
+                description="Scotive will treat FreshBooks as another accounting source for unpaid invoices — same ledger, same reply intelligence, same approve-before-send chase. Built for multi-tool teams, not one vendor lock-in."
             >
                 <div className="mt-8 flex flex-wrap gap-3">
                     <Link href="/register" className="inline-flex items-center rounded-xl bg-primary text-primary-foreground px-5 py-2.5 text-sm font-semibold hover:bg-primary/90">

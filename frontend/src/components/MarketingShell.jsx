@@ -63,8 +63,8 @@ export function MarketingShell({
                     <div className="md:col-span-2">
                         <BrandMark />
                         <p className="type-body mt-3 text-sm max-w-sm">
-                            Invoice chasing software for freelancers and small teams — email + accounting,
-                            human-approved follow-ups.
+                            Invoice chasing for freelancers, agencies, and any team that bills clients —
+                            email + accounting, human-approved follow-ups.
                         </p>
                     </div>
                     <div>

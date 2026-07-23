@@ -557,12 +557,45 @@ export default function LandingPage() {
                     </div>
                 </section>
 
+                <section className="py-20 md:py-24 border-t border-border/70" data-testid="landing-who">
+                    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                        <div className="max-w-2xl mb-10">
+                            <SectionEyebrow>Who it&apos;s for</SectionEyebrow>
+                            <h2 className="type-title text-3xl md:text-4xl">
+                                Anyone who bills clients and follows up on payment.
+                            </h2>
+                            <p className="type-body mt-3">
+                                Scotive isn&apos;t locked to one job title — if you send invoices and chase unpaid ones, it fits.
+                            </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                            {[
+                                "Freelancers",
+                                "Agencies",
+                                "Consultants",
+                                "Studios & creative teams",
+                                "Professional services",
+                                "Small businesses",
+                                "Founders & ops",
+                                "Finance & AR owners",
+                            ].map((label) => (
+                                <span
+                                    key={label}
+                                    className="text-sm font-medium text-foreground/80 bg-muted rounded-full px-3.5 py-1.5"
+                                >
+                                    {label}
+                                </span>
+                            ))}
+                        </div>
+                    </div>
+                </section>
+
                 <section className="py-20 md:py-24 border-t border-border/70" data-testid="landing-outcomes">
                     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                         <div className="max-w-2xl mb-12">
                             <SectionEyebrow>Built for people who bill and chase</SectionEyebrow>
                             <h2 className="type-title text-3xl md:text-4xl">
-                                Freelancers and studios stop leaking revenue.
+                                Stop leaking revenue to forgotten invoices.
                             </h2>
                         </div>
                         <div className="grid md:grid-cols-3 gap-4">
@@ -570,19 +603,19 @@ export default function LandingPage() {
                                 quote="I used to spend Sunday nights going through sent mail to figure out who to nudge. Now it's a short approval pass with coffee."
                                 metric="Sundays back"
                                 name="Freelance designer"
-                                role="Solo · 12 active clients"
+                                role="Independent · 12 active clients"
                             />
                             <OutcomeCard
                                 quote="A client promised payment three times. Scotive caught every date and drafted a firmer follow-up. Paid in full the next week."
                                 metric="0 awkward emails"
-                                name="Studio founder"
-                                role="4-person agency"
+                                name="Agency ops lead"
+                                role="12-person agency"
                             />
                             <OutcomeCard
                                 quote="Seed curation found an invoice I'd completely forgotten. That one recovery covered a year of any tool I could buy."
                                 metric="Recovered cash"
-                                name="Consultant"
-                                role="B2B advisory"
+                                name="Services founder"
+                                role="B2B professional services"
                             />
                         </div>
                     </div>
@@ -628,7 +661,7 @@ export default function LandingPage() {
                     <div className="md:col-span-2">
                         <BrandMark />
                         <p className="type-body mt-3 text-sm max-w-xs">
-                            Invoice chasing software for freelancers and small teams — email + accounting, human-approved follow-ups.
+                            Invoice chasing for freelancers, agencies, and any team that bills clients — email + accounting, human-approved follow-ups.
                         </p>
                     </div>
                     <div>

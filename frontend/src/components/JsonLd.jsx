@@ -14,7 +14,7 @@ export function JsonLd() {
                 url: SITE,
                 logo: `${SITE}/logo512.png`,
                 description:
-                    "Invoice chasing software for freelancers and small teams — track unpaid invoices from email and accounting tools, with human-approved follow-ups.",
+                    "Invoice chasing software for freelancers, agencies, consultants, and any team that bills clients — track unpaid invoices from email and accounting tools, with human-approved follow-ups.",
                 email: "support@scotive.com",
             },
             {
@@ -32,7 +32,12 @@ export function JsonLd() {
                 operatingSystem: "Web",
                 url: SITE,
                 description:
-                    "Invoice chasing and accounts receivable follow-up software. Connects email (Gmail today; Outlook next) and accounting (QuickBooks Online today; Zoho Books and FreshBooks next). Drafts payment follow-ups you approve before send.",
+                    "Invoice chasing and accounts receivable follow-up software for freelancers, agencies, consultants, professional services, and other teams that bill clients. Connects email (Gmail today; Outlook next) and accounting (QuickBooks Online today; Zoho Books and FreshBooks next). Drafts payment follow-ups you approve before send.",
+                audience: {
+                    "@type": "Audience",
+                    audienceType:
+                        "Freelancers, agencies, consultants, professional services, and businesses that bill clients",
+                },
                 featureList: [
                     "Invoice tracking from email and accounting",
                     "Client reply intelligence (promises, disputes, payment claims)",

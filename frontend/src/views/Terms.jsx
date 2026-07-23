@@ -23,9 +23,9 @@ export default function TermsPage() {
 
             <LegalSection id="service" title="2. What Scotive does">
                 <p>
-                    Scotive is a payment-operations product that helps freelancers and small
-                    businesses track invoices and follow up on unpaid amounts. Depending on
-                    features you enable, the Service may:
+                    Scotive is a payment-operations product that helps freelancers, agencies,
+                    consultants, and other businesses track invoices and follow up on unpaid amounts.
+                    Depending on features you enable, the Service may:
                 </p>
                 <ul>
                     <li>Connect to your Google account with Gmail read and send permissions</li>

@@ -16,7 +16,7 @@ export default function InvoiceChasingSoftwarePage() {
             <MarketingHero
                 eyebrow="Invoice chasing software"
                 title="Chase invoices without becoming a collections department"
-                description="Competitors like Chaser and Upflow automate AR for finance teams. Scotive is built for freelancers and small studios: track unpaid invoices, understand replies, and send follow-ups only when you approve."
+                description="Competitors like Chaser and Upflow automate AR for finance teams. Scotive fits freelancers, agencies, consultants, and any team that bills clients: track unpaid invoices, understand replies, and send follow-ups only when you approve."
             >
                 <div className="mt-8 flex flex-wrap gap-3">
                     <Link href="/register" className="inline-flex items-center rounded-xl bg-primary text-primary-foreground px-5 py-2.5 text-sm font-semibold hover:bg-primary/90">
@@ -29,6 +29,14 @@ export default function InvoiceChasingSoftwarePage() {
             </MarketingHero>
 
             <section className="py-14 md:py-16 max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
+                <div>
+                    <h2 className="type-title text-2xl md:text-3xl">Who uses invoice chasing software</h2>
+                    <p className="type-body mt-3 text-muted-foreground">
+                        Freelancers, agencies, consultants, professional services firms, studios, and small
+                        businesses — anyone who sends invoices and follows up when payment is late. Scotive is
+                        built for that reality, not only for enterprise finance departments.
+                    </p>
+                </div>
                 <div>
                     <h2 className="type-title text-2xl md:text-3xl">What invoice chasing software should do</h2>
                     <ul className="mt-4 space-y-3 type-body text-sm md:text-base text-muted-foreground list-disc pl-5">
