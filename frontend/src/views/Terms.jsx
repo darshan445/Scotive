@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { LegalSection, LegalShell } from "@/components/LegalShell";
 
-const UPDATED = "July 20, 2026";
+const UPDATED = "July 23, 2026";
 const CONTACT = "support@scotive.com";
 
 export default function TermsPage() {
@@ -11,8 +11,8 @@ export default function TermsPage() {
                 <p>
                     These Terms of Service (“Terms”) govern your access to and use of Scotive
                     (the “Service”), including our website at scotive.com and related APIs.
-                    By creating an account, connecting Gmail, or otherwise using the Service,
-                    you agree to these Terms and to our{" "}
+                    By creating an account, connecting Gmail, connecting QuickBooks Online, or
+                    otherwise using the Service, you agree to these Terms and to our{" "}
                     <Link href="/privacy">Privacy Policy</Link>.
                 </p>
                 <p>
@@ -24,15 +24,24 @@ export default function TermsPage() {
             <LegalSection id="service" title="2. What Scotive does">
                 <p>
                     Scotive is a payment-operations product that helps freelancers and small
-                    businesses track invoices sent from Gmail and follow up on unpaid amounts.
-                    Depending on features you enable, the Service may:
+                    businesses track invoices and follow up on unpaid amounts. Depending on
+                    features you enable, the Service may:
                 </p>
                 <ul>
                     <li>Connect to your Google account with Gmail read and send permissions</li>
                     <li>Scan sent mail (and related threads) to detect invoices you sent</li>
                     <li>
+                        Optionally connect to Intuit QuickBooks Online to import open invoices
+                        and sync paid / not-paid status
+                    </li>
+                    <li>
+                        When you mark a QuickBooks-linked invoice paid in Scotive, update that
+                        invoice in QuickBooks (for example by creating a linked Payment)
+                    </li>
+                    <li>
                         Store a ledger of invoice facts (amounts, clients, due dates, status)
-                        and evidence references — not a full copy of your mailbox
+                        and evidence references — not a full copy of your mailbox or QuickBooks
+                        company
                     </li>
                     <li>Read client replies for signals such as payment promises, disputes, and claims</li>
                     <li>
@@ -47,7 +56,9 @@ export default function TermsPage() {
                 </ul>
                 <p>
                     Scotive does <strong>not</strong> auto-send chase emails. Drafts are suggestions;
-                    you remain responsible for reviewing and sending them.
+                    you remain responsible for reviewing and sending them. Gmail remains the
+                    conversation layer; QuickBooks is an optional invoice feed and paid-status
+                    signal, not a replacement for your books of record.
                 </p>
             </LegalSection>
 
@@ -93,7 +104,43 @@ export default function TermsPage() {
                 </p>
             </LegalSection>
 
-            <LegalSection id="ai" title="5. AI-assisted features">
+            <LegalSection id="qbo" title="5. QuickBooks Online connection (optional)">
+                <p>
+                    You may optionally connect Intuit QuickBooks Online. When you do, Scotive
+                    requests accounting API access to:
+                </p>
+                <ul>
+                    <li>
+                        Read open (unpaid) invoices and related customer fields needed to build
+                        and update your ledger
+                    </li>
+                    <li>
+                        Read paid / not-paid status (for example Balance and related payment
+                        signals) so we can mark invoices Paid in Scotive when QuickBooks reports
+                        them paid
+                    </li>
+                    <li>
+                        Create or update Payment records linked to an invoice when{" "}
+                        <strong>you</strong> mark that invoice paid or confirm payment received
+                        in Scotive
+                    </li>
+                </ul>
+                <p>
+                    Your use of QuickBooks through Scotive is also subject to Intuit’s terms and
+                    policies. Intuit is not a party to these Terms and is not responsible for the
+                    Service. You can disconnect QuickBooks at any time in Settings. Disconnecting
+                    removes stored OAuth tokens; your Scotive ledger may remain until you delete
+                    your account.
+                </p>
+                <p>
+                    You represent that you have authority to connect the QuickBooks company you
+                    authorize, and that syncing paid status (including writing Payments back to
+                    QuickBooks) is permitted for that company. Scotive does not replace QuickBooks
+                    as your accounting system of record.
+                </p>
+            </LegalSection>
+
+            <LegalSection id="ai" title="6. AI-assisted features">
                 <p>
                     Scotive uses machine learning and third-party AI providers to extract invoice
                     details from email content and to draft follow-up messages. Outputs can be
@@ -107,7 +154,7 @@ export default function TermsPage() {
                 </p>
             </LegalSection>
 
-            <LegalSection id="your-responsibilities" title="6. Your responsibilities">
+            <LegalSection id="your-responsibilities" title="7. Your responsibilities">
                 <p>You agree that you will not:</p>
                 <ul>
                     <li>Use the Service for unlawful, harassing, deceptive, or abusive communications</li>
@@ -119,26 +166,27 @@ export default function TermsPage() {
                 </ul>
                 <p>
                     You are solely responsible for the content of emails you send, for tax and
-                    accounting treatment of invoices, and for disputes with your clients.
-                    Scotive is a software tool, not your attorney, accountant, or collection agency.
+                    accounting treatment of invoices (including records in QuickBooks), and for
+                    disputes with your clients. Scotive is a software tool, not your attorney,
+                    accountant, or collection agency.
                 </p>
             </LegalSection>
 
-            <LegalSection id="ip" title="7. Intellectual property">
+            <LegalSection id="ip" title="8. Intellectual property">
                 <p>
                     Scotive and its branding, software, and documentation are owned by Scotive or
                     its licensors. Subject to these Terms, we grant you a limited, non-exclusive,
                     non-transferable license to use the Service for your internal business purposes.
                 </p>
                 <p>
-                    You retain rights in your account data and email content. You grant Scotive a
-                    worldwide license to host, process, and transmit that content solely as needed
-                    to provide and improve the Service (including security, support, and
-                    reliability), consistent with the Privacy Policy.
+                    You retain rights in your account data, email content, and QuickBooks company
+                    data. You grant Scotive a worldwide license to host, process, and transmit that
+                    content solely as needed to provide and improve the Service (including security,
+                    support, and reliability), consistent with the Privacy Policy.
                 </p>
             </LegalSection>
 
-            <LegalSection id="availability" title="8. Availability and changes">
+            <LegalSection id="availability" title="9. Availability and changes">
                 <p>
                     We aim for reliable uptime but do not guarantee uninterrupted or error-free
                     operation. Features may change as we improve the product. We may suspend or
@@ -153,17 +201,17 @@ export default function TermsPage() {
                 </p>
             </LegalSection>
 
-            <LegalSection id="disclaimer" title="9. Disclaimers">
+            <LegalSection id="disclaimer" title="10. Disclaimers">
                 <p>
                     THE SERVICE IS PROVIDED “AS IS” AND “AS AVAILABLE.” TO THE MAXIMUM EXTENT
                     PERMITTED BY LAW, SCOTIVE DISCLAIMS ALL WARRANTIES, WHETHER EXPRESS, IMPLIED,
                     OR STATUTORY, INCLUDING MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE,
-                    AND NON-INFRINGEMENT. WE DO NOT WARRANT THAT LEDGER DATA, AI EXTRACTIONS, OR
-                    DRAFTS WILL BE ACCURATE OR COMPLETE.
+                    AND NON-INFRINGEMENT. WE DO NOT WARRANT THAT LEDGER DATA, QUICKBOOKS SYNC,
+                    AI EXTRACTIONS, OR DRAFTS WILL BE ACCURATE OR COMPLETE.
                 </p>
             </LegalSection>
 
-            <LegalSection id="liability" title="10. Limitation of liability">
+            <LegalSection id="liability" title="11. Limitation of liability">
                 <p>
                     TO THE MAXIMUM EXTENT PERMITTED BY LAW, SCOTIVE AND ITS SUPPLIERS WILL NOT BE
                     LIABLE FOR INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES,
@@ -178,7 +226,7 @@ export default function TermsPage() {
                 </p>
             </LegalSection>
 
-            <LegalSection id="indemnity" title="11. Indemnity">
+            <LegalSection id="indemnity" title="12. Indemnity">
                 <p>
                     You will defend and indemnify Scotive against claims, damages, and expenses
                     (including reasonable attorneys’ fees) arising from your content, your emails,
@@ -186,7 +234,7 @@ export default function TermsPage() {
                 </p>
             </LegalSection>
 
-            <LegalSection id="law" title="12. Governing law">
+            <LegalSection id="law" title="13. Governing law">
                 <p>
                     These Terms are governed by the laws of the State of Delaware, USA, excluding
                     conflict-of-law rules, unless mandatory consumer protections in your place of
@@ -195,7 +243,7 @@ export default function TermsPage() {
                 </p>
             </LegalSection>
 
-            <LegalSection id="misc" title="13. Miscellaneous">
+            <LegalSection id="misc" title="14. Miscellaneous">
                 <p>
                     These Terms are the entire agreement between you and Scotive regarding the
                     Service. If a provision is unenforceable, the remainder stays in effect.
@@ -205,7 +253,7 @@ export default function TermsPage() {
                 </p>
             </LegalSection>
 
-            <LegalSection id="contact" title="14. Contact">
+            <LegalSection id="contact" title="15. Contact">
                 <p>
                     Questions about these Terms:{" "}
                     <a href={`mailto:${CONTACT}`}>{CONTACT}</a>

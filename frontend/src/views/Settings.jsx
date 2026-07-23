@@ -31,12 +31,15 @@ import { useAuth } from "@/contexts/AuthContext";
 import { ConnectionPanel } from "@/components/ConnectionPanel";
 import { SettingsSkeleton } from "@/components/PageSkeletons";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
+import { useQboConnection } from "@/hooks/useQboConnection";
+import { QboConnectionPanel } from "@/components/QboConnectionPanel";
 
 const ESCALATION_LABELS = ["Pre-due nudge", "Due-date reminder", "Firm follow-up", "Final notice"];
 
 export default function SettingsPage() {
     const { user, logout } = useAuth();
     const { status: gmailStatus } = useGmailConnection();
+    const { status: qboStatus } = useQboConnection();
     const [settings, setSettings] = useState(null);
     const [saving, setSaving] = useState(false);
     const [err, setErr] = useState("");
@@ -134,7 +137,7 @@ export default function SettingsPage() {
                             <AlertDialogTitle>Delete your Scotive account?</AlertDialogTitle>
                             <AlertDialogDescription>
                                 This permanently removes your account, ledger, receipts, chase history,
-                                Gmail connection and all extracted evidence. It cannot be undone.
+                                Gmail and QuickBooks connections, and all extracted evidence. It cannot be undone.
                             </AlertDialogDescription>
                         </AlertDialogHeader>
                         <div className="space-y-2">
@@ -184,6 +187,8 @@ export default function SettingsPage() {
                 </div>
 
                 <GmailAccountSection status={gmailStatus} />
+
+                <QboAccountSection status={qboStatus} />
 
                 {settings.chasing_timing_enabled ? (
                     <ChasingTimingSection
@@ -238,6 +243,19 @@ function GmailAccountSection({ status }) {
             </p>
             <Separator className="my-4" />
             <ConnectionPanel status={status} />
+        </section>
+    );
+}
+
+function QboAccountSection({ status }) {
+    return (
+        <section data-testid="settings-qbo-account">
+            <h2 className="type-title text-xl">QuickBooks Online</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+                Optional — connect to import open invoices. Status and chasing stay in Scotive; Gmail still reads client replies.
+            </p>
+            <Separator className="my-4" />
+            <QboConnectionPanel status={status} />
         </section>
     );
 }

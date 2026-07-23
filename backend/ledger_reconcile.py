@@ -668,7 +668,7 @@ async def upsert_sweep_invoice(
 
     try:
         res = await db.invoices.insert_one(doc)
-    except DuplicateKeyError:
+    except DuplicateKeyError as e:
         # Unique-index race or legacy index still in place — resolve to the row
         # that won instead of surfacing a 500.
         q: dict[str, Any] = {"user_id": user_id, "source_message_id": doc.get("source_message_id")}
@@ -677,6 +677,8 @@ async def upsert_sweep_invoice(
         winner = await db.invoices.find_one(q) or await db.invoices.find_one({
             "user_id": user_id, "source_message_id": doc.get("source_message_id"),
         })
+        if not winner and doc.get("qbo_id"):
+            winner = await db.invoices.find_one({"user_id": user_id, "qbo_id": doc["qbo_id"]})
         if winner:
             return "merged", winner["_id"]
         raise

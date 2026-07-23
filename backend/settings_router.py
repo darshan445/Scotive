@@ -265,7 +265,8 @@ def build_router(db, get_current_user):
         # Wipe every per-user collection we've built (keep in sync with Privacy Policy §7).
         for coll in (
             "invoices", "receipts", "invoice_events", "review_items",
-            "suppressed_senders", "gmail_connections", "gmail_sync_state",
+            "suppressed_senders", "gmail_connections", "qbo_connections",
+            "gmail_sync_state",
             "scan_jobs", "seed_jobs", "chase_drafts", "chase_sends",
             "client_merges", "client_merge_prompts",
             "user_settings", "login_attempts",

@@ -691,6 +691,34 @@ async def run_incremental_pipeline(db, user_id) -> dict[str, Any]:
         counts["new_invoices"] = new_invoices
         counts["live_detected"] = stream["created"]
 
+        # Module 6: CDC poll backup (new/changed QBO invoices + paid) — webhooks are primary.
+        try:
+            from qbo_sync import sync_qbo_cdc
+            counts["qbo_cdc"] = await sync_qbo_cdc(db, user_id)
+        except Exception as e:
+            logger.exception("incremental qbo CDC failed: %s", e)
+            counts["qbo_cdc"] = {"errors": 1}
+            # Still run paid + conversation if CDC blew up mid-way
+            try:
+                from qbo_paid_sync import sync_qbo_paid_status
+                counts["qbo_paid"] = await sync_qbo_paid_status(db, user_id)
+            except Exception as e2:
+                logger.exception("incremental qbo paid sync failed: %s", e2)
+                counts["qbo_paid"] = {"errors": 1}
+            try:
+                from qbo_conversation import enqueue_qbo_conversation_match
+                counts["qbo_conversation"] = await enqueue_qbo_conversation_match(db, user_id)
+            except Exception as e3:
+                logger.exception("incremental qbo conversation enqueue failed: %s", e3)
+                counts["qbo_conversation"] = {"errors": 1}
+        else:
+            # CDC path already runs paid + conversation; keep keys for callers
+            cdc = counts.get("qbo_cdc") or {}
+            if "qbo_paid" in cdc:
+                counts["qbo_paid"] = cdc["qbo_paid"]
+            if "conversation_match" in cdc:
+                counts["qbo_conversation"] = cdc["conversation_match"]
+
         # ---- Stage 4: re-evaluate tracked invoices with new client activity -
         reeval_stats = await _reevaluate_tracked(
             db, user_id, access, my_email, window_start,

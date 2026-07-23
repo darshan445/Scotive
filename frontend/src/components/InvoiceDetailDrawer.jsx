@@ -468,6 +468,24 @@ export function InvoiceDetailDrawer({ invoiceId, preview = null, open, onClose, 
                                         <StatusChip inv={inv} />
                                         {fact ? <span className="text-sm text-muted-foreground">{fact}</span> : null}
                                     </div>
+                                    {(() => {
+                                        let attribution = null;
+                                        if (inv.status === "paid" && (inv.paid_via === "quickbooks" || inv.qbo_paid_date)) {
+                                            attribution = inv.evidence_sentence
+                                                || `Paid in QuickBooks · ${inv.qbo_paid_date || formatDate(inv.paid_at)}`;
+                                        } else if (inv.source === "both") {
+                                            attribution = "Tracked from Gmail · Imported from QuickBooks";
+                                        } else if (inv.source === "quickbooks") {
+                                            attribution = "Imported from QuickBooks";
+                                        } else if (inv.source === "gmail" || inv.source_thread_id) {
+                                            attribution = "Tracked from Gmail";
+                                        }
+                                        return attribution ? (
+                                            <div className="text-xs text-muted-foreground" data-testid="invoice-source-attribution">
+                                                {attribution}
+                                            </div>
+                                        ) : null;
+                                    })()}
                                     {actions ? (
                                         <div className="flex flex-wrap gap-2 pt-1" data-testid="invoice-detail-actions">
                                             {actions}
@@ -559,9 +577,10 @@ export function InvoiceDetailDrawer({ invoiceId, preview = null, open, onClose, 
                                     ) : null}
 
                                     {data && !data.messages?.length ? (
-                                        <div className="px-5 py-10 text-sm text-muted-foreground text-center">
-                                            No messages loaded yet.
-                                            {inv?.source_subject ? ` Subject: ${inv.source_subject}` : ""}
+                                        <div className="px-5 py-10 text-sm text-muted-foreground text-center" data-testid="conversation-empty">
+                                            {inv?.status === "paid" && (inv?.paid_via === "quickbooks" || inv?.qbo_paid_date)
+                                                ? `No client emails — paid in QuickBooks, ${inv.qbo_paid_date || formatDate(inv.paid_at)}`
+                                                : "No client emails on this invoice yet"}
                                         </div>
                                     ) : null}
 

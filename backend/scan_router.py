@@ -16,6 +16,8 @@ from incremental_sync import run_incremental_sync
 from seed_scan import (
     SEED_DAYS,
     confirm_seed_curation,
+    continue_onboarding,
+    discard_seed_review,
     get_onboarding_state,
     list_seed_candidates,
     run_seed_scan,
@@ -59,6 +61,11 @@ class SeedConfirmInput(BaseModel):
     candidate_ids: list[str] = Field(default_factory=list)
     track_none: bool = False
     due_dates: dict[str, str | None] = Field(default_factory=dict)
+
+
+class OnboardingQboStepInput(BaseModel):
+    """Path B: resolve optional QuickBooks step before/around seed."""
+    action: str  # pending | skip | connected
 
 
 class DetectionAckInput(BaseModel):
@@ -258,6 +265,32 @@ def build_router(db, get_current_user):
     async def onboarding_state(user: dict = Depends(get_current_user)):
         return await get_onboarding_state(db, user["_id"])
 
+    @router.post("/onboarding/qbo-step")
+    async def onboarding_qbo_step(payload: OnboardingQboStepInput, user: dict = Depends(get_current_user)):
+        action = (payload.action or "").strip().lower()
+        if action not in ("pending", "skip", "connected"):
+            raise HTTPException(status_code=400, detail="action must be pending, skip, or connected")
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await db.gmail_sync_state.update_one(
+            {"user_id": user["_id"]},
+            {"$set": {
+                "onboarding_qbo_step": action,
+                "awaiting_curation": True,
+                "updated_at": now_iso,
+            }},
+            upsert=True,
+        )
+        return {"ok": True, "onboarding_qbo_step": action}
+
+    @router.post("/onboarding/continue")
+    async def onboarding_continue(user: dict = Depends(get_current_user)):
+        """Next on connections screen → curation (Gmail-only) or dashboard (with QBO)."""
+        try:
+            result = await continue_onboarding(db, user["_id"])
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        return result
+
     @router.post("/seed/start")
     async def seed_start(user: dict = Depends(get_current_user)):
         conn = await db.gmail_connections.find_one({"user_id": user["_id"]})
@@ -322,6 +355,15 @@ def build_router(db, get_current_user):
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         return {"ok": True, **result}
+
+    @router.post("/seed/review/discard")
+    async def seed_review_discard(user: dict = Depends(get_current_user)):
+        """Dismiss deferred Gmail seed review on the dashboard (track none)."""
+        try:
+            result = await discard_seed_review(db, user["_id"])
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        return result
 
     @router.post("/scan/sync")
     async def scan_sync(user: dict = Depends(get_current_user)):
@@ -932,17 +974,8 @@ def build_router(db, get_current_user):
                 await ack_followup_prompts(db, user["_id"], [invoice_id])
             else:
                 # Full mark-paid (manual or legacy full claim without amount).
-                patch["status"] = "paid"
-                patch["paid_at"] = now
-                patch["balance_remaining"] = 0.0
-                patch["paid_amount"] = float(inv.get("amount") or 0)
-                clear_payment_claim_fields(patch)
-                patch["chasing_paused"] = False
-                patch["tracking_paused"] = False
-                patch["watching_for_reply"] = False
-                patch["ladder_exhausted"] = False
-                clear_stale_fields(patch)
-                patch["last_activity_at"] = now
+                from qbo_paid_sync import build_full_mark_paid_patch
+                patch.update(build_full_mark_paid_patch(inv, now))
                 await ack_followup_prompts(db, user["_id"], [invoice_id])
         elif action == "deny_payment_claim":
             has_dispute = (
@@ -1030,7 +1063,44 @@ def build_router(db, get_current_user):
             "user_id": user["_id"], "invoice_id": inv["_id"], "action": action, "at": now,
             "undo_snapshot": undo_snapshot,
         })
-        return {"ok": True}
+
+        # QBO-sourced: when user confirms Received / mark paid, push paid to QuickBooks
+        # (Payment linked to Invoice — QBO's only way to drop Balance / mark paid).
+        qbo_push = None
+        if action == "mark_paid" and inv.get("qbo_id"):
+            new_status = patch.get("status")
+            if new_status in ("paid", "partially_paid"):
+                if new_status == "paid":
+                    push_amt = float(
+                        inv.get("balance_remaining")
+                        if inv.get("balance_remaining") is not None
+                        else inv.get("amount") or 0
+                    )
+                    if push_amt <= 0.005:
+                        push_amt = float(inv.get("amount") or 0)
+                else:
+                    # Partial confirm — push the newly applied amount
+                    push_amt = round(
+                        float(patch.get("paid_amount") or 0) - float(inv.get("paid_amount") or 0),
+                        2,
+                    )
+                    if push_amt <= 0.005:
+                        push_amt = float(patch.get("paid_amount") or 0) - float(inv.get("claim_paid_before") or 0)
+                if push_amt > 0.005:
+                    try:
+                        from qbo_paid_sync import push_scotive_paid_to_qbo
+                        merged = {**inv, **patch}
+                        qbo_push = await push_scotive_paid_to_qbo(
+                            db, user["_id"], merged, amount=push_amt, now_iso=now,
+                        )
+                    except Exception as e:
+                        logger.exception("QBO push paid after mark_paid failed: %s", e)
+                        qbo_push = {"ok": False, "error": str(e)[:200]}
+
+        out = {"ok": True}
+        if qbo_push is not None:
+            out["qbo_push"] = qbo_push
+        return out
 
     @router.post("/lifecycle/run")
     async def run_lifecycle(user: dict = Depends(get_current_user)):

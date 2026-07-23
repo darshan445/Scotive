@@ -22,7 +22,7 @@ function initialSelected(candidates) {
     return new Set(candidates.map((c) => c._id));
 }
 
-export function CurationScreen({ candidates, onConfirm, busy, scanning = false }) {
+export function CurationScreen({ candidates, onConfirm, busy, scanning = false, qboAware = false }) {
     const [selected, setSelected] = useState(() => initialSelected(candidates));
     const [dueDates, setDueDates] = useState({});
     const seenRef = useRef(new Set(candidates.map((c) => c._id)));
@@ -102,9 +102,15 @@ export function CurationScreen({ candidates, onConfirm, busy, scanning = false }
     if (!n) {
         return (
             <div className="rounded-2xl border border-border bg-card p-8 text-center" data-testid="curation-empty">
-                <h2 className="type-title text-xl">No sent invoices found in the last 90 days</h2>
+                <h2 className="type-title text-xl">
+                    {qboAware
+                        ? "No extra Gmail invoices outside QuickBooks"
+                        : "No sent invoices found in the last 90 days"}
+                </h2>
                 <p className="mt-2 text-sm text-muted-foreground max-w-md mx-auto">
-                    Scotive is watching — send your next invoice like you always do and it will appear here.
+                    {qboAware
+                        ? "Open QuickBooks invoices are already on your ledger. Scotive is watching Gmail for replies and new email-sent invoices."
+                        : "Scotive is watching — send your next invoice like you always do and it will appear here."}
                 </p>
                 <Button className="mt-6" onClick={startFresh} disabled={busy} data-testid="curation-start-fresh">
                     {busy ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
@@ -121,12 +127,16 @@ export function CurationScreen({ candidates, onConfirm, busy, scanning = false }
                 <h2 className="type-title text-2xl md:text-3xl">
                     {scanning
                         ? `${n} invoice${n === 1 ? "" : "s"} found so far — still scanning…`
-                        : `We found ${n} invoice${n === 1 ? "" : "s"} you sent. Which are still unpaid?`}
+                        : qboAware
+                          ? `We found ${n} invoice${n === 1 ? "" : "s"} from Gmail that aren’t in QuickBooks. Which are still unpaid?`
+                          : `We found ${n} invoice${n === 1 ? "" : "s"} you sent. Which are still unpaid?`}
                 </h2>
                 <p className="mt-2 text-sm text-muted-foreground">
                     {scanning
                         ? "Each invoice appears here the moment its conversation is read — more may still arrive."
-                        : "Set due dates inline where needed — Scotive never guesses."}
+                        : qboAware
+                          ? "QuickBooks open invoices are already tracked. Set due dates inline where needed — Scotive never guesses."
+                          : "Set due dates inline where needed — Scotive never guesses."}
                 </p>
             </div>
 

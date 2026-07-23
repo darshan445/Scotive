@@ -32,13 +32,27 @@ INVOICE_SENT_RE = re.compile(
 )
 
 
-def accounting_queries(days: int = 7) -> list[str]:
+def accounting_queries(days: int = 7, domains: tuple[str, ...] | None = None) -> list[str]:
     w = f"newer_than:{days}d"
-    from_clause = " OR ".join(f"from:{d}" for d in ACCOUNTING_DOMAINS)
-    return [
+    use_domains = domains if domains is not None else ACCOUNTING_DOMAINS
+    if not use_domains:
+        return []
+    from_clause = " OR ".join(f"from:{d}" for d in use_domains)
+    queries = [
         f"({from_clause}) {w} (invoice OR \"invoice #\" OR \"amount due\" OR \"has been sent\")",
-        f"in:sent {w} (quickbooks OR freshbooks OR wave OR zoho) invoice",
     ]
+    sent_tokens: list[str] = []
+    if any(d in use_domains for d in ("intuit.com", "quickbooks.com")):
+        sent_tokens.extend(["quickbooks", "intuit"])
+    if "freshbooks.com" in use_domains:
+        sent_tokens.append("freshbooks")
+    if "waveapps.com" in use_domains:
+        sent_tokens.append("wave")
+    if any(d in use_domains for d in ("zoho.com", "zohobooks.com", "books.zoho.com")):
+        sent_tokens.append("zoho")
+    if sent_tokens:
+        queries.append(f"in:sent {w} ({' OR '.join(sent_tokens)}) invoice")
+    return queries
 
 
 def _client_from_accounting_msg(msg: dict, my_email: str) -> Optional[str]:
@@ -87,7 +101,11 @@ async def detect_accounting_invoices(
     access: str,
     my_email: str,
 ) -> list[dict[str, Any]]:
-    """Find accounting-tool invoice notifications and auto-track."""
+    """Find accounting-tool invoice notifications and auto-track.
+
+    When QuickBooks is connected, skip Intuit/QuickBooks notification emails
+    (QBO API / webhooks are the source of truth — avoids duplicate ledger rows).
+    """
     from live_detection import (
         _flip_overdue_if_needed,
         _ignored_message_ids,
@@ -96,6 +114,17 @@ async def detect_accounting_invoices(
     )
 
     if not await _onboarding_allows_live(db, user_id):
+        return []
+
+    qbo_connected = bool(
+        await db.qbo_connections.find_one({"user_id": user_id, "status": "connected"})
+    )
+    domains = tuple(
+        d for d in ACCOUNTING_DOMAINS
+        if not (qbo_connected and d in ("intuit.com", "quickbooks.com"))
+    )
+    if not domains:
+        logger.info("accounting.skip all domains filtered (QBO connected) user=%s", user_id)
         return []
 
     terms_days = await get_default_payment_terms_days(db, user_id)
@@ -107,7 +136,7 @@ async def detect_accounting_invoices(
     seen: set[str] = set()
     new_detections: list[dict[str, Any]] = []
 
-    for q in accounting_queries():
+    for q in accounting_queries(domains=domains):
         ids = await list_message_ids(access, q, max_pages=2)
         for mid in ids:
             if mid in seen:

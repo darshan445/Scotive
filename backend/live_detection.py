@@ -57,13 +57,24 @@ def live_queries() -> list[str]:
 
 async def _ignored_message_ids(db, user_id) -> set[str]:
     state = await db.gmail_sync_state.find_one({"user_id": user_id}) or {}
-    return set(state.get("seed_ignored_message_ids") or [])
+    ignored = set(state.get("seed_ignored_message_ids") or [])
+    # Hold back pending seed candidates until the user reviews them on the dashboard.
+    async for doc in db.seed_candidates.find(
+        {"user_id": user_id, "status": "pending"},
+        {"message_id": 1},
+    ):
+        mid = doc.get("message_id")
+        if mid:
+            ignored.add(mid)
+    return ignored
 
 
 async def _onboarding_allows_live(db, user_id) -> bool:
     state = await db.gmail_sync_state.find_one({"user_id": user_id}) or {}
-    if state.get("curation_complete"):
+    if state.get("curation_complete") or state.get("dashboard_unlocked") or state.get("watching_sent_mail"):
         return True
+    if state.get("awaiting_curation"):
+        return False
     n = await db.invoices.count_documents({"user_id": user_id})
     return n > 0
 

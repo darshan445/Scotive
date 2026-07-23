@@ -3,6 +3,20 @@ import { api, extractError } from "@/lib/api";
 
 const POLL_MS = 1500;
 
+function needsOnboardingPoll(data) {
+    if (!data) return false;
+    if (data.phase === "preparing" || data.phase === "scanning") return true;
+    const review = data.seed_review;
+    if (review?.seed_running || review?.status === "scanning" || review?.status === "waiting") {
+        return true;
+    }
+    const pipe = data.qbo_pipeline;
+    if (pipe?.status === "queued" || pipe?.status === "running") {
+        return true;
+    }
+    return false;
+}
+
 export function useOnboarding({ enabled = true } = {}) {
     const [state, setState] = useState(null);
     const [candidates, setCandidates] = useState(null);
@@ -38,7 +52,6 @@ export function useOnboarding({ enabled = true } = {}) {
         }
     }, []);
 
-    // Keep polling callbacks on latest refs without re-creating interval each render
     const refreshRef = useRef(refresh);
     refreshRef.current = refresh;
     const fetchCandidatesRef = useRef(fetchCandidates);
@@ -48,10 +61,11 @@ export function useOnboarding({ enabled = true } = {}) {
         stopPolling();
         pollRef.current = setInterval(async () => {
             const data = await refreshRef.current();
-            // Candidates stream in per invoice while the scan runs — keep the
-            // curation list filling live instead of waiting for completion.
-            if (data?.phase === "scanning" || data?.phase === "curating") {
+            if (data?.phase === "curating" || data?.phase === "scanning") {
                 fetchCandidatesRef.current();
+            }
+            if (!needsOnboardingPoll(data)) {
+                stopPolling();
             }
         }, POLL_MS);
     }, [stopPolling]);
@@ -60,7 +74,7 @@ export function useOnboarding({ enabled = true } = {}) {
         try {
             await api.post("/seed/start");
             const data = await refresh();
-            if (data?.phase === "scanning") {
+            if (needsOnboardingPoll(data)) {
                 startPollingStable();
             }
             return { ok: true, data };
@@ -77,6 +91,7 @@ export function useOnboarding({ enabled = true } = {}) {
                 due_dates: dueDates,
             });
             stopPolling();
+            setCandidates(null);
             await refresh();
             return { ok: true, data };
         } catch (e) {
@@ -84,14 +99,25 @@ export function useOnboarding({ enabled = true } = {}) {
         }
     }, [refresh, stopPolling]);
 
-    // Load state when Gmail becomes connected
+    const discardSeedReview = useCallback(async () => {
+        try {
+            const { data } = await api.post("/seed/review/discard");
+            stopPolling();
+            setCandidates(null);
+            await refresh();
+            return { ok: true, data };
+        } catch (e) {
+            return { ok: false, error: extractError(e) };
+        }
+    }, [refresh, stopPolling]);
+
     useEffect(() => {
         if (!enabled) {
             stopPolling();
             return undefined;
         }
         refresh().then((data) => {
-            if (data?.phase === "scanning") {
+            if (needsOnboardingPoll(data)) {
                 startPollingStable();
             }
         });
@@ -102,15 +128,16 @@ export function useOnboarding({ enabled = true } = {}) {
         if (state?.phase === "curating") {
             fetchCandidates();
         }
-    }, [state?.phase, fetchCandidates]);
-
-    // Stop polling once scan finishes — but not while state is still loading (null)
-    useEffect(() => {
-        if (!state?.phase) return;
-        if (state.phase !== "scanning") {
-            stopPolling();
+        if (needsOnboardingPoll(state)) {
+            startPollingStable();
+        } else if (state?.phase && state.phase !== "curating") {
+            const pipe = state?.qbo_pipeline;
+            const pipeBusy = pipe?.status === "queued" || pipe?.status === "running";
+            if (!state?.seed_review?.seed_running && state?.seed_review?.status !== "scanning" && !pipeBusy) {
+                stopPolling();
+            }
         }
-    }, [state?.phase, stopPolling]);
+    }, [state, fetchCandidates, startPollingStable, stopPolling]);
 
     return {
         state,
@@ -120,5 +147,6 @@ export function useOnboarding({ enabled = true } = {}) {
         fetchCandidates,
         startSeed,
         confirmCuration,
+        discardSeedReview,
     };
 }

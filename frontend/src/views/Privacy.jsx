@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { LegalSection, LegalShell } from "@/components/LegalShell";
 
-const UPDATED = "July 20, 2026";
+const UPDATED = "July 23, 2026";
 const PRIVACY_EMAIL = "privacy@scotive.com";
 const SUPPORT_EMAIL = "support@scotive.com";
 
@@ -13,8 +13,8 @@ export default function PrivacyPage() {
                     This Privacy Policy explains how Scotive (“we”, “us”) collects, uses, and
                     shares information when you use scotive.com and the Scotive service
                     (the “Service”). It is written to match how the product actually works today:
-                    Gmail-connected invoice tracking, human-approved sending, and AI-assisted
-                    extraction and drafting.
+                    Gmail-connected invoice tracking, optional QuickBooks Online connection,
+                    human-approved sending, and AI-assisted extraction and drafting.
                 </p>
                 <p>
                     By using the Service you acknowledge this Policy. Related terms are in our{" "}
@@ -47,11 +47,26 @@ export default function PrivacyPage() {
                     are encrypted at rest before storage.
                 </p>
                 <p>
-                    <strong>Invoice and payment-ops data we derive.</strong> We store a structured
-                    ledger and related records, which may include:
+                    <strong>Intuit / QuickBooks Online connection (optional).</strong> When you
+                    connect QuickBooks Online we receive OAuth tokens, your QuickBooks company
+                    (realm) identifier, granted scopes (accounting API access), and connection
+                    status. Access and refresh tokens are encrypted at rest before storage. We
+                    may also receive company display metadata Intuit returns with the connection.
+                </p>
+                <p>
+                    <strong>Invoice and payment-ops data we derive or import.</strong> We store a
+                    structured ledger and related records, which may include:
                 </p>
                 <ul>
-                    <li>Client name and email, invoice references, amounts, currency, and dates</li>
+                    <li>
+                        Client name and email, invoice references, amounts, currency, and dates —
+                        from Gmail extraction and/or from QuickBooks invoice and customer records
+                        you authorize us to read
+                    </li>
+                    <li>
+                        QuickBooks identifiers (for example invoice Id, DocNumber, Balance) and
+                        paid / not-paid status we sync from QuickBooks
+                    </li>
                     <li>Status (for example invoiced, overdue, promised, disputed, paid)</li>
                     <li>
                         Evidence snippets and quotes (for example a promise date or dispute phrase)
@@ -63,9 +78,11 @@ export default function PrivacyPage() {
                     <li>Optional suppressed-sender list and client-merge preferences</li>
                 </ul>
                 <p>
-                    <strong>We do not store your entire mailbox.</strong> We store extracted facts,
-                    evidence needed for the ledger and drafts, and references so we can fetch
-                    conversation context from Gmail when you open an invoice.
+                    <strong>We do not store your entire mailbox or your entire QuickBooks company.</strong>{" "}
+                    We store extracted or imported facts needed for the ledger and drafts, evidence
+                    needed for tracking, and references so we can fetch conversation context from
+                    Gmail when you open an invoice and keep open / paid status in sync with
+                    QuickBooks when connected.
                 </p>
                 <p>
                     <strong>Usage and security data.</strong> We may process technical logs
@@ -78,16 +95,31 @@ export default function PrivacyPage() {
                 <p>We use information to:</p>
                 <ul>
                     <li>Provide, maintain, and secure the Service</li>
-                    <li>Detect invoices you sent and keep your open/paid ledger current</li>
+                    <li>
+                        Detect invoices you sent via Gmail and, when connected, import open invoices
+                        from QuickBooks into your ledger
+                    </li>
+                    <li>
+                        Keep your open / paid ledger current, including syncing paid status from
+                        QuickBooks and matching Gmail conversations to QuickBooks-sourced invoices
+                    </li>
                     <li>Interpret client replies (promises, disputes, payment claims, questions)</li>
                     <li>Generate follow-up and reply drafts for your review</li>
                     <li>
                         Send email <strong>only when you explicitly approve</strong> (or send an
                         optional daily digest you enabled), via your connected Gmail
                     </li>
+                    <li>
+                        When you mark an invoice paid or confirm payment received in Scotive for a
+                        QuickBooks-linked invoice, update that invoice in QuickBooks (for example by
+                        creating a linked Payment) so Balance reflects what you confirmed
+                    </li>
                     <li>Operate settings such as escalation timing and digests</li>
                     <li>Respond to support requests and enforce our Terms</li>
-                    <li>Improve reliability and product quality using aggregated or de-identified insights where feasible</li>
+                    <li>
+                        Improve reliability and product quality using aggregated or de-identified
+                        insights where feasible
+                    </li>
                 </ul>
             </LegalSection>
 
@@ -120,6 +152,13 @@ export default function PrivacyPage() {
                         messages, profile identity)
                     </li>
                     <li>
+                        <strong>Intuit / QuickBooks Online</strong> — OAuth and QuickBooks Online
+                        Accounting API (read open invoices and related customer fields you
+                        authorize; write payment updates when you mark a linked invoice paid in
+                        Scotive). Your use of QuickBooks remains subject to Intuit’s terms and
+                        privacy policy
+                    </li>
+                    <li>
                         <strong>OpenRouter / model providers</strong> — AI extraction and drafting
                         as described above
                     </li>
@@ -140,26 +179,29 @@ export default function PrivacyPage() {
                 <p>
                     We do not sell your personal information. Chase emails and digests are sent
                     from <strong>your</strong> Gmail account to recipients you choose (or to you,
-                    for digests).
+                    for digests). QuickBooks data stays in your Intuit company except for the
+                    ledger facts and tokens we store to operate the integration.
                 </p>
             </LegalSection>
 
             <LegalSection id="retention" title="7. Retention">
                 <p>
                     We retain account and ledger data while your account is active. OAuth tokens
-                    are kept only while Gmail remains connected (or until they expire / are revoked).
-                    Security logs are kept for a limited period needed for abuse prevention.
+                    are kept only while the related connection remains active (Gmail and/or
+                    QuickBooks), or until they expire or are revoked. Security logs are kept for
+                    a limited period needed for abuse prevention.
                 </p>
                 <p>
                     When you delete your account (Settings → delete account, with email
                     confirmation), we delete your user record and associated Service data such as
-                    invoices, events, receipts, review items, chase drafts and sends, Gmail
-                    connection and sync state, settings, merge prompts, and related tokens —
-                    subject to short-lived backups and legal retention requirements.
+                    invoices, events, receipts, review items, chase drafts and sends, Gmail and
+                    QuickBooks connection and sync state, settings, merge prompts, and related
+                    tokens — subject to short-lived backups and legal retention requirements.
                 </p>
                 <p>
-                    Disconnecting Gmail removes stored tokens but does not by itself erase your
-                    ledger; delete your account if you want a full wipe.
+                    Disconnecting Gmail or QuickBooks removes stored tokens for that connection
+                    but does not by itself erase your ledger; delete your account if you want a
+                    full wipe.
                 </p>
             </LegalSection>
 
@@ -167,8 +209,8 @@ export default function PrivacyPage() {
                 <p>
                     We use industry-standard measures appropriate to the sensitivity of the data,
                     including encrypted transport (HTTPS), hashed passwords, and encryption of
-                    Gmail OAuth tokens at rest. No method of transmission or storage is 100%
-                    secure; we cannot guarantee absolute security.
+                    Gmail and QuickBooks OAuth tokens at rest. No method of transmission or
+                    storage is 100% secure; we cannot guarantee absolute security.
                 </p>
             </LegalSection>
 
@@ -178,7 +220,14 @@ export default function PrivacyPage() {
                     <li>Access or export personal data we hold about you</li>
                     <li>Correct inaccurate account information</li>
                     <li>Delete your account and associated Service data</li>
-                    <li>Disconnect Gmail and revoke Google access (also via your Google Account permissions)</li>
+                    <li>
+                        Disconnect Gmail and revoke Google access (also via your Google Account
+                        permissions)
+                    </li>
+                    <li>
+                        Disconnect QuickBooks and revoke Intuit access (also via your Intuit
+                        account connected apps)
+                    </li>
                     <li>Object to or restrict certain processing, where applicable</li>
                 </ul>
                 <p>

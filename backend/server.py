@@ -20,6 +20,7 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, EmailStr, Field
 from starlette.middleware.cors import CORSMiddleware
 
 from gmail_oauth import build_router as build_gmail_router
+from qbo_oauth import build_router as build_qbo_router
 from scan_router import build_router as build_scan_router
 from settings_router import build_router as build_settings_router, seed_user_settings
 from incremental_sync import sync_all_users
@@ -419,6 +420,7 @@ async def reset_password(payload: ResetPasswordInput):
 # Wire routers
 api_router.include_router(auth_router)
 api_router.include_router(build_gmail_router(db, get_current_user))
+api_router.include_router(build_qbo_router(db, get_current_user))
 api_router.include_router(build_scan_router(db, get_current_user))
 api_router.include_router(build_settings_router(db, get_current_user))
 app.include_router(api_router)
@@ -455,6 +457,20 @@ async def on_startup():
     await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
     await db.password_reset_tokens.create_index("token")
     await db.gmail_connections.create_index("user_id", unique=True)
+    await db.qbo_connections.create_index("user_id", unique=True)
+    await db.qbo_connections.create_index("realm_id")
+    # Unique only when qbo_id is a real string — sparse unique still indexes
+    # qbo_id:null and breaks Gmail/manual inserts (E11000 on second invoice).
+    try:
+        await db.invoices.drop_index("user_id_1_qbo_id_1")
+    except Exception:
+        pass
+    await db.invoices.create_index(
+        [("user_id", 1), ("qbo_id", 1)],
+        unique=True,
+        name="user_id_1_qbo_id_1_partial",
+        partialFilterExpression={"qbo_id": {"$type": "string"}},
+    )
     await db.oauth_states.create_index("state", unique=True)
     await db.scan_jobs.create_index([("user_id", 1), ("started_at", -1)])
     await db.invoices.create_index([("user_id", 1), ("created_at", -1)])

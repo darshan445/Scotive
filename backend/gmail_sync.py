@@ -107,8 +107,11 @@ def sent_mail_queries(mode: SyncMode, window: str | None = None) -> list[str]:
 
 async def _onboarding_allows_incremental(db, user_id) -> bool:
     state = await db.gmail_sync_state.find_one({"user_id": user_id}) or {}
-    if state.get("curation_complete"):
+    if state.get("curation_complete") or state.get("dashboard_unlocked") or state.get("watching_sent_mail"):
         return True
+    # QBO import during Path B must not unlock incremental before dashboard unlock / curation.
+    if state.get("awaiting_curation"):
+        return False
     n = await db.invoices.count_documents({"user_id": user_id})
     return n > 0
 

@@ -4,14 +4,16 @@ import Link from "next/link";
 import { AlertTriangle, ArrowUpRight, CalendarClock, Loader2, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/AppShell";
-import { EmptyStateHero } from "@/components/EmptyStateHero";
 import { ConnectGmailButton } from "@/components/ConnectGmailButton";
 import { LedgerCard } from "@/components/LedgerCard";
 import { TodayCard } from "@/components/TodayCard";
 import { SyncStatusBar } from "@/components/SyncStatusBar";
-import { SeedScanProgress } from "@/components/SeedScanProgress";
 import { CurationScreen } from "@/components/CurationScreen";
 import { WatchingEmptyState } from "@/components/WatchingEmptyState";
+import { OnboardingConnections } from "@/components/OnboardingConnections";
+import { SeedReviewBanner } from "@/components/SeedReviewBanner";
+import { QboPipelineProgress } from "@/components/QboPipelineProgress";
+import { finishQboOnboardingImport } from "@/components/QboOnboardingStep";
 import { InvoiceDetectedBanner } from "@/components/InvoiceDetectedBanner";
 import { DueDatePromptBanner } from "@/components/DueDatePromptBanner";
 import { FollowUpPromptBanner } from "@/components/FollowUpPromptBanner";
@@ -25,11 +27,14 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 import { useGmailCallbackToast } from "@/hooks/useGmailCallbackToast";
+import { useQboConnection } from "@/hooks/useQboConnection";
+import { useQboCallbackToast } from "@/hooks/useQboCallbackToast";
 import { useLedger } from "@/hooks/useScan";
 import { useOnboarding } from "@/hooks/useOnboarding";
 import { useLiveDetection } from "@/hooks/useLiveDetection";
 import { useWorkspaceRefresh } from "@/hooks/useWorkspaceRefresh";
 import { openLedgerInvoices, historyLedgerInvoices, pausedLedgerInvoices, outstandingBalance } from "@/lib/ledgerInvoices";
+import { api, extractError } from "@/lib/api";
 
 const OPEN_STATUSES = new Set(["invoiced", "overdue", "promised", "partially_paid", "promise_broken", "disputed", "paid_unconfirmed"]);
 
@@ -116,287 +121,6 @@ function StatsStrip({ ledger }) {
     );
 }
 
-export default function DashboardPage() {
-    const { status, refresh } = useGmailConnection();
-    const connected = status?.connected || status?.status === "revoked";
-    const {
-        state: onboarding,
-        candidates,
-        startSeed,
-        confirmCuration,
-        refresh: refreshOnboarding,
-    } = useOnboarding({ enabled: connected });
-
-    const onboardingReady = onboarding != null;
-    const pastOnboarding = onboarding?.phase === "complete" || onboarding?.phase === "watching";
-    const onboardingActive =
-        onboarding?.phase === "scanning" ||
-        onboarding?.phase === "curating" ||
-        onboarding?.phase === "needs_seed";
-    // Wait for Gmail + onboarding before choosing setup vs greeting UI (avoids headline flash).
-    const bootstrapping = status === null || (connected && !onboardingReady);
-
-    const { data: ledger, refresh: refreshLedger } = useLedger(pastOnboarding);
-    const { refreshAll: refreshWorkspace } = useWorkspaceRefresh({
-        refreshLedger,
-        refreshOnboarding,
-    });
-
-    const refreshAll = useCallback(async () => {
-        await refreshWorkspace();
-        setFollowUpPrompt(null);
-        setDueDatePrompt(null);
-    }, [refreshWorkspace]);
-    const autoSeedRef = useRef(false);
-    const [confirmBusy, setConfirmBusy] = useState(false);
-    const [chaseInvoice, setChaseInvoice] = useState(null);
-    const [latestDetection, setLatestDetection] = useState(null);
-    const [dueDatePrompt, setDueDatePrompt] = useState(null);
-    const [followUpPrompt, setFollowUpPrompt] = useState(null);
-
-    const hasOpenInvoices = useMemo(
-        () => openLedgerInvoices(ledger?.invoices).length > 0,
-        [ledger?.invoices],
-    );
-    const openInvoiceCount = useMemo(
-        () => openLedgerInvoices(ledger?.invoices).length,
-        [ledger?.invoices],
-    );
-    const paidInvoiceCount = useMemo(
-        () => historyLedgerInvoices(ledger?.invoices).length,
-        [ledger?.invoices],
-    );
-    const pausedInvoiceCount = useMemo(
-        () => pausedLedgerInvoices(ledger?.invoices).length,
-        [ledger?.invoices],
-    );
-
-    const handleInvoiceDetected = useCallback(async (inv) => {
-        setLatestDetection(inv);
-        const name = inv.counterparty_name || inv.counterparty_email || "Client";
-        toast.success("Invoice detected", {
-            description: `${name} · ${formatMoney(inv.amount, inv.currency || "USD")}`,
-            duration: 8000,
-        });
-        await refreshAll();
-    }, [refreshAll]);
-
-    const { ackAll } = useLiveDetection({
-        enabled: pastOnboarding && status?.connected,
-        onDetected: handleInvoiceDetected,
-        onDueDatePrompt: (prompt) => setDueDatePrompt(prompt),
-        onFollowUpPrompt: (prompt) => setFollowUpPrompt(prompt),
-    });
-
-    async function dismissDetection() {
-        setLatestDetection(null);
-        await ackAll();
-    }
-
-    function handleSyncDetected(newInvoices) {
-        if (newInvoices?.length) {
-            handleInvoiceDetected(newInvoices[newInvoices.length - 1]);
-        } else {
-            void refreshAll();
-        }
-    }
-
-    useGmailCallbackToast(
-        useCallback(async (result) => {
-            await refresh();
-            if (result === "connected" || result === "send_missing") {
-                autoSeedRef.current = true;
-                await startSeed();
-                await refreshOnboarding();
-            }
-        }, [refresh, startSeed, refreshOnboarding]),
-    );
-
-    useEffect(() => {
-        if (!status?.connected) return;
-        refreshOnboarding();
-    }, [status?.connected, refreshOnboarding]);
-
-    useEffect(() => {
-        if (autoSeedRef.current) return;
-        if (!status?.connected) return;
-        if (onboarding?.phase === "needs_seed") {
-            autoSeedRef.current = true;
-            startSeed();
-        }
-    }, [status?.connected, onboarding?.phase, startSeed]);
-
-    async function handleConfirm(ids, trackNone, dueDates = {}) {
-        setConfirmBusy(true);
-        const res = await confirmCuration(ids, trackNone, dueDates);
-        setConfirmBusy(false);
-        if (res?.ok) {
-            await refreshAll();
-        }
-        return res;
-    }
-
-    return (
-        <AppShell
-            testId="dashboard-root"
-            afterMain={(
-                <ChaseDialog
-                    invoice={chaseInvoice}
-                    open={!!chaseInvoice}
-                    onOpenChange={(o) => !o && setChaseInvoice(null)}
-                    onSent={refreshAll}
-                />
-            )}
-        >
-                {bootstrapping ? (
-                    <DashboardSkeleton />
-                ) : connected ? (
-                    <div className="py-8 md:py-12 space-y-6" data-testid="connected-dashboard">
-                        <div className="animate-fade-up flex flex-wrap items-end justify-between gap-4">
-                            <div>
-                                <div className="eyebrow mb-2">
-                                    {pastOnboarding
-                                        ? new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })
-                                        : "Setup"}
-                                </div>
-                                <h1 className="type-display text-3xl md:text-4xl">
-                                    {pastOnboarding ? greeting() : "Let's find what you're still owed"}
-                                </h1>
-                                <p className="type-body mt-1.5 text-base">
-                                    {onboarding?.phase === "scanning"
-                                        ? "Scanning sent invoices from the last 90 days…"
-                                        : onboarding?.phase === "curating"
-                                          ? "You know your last 90 days — pick what's still unpaid."
-                                          : pastOnboarding
-                                            ? "Open invoices sorted by what's due next."
-                                            : "Forward-tracking from here — not inbox archaeology."}
-                                </p>
-                            </div>
-                            {pastOnboarding ? (
-                                <SyncStatusBar
-                                    watching
-                                    openInvoiceCount={
-                                        (ledger?.invoices || []).filter(
-                                            (i) => OPEN_STATUSES.has(i.status) && !i.tracking_paused,
-                                        ).length
-                                    }
-                                    onSynced={handleSyncDetected}
-                                />
-                            ) : null}
-                        </div>
-
-                        {onboarding?.phase === "scanning" || onboarding?.phase === "curating" ? (
-                            candidates?.length ? (
-                                // One mount across scanning → curating so streamed rows and
-                                // the user's un-ticks survive the phase flip.
-                                <CurationScreen
-                                    candidates={candidates}
-                                    busy={confirmBusy}
-                                    onConfirm={handleConfirm}
-                                    scanning={onboarding?.phase === "scanning"}
-                                />
-                            ) : onboarding?.phase === "scanning" ? (
-                                <SeedScanProgress
-                                    scanPhase={onboarding?.scan_phase}
-                                    counts={onboarding?.counts}
-                                />
-                            ) : candidates === null ? (
-                                <div className="flex items-center gap-2 text-sm text-muted-foreground py-8 justify-center">
-                                    <Loader2 className="w-4 h-4 animate-spin" /> Loading invoices…
-                                </div>
-                            ) : (
-                                <CurationScreen
-                                    candidates={candidates}
-                                    busy={confirmBusy}
-                                    onConfirm={handleConfirm}
-                                />
-                            )
-                        ) : null}
-
-                        {onboarding?.phase === "needs_seed" ? (
-                            <div
-                                className="surface-card p-8 flex items-center gap-3 text-sm text-muted-foreground"
-                                data-testid="seed-preparing">
-                                <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
-                                Preparing your invoice scan…
-                            </div>
-                        ) : null}
-
-                        {!onboardingActive && (status?.status === "revoked" || status?.status === "send_missing") ? (
-                            <GmailIssueBanner status={status} />
-                        ) : null}
-
-                        {pastOnboarding ? (
-                            ledger == null ? (
-                                <DashboardContentSkeleton />
-                            ) : (
-                                <>
-                                    <InvoiceDetectedBanner detection={latestDetection} onDismiss={dismissDetection} />
-
-                                    <DueDatePromptBanner
-                                        prompt={dueDatePrompt}
-                                        onDismiss={() => setDueDatePrompt(null)}
-                                        onChanged={refreshAll}
-                                    />
-
-                                    <FollowUpPromptBanner
-                                        prompt={followUpPrompt}
-                                        onDismiss={() => setFollowUpPrompt(null)}
-                                        onChanged={refreshAll}
-                                        onReview={(prompt) => {
-                                            const inv = (ledger?.invoices || []).find((i) => i._id === prompt.invoice_id);
-                                            if (inv) {
-                                                setChaseInvoice(inv);
-                                                setFollowUpPrompt(null);
-                                            }
-                                        }}
-                                    />
-
-                                    {hasOpenInvoices ? <StatsStrip ledger={ledger} /> : null}
-
-                                    {onboarding?.phase === "watching" && !hasOpenInvoices ? (
-                                        <WatchingEmptyState onChanged={refreshAll} />
-                                    ) : (
-                                        <TodayCard onChanged={refreshAll} />
-                                    )}
-
-                                    <Tabs defaultValue="ledger" className="w-full" data-testid="dashboard-tabs">
-                                        <TabsList className="bg-muted/60 rounded-full h-auto p-1">
-                                            <TabsTrigger value="ledger" className="rounded-full px-4 py-2 text-sm data-[state=active]:shadow-sm" data-testid="tab-ledger">
-                                                Open{openInvoiceCount ? ` (${openInvoiceCount})` : ""}
-                                            </TabsTrigger>
-                                            {pausedInvoiceCount > 0 ? (
-                                                <TabsTrigger value="paused" className="rounded-full px-4 py-2 text-sm data-[state=active]:shadow-sm" data-testid="tab-paused">
-                                                    Paused ({pausedInvoiceCount})
-                                                </TabsTrigger>
-                                            ) : null}
-                                            <TabsTrigger value="paid" className="rounded-full px-4 py-2 text-sm data-[state=active]:shadow-sm" data-testid="tab-paid">
-                                                Paid{paidInvoiceCount ? ` (${paidInvoiceCount})` : ""}
-                                            </TabsTrigger>
-                                        </TabsList>
-                                        <TabsContent value="paid" className="mt-4">
-                                            <LedgerCard ledger={ledger} onChanged={refreshAll} variant="paid" />
-                                        </TabsContent>
-                                        {pausedInvoiceCount > 0 ? (
-                                            <TabsContent value="paused" className="mt-4">
-                                                <LedgerCard ledger={ledger} onChanged={refreshAll} variant="paused" />
-                                            </TabsContent>
-                                        ) : null}
-                                        <TabsContent value="ledger" className="mt-4">
-                                            <LedgerCard ledger={ledger} onChanged={refreshAll} variant="open" />
-                                        </TabsContent>
-                                    </Tabs>
-                                </>
-                            )
-                        ) : null}
-                    </div>
-                ) : (
-                    <EmptyStateHero />
-                )}
-        </AppShell>
-    );
-}
-
 function GmailIssueBanner({ status }) {
     const revoked = status?.status === "revoked";
     return (
@@ -436,5 +160,425 @@ function GmailIssueBanner({ status }) {
                 variant={revoked ? "default" : "secondary"}
             />
         </div>
+    );
+}
+
+export default function DashboardPage() {
+    const { status, refresh } = useGmailConnection();
+    const { status: qboStatus, refresh: refreshQbo } = useQboConnection();
+    const gmailConnected = Boolean(status?.connected);
+    const {
+        state: onboarding,
+        candidates,
+        startSeed,
+        confirmCuration,
+        discardSeedReview,
+        fetchCandidates,
+        refresh: refreshOnboarding,
+    } = useOnboarding({ enabled: true });
+
+    const onboardingReady = onboarding != null;
+    const pastOnboarding = onboarding?.phase === "complete" || onboarding?.phase === "watching";
+    const showConnections =
+        !pastOnboarding &&
+        (onboarding?.phase === "connections" || onboarding?.phase == null);
+    const showPreparing = onboarding?.phase === "preparing";
+    const showCuration = onboarding?.phase === "curating";
+    const bootstrapping = status === null || !onboardingReady;
+    const seedReview = onboarding?.seed_review;
+    const qboPipeline = onboarding?.qbo_pipeline;
+    const showSeedReviewBanner =
+        pastOnboarding &&
+        Boolean(seedReview) &&
+        !seedReview.seed_running &&
+        (seedReview.pending_count || 0) > 0;
+    const showQboPipeline =
+        pastOnboarding &&
+        (qboPipeline?.status === "queued" || qboPipeline?.status === "running");
+
+    const { data: ledger, refresh: refreshLedger } = useLedger(pastOnboarding);
+    const { refreshAll: refreshWorkspace } = useWorkspaceRefresh({
+        refreshLedger,
+        refreshOnboarding,
+    });
+
+    const refreshAll = useCallback(async () => {
+        await refreshWorkspace();
+        setFollowUpPrompt(null);
+        setDueDatePrompt(null);
+    }, [refreshWorkspace]);
+    const autoSeedRef = useRef(false);
+    const qboImportRef = useRef(false);
+    const [confirmBusy, setConfirmBusy] = useState(false);
+    const [chaseInvoice, setChaseInvoice] = useState(null);
+    const [latestDetection, setLatestDetection] = useState(null);
+    const [dueDatePrompt, setDueDatePrompt] = useState(null);
+    const [followUpPrompt, setFollowUpPrompt] = useState(null);
+    const [reviewingSeed, setReviewingSeed] = useState(false);
+    const [seedReviewBusy, setSeedReviewBusy] = useState(false);
+
+    const beginSeed = useCallback(async () => {
+        if (autoSeedRef.current) return;
+        autoSeedRef.current = true;
+        try {
+            await startSeed();
+        } catch {
+            autoSeedRef.current = false;
+        }
+        await refreshOnboarding();
+    }, [startSeed, refreshOnboarding]);
+
+    const runQboImport = useCallback(async () => {
+        if (qboImportRef.current) return;
+        qboImportRef.current = true;
+        try {
+            const counts = await finishQboOnboardingImport();
+            const n = (counts.created || 0) + (counts.updated || 0) + (counts.merged || 0);
+            if (n > 0) {
+                toast.success(`Imported ${n} open invoice${n === 1 ? "" : "s"} from QuickBooks`);
+            } else {
+                toast.success("QuickBooks connected");
+            }
+            await refreshOnboarding();
+            await refreshQbo();
+        } catch (e) {
+            qboImportRef.current = false;
+            toast.error(extractError(e));
+            await api.post("/onboarding/qbo-step", { action: "connected" }).catch(() => {});
+            await refreshOnboarding();
+        }
+    }, [refreshOnboarding, refreshQbo]);
+
+    const hasOpenInvoices = useMemo(
+        () => openLedgerInvoices(ledger?.invoices).length > 0,
+        [ledger?.invoices],
+    );
+    const openInvoiceCount = useMemo(
+        () => openLedgerInvoices(ledger?.invoices).length,
+        [ledger?.invoices],
+    );
+    const paidInvoiceCount = useMemo(
+        () => historyLedgerInvoices(ledger?.invoices).length,
+        [ledger?.invoices],
+    );
+    const pausedInvoiceCount = useMemo(
+        () => pausedLedgerInvoices(ledger?.invoices).length,
+        [ledger?.invoices],
+    );
+
+    const handleInvoiceDetected = useCallback(async (inv) => {
+        setLatestDetection(inv);
+        const name = inv.counterparty_name || inv.counterparty_email || "Client";
+        toast.success("Invoice detected", {
+            description: `${name} · ${formatMoney(inv.amount, inv.currency || "USD")}`,
+            duration: 8000,
+        });
+        await refreshAll();
+    }, [refreshAll]);
+
+    const { ackAll } = useLiveDetection({
+        enabled: pastOnboarding && gmailConnected,
+        onDetected: handleInvoiceDetected,
+        onDueDatePrompt: (prompt) => setDueDatePrompt(prompt),
+        onFollowUpPrompt: (prompt) => setFollowUpPrompt(prompt),
+    });
+
+    async function dismissDetection() {
+        setLatestDetection(null);
+        await ackAll();
+    }
+
+    function handleSyncDetected(newInvoices) {
+        if (newInvoices?.length) {
+            handleInvoiceDetected(newInvoices[newInvoices.length - 1]);
+        } else {
+            void refreshAll();
+        }
+    }
+
+    useGmailCallbackToast(
+        useCallback(async (result) => {
+            await refresh();
+            if (result === "connected" || result === "send_missing") {
+                // Silent 90d seed — no progress UI on the connections screen.
+                await beginSeed();
+                await refreshOnboarding();
+            }
+        }, [refresh, beginSeed, refreshOnboarding]),
+    );
+
+    useQboCallbackToast(
+        useCallback(async (result) => {
+            await refreshQbo();
+            if (result === "connected" && !pastOnboarding) {
+                await runQboImport();
+            }
+        }, [refreshQbo, pastOnboarding, runQboImport]),
+    );
+
+    useEffect(() => {
+        refreshOnboarding();
+    }, [status?.connected, qboStatus?.connected, refreshOnboarding]);
+
+    // Gmail connected on connections screen → start silent seed.
+    useEffect(() => {
+        if (!gmailConnected) return;
+        if (pastOnboarding) return;
+        if (onboarding?.phase !== "connections" && onboarding?.phase !== "preparing") return;
+        void beginSeed();
+    }, [gmailConnected, pastOnboarding, onboarding?.phase, beginSeed]);
+
+    const qboPipelineStatusRef = useRef(null);
+    useEffect(() => {
+        const prev = qboPipelineStatusRef.current;
+        const next = qboPipeline?.status || null;
+        qboPipelineStatusRef.current = next;
+        if (prev && (prev === "queued" || prev === "running") && next === "complete") {
+            void refreshAll();
+            toast.success("QuickBooks conversations updated");
+        }
+    }, [qboPipeline?.status, refreshAll]);
+
+    async function handleConfirm(ids, trackNone, dueDates = {}) {
+        setConfirmBusy(true);
+        const res = await confirmCuration(ids, trackNone, dueDates);
+        setConfirmBusy(false);
+        if (res?.ok) {
+            setReviewingSeed(false);
+            await refreshAll();
+        }
+        return res;
+    }
+
+    async function handleSeedReviewOpen() {
+        setReviewingSeed(true);
+        setSeedReviewBusy(true);
+        await fetchCandidates();
+        setSeedReviewBusy(false);
+    }
+
+    async function handleSeedReviewDiscard() {
+        setSeedReviewBusy(true);
+        const res = await discardSeedReview();
+        setSeedReviewBusy(false);
+        setReviewingSeed(false);
+        if (res?.ok) {
+            toast.success("Gmail invoices dismissed");
+            await refreshAll();
+        } else {
+            toast.error(res?.error || "Could not discard");
+        }
+    }
+
+    async function handleConnectionsContinue(data) {
+        await refreshOnboarding();
+        if (data?.next === "dashboard") {
+            await refreshAll();
+            toast.success("You're set", {
+                description: data?.qbo_connected
+                    ? "QuickBooks invoices are on your ledger."
+                    : undefined,
+            });
+        }
+    }
+
+    const qboIsConnected = Boolean(qboStatus?.connected || onboarding?.qbo_connected);
+
+    return (
+        <AppShell
+            testId="dashboard-root"
+            afterMain={(
+                <ChaseDialog
+                    invoice={chaseInvoice}
+                    open={!!chaseInvoice}
+                    onOpenChange={(o) => !o && setChaseInvoice(null)}
+                    onSent={refreshAll}
+                />
+            )}
+        >
+            {bootstrapping ? (
+                <DashboardSkeleton />
+            ) : showConnections ? (
+                <div className="py-8 md:py-12" data-testid="onboarding-connections-wrap">
+                    <OnboardingConnections
+                        gmailConnected={gmailConnected || Boolean(onboarding?.gmail_connected)}
+                        qboConnected={qboIsConnected}
+                        onContinue={handleConnectionsContinue}
+                        onQboImported={() => {
+                            qboImportRef.current = true;
+                            void refreshQbo();
+                        }}
+                    />
+                </div>
+            ) : (
+                <div className="py-8 md:py-12 space-y-6" data-testid="connected-dashboard">
+                    <div className="animate-fade-up flex flex-wrap items-end justify-between gap-4">
+                        <div>
+                            <div className="eyebrow mb-2">
+                                {pastOnboarding
+                                    ? new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })
+                                    : "Setup"}
+                            </div>
+                            <h1 className="type-display text-3xl md:text-4xl">
+                                {pastOnboarding ? greeting() : "Let's find what you're still owed"}
+                            </h1>
+                            <p className="type-body mt-1.5 text-base">
+                                {showPreparing
+                                    ? "Preparing invoices from Gmail…"
+                                    : showCuration
+                                      ? "You know your last 90 days — pick what's still unpaid."
+                                      : pastOnboarding
+                                        ? "Open invoices sorted by what's due next."
+                                        : "Forward-tracking from here — not inbox archaeology."}
+                            </p>
+                        </div>
+                        {pastOnboarding ? (
+                            <SyncStatusBar
+                                watching
+                                openInvoiceCount={
+                                    (ledger?.invoices || []).filter(
+                                        (i) => OPEN_STATUSES.has(i.status) && !i.tracking_paused,
+                                    ).length
+                                }
+                                onSynced={handleSyncDetected}
+                            />
+                        ) : null}
+                    </div>
+
+                    {showPreparing ? (
+                        <div
+                            className="surface-card p-8 flex items-center gap-3 text-sm text-muted-foreground justify-center"
+                            data-testid="onboarding-preparing"
+                        >
+                            <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
+                            Almost ready…
+                        </div>
+                    ) : null}
+
+                    {showCuration ? (
+                        candidates?.length ? (
+                            <CurationScreen
+                                candidates={candidates}
+                                busy={confirmBusy}
+                                onConfirm={handleConfirm}
+                                scanning={false}
+                                qboAware={false}
+                            />
+                        ) : candidates === null ? (
+                            <div className="flex items-center gap-2 text-sm text-muted-foreground py-8 justify-center">
+                                <Loader2 className="w-4 h-4 animate-spin" /> Loading invoices…
+                            </div>
+                        ) : (
+                            <CurationScreen
+                                candidates={candidates || []}
+                                busy={confirmBusy}
+                                onConfirm={handleConfirm}
+                                qboAware={false}
+                            />
+                        )
+                    ) : null}
+
+                    {pastOnboarding && (status?.status === "revoked" || status?.status === "send_missing") ? (
+                        <GmailIssueBanner status={status} />
+                    ) : null}
+
+                    {pastOnboarding ? (
+                        ledger == null ? (
+                            <DashboardContentSkeleton />
+                        ) : (
+                            <>
+                                {showQboPipeline ? (
+                                    <QboPipelineProgress pipeline={qboPipeline} />
+                                ) : null}
+
+                                {showSeedReviewBanner ? (
+                                    <SeedReviewBanner
+                                        pendingCount={seedReview?.pending_count || 0}
+                                        reviewing={reviewingSeed}
+                                        busy={seedReviewBusy || confirmBusy}
+                                        onReview={handleSeedReviewOpen}
+                                        onDiscard={handleSeedReviewDiscard}
+                                    />
+                                ) : null}
+
+                                {reviewingSeed ? (
+                                    seedReviewBusy || candidates === null ? (
+                                        <div className="flex items-center gap-2 text-sm text-muted-foreground py-8 justify-center">
+                                            <Loader2 className="w-4 h-4 animate-spin" /> Loading invoices…
+                                        </div>
+                                    ) : (
+                                        <CurationScreen
+                                            candidates={candidates || []}
+                                            busy={confirmBusy}
+                                            onConfirm={handleConfirm}
+                                            scanning={false}
+                                            qboAware
+                                        />
+                                    )
+                                ) : (
+                                    <>
+                                <InvoiceDetectedBanner detection={latestDetection} onDismiss={dismissDetection} />
+
+                                <DueDatePromptBanner
+                                    prompt={dueDatePrompt}
+                                    onDismiss={() => setDueDatePrompt(null)}
+                                    onChanged={refreshAll}
+                                />
+
+                                <FollowUpPromptBanner
+                                    prompt={followUpPrompt}
+                                    onDismiss={() => setFollowUpPrompt(null)}
+                                    onChanged={refreshAll}
+                                    onReview={(prompt) => {
+                                        const inv = (ledger?.invoices || []).find((i) => i._id === prompt.invoice_id);
+                                        if (inv) {
+                                            setChaseInvoice(inv);
+                                            setFollowUpPrompt(null);
+                                        }
+                                    }}
+                                />
+
+                                {hasOpenInvoices ? <StatsStrip ledger={ledger} /> : null}
+
+                                {onboarding?.phase === "watching" && !hasOpenInvoices ? (
+                                    <WatchingEmptyState onChanged={refreshAll} />
+                                ) : (
+                                    <TodayCard onChanged={refreshAll} />
+                                )}
+
+                                <Tabs defaultValue="ledger" className="w-full" data-testid="dashboard-tabs">
+                                    <TabsList className="bg-muted/60 rounded-full h-auto p-1">
+                                        <TabsTrigger value="ledger" className="rounded-full px-4 py-2 text-sm data-[state=active]:shadow-sm" data-testid="tab-ledger">
+                                            Open{openInvoiceCount ? ` (${openInvoiceCount})` : ""}
+                                        </TabsTrigger>
+                                        {pausedInvoiceCount > 0 ? (
+                                            <TabsTrigger value="paused" className="rounded-full px-4 py-2 text-sm data-[state=active]:shadow-sm" data-testid="tab-paused">
+                                                Paused ({pausedInvoiceCount})
+                                            </TabsTrigger>
+                                        ) : null}
+                                        <TabsTrigger value="paid" className="rounded-full px-4 py-2 text-sm data-[state=active]:shadow-sm" data-testid="tab-paid">
+                                            Paid{paidInvoiceCount ? ` (${paidInvoiceCount})` : ""}
+                                        </TabsTrigger>
+                                    </TabsList>
+                                    <TabsContent value="paid" className="mt-4">
+                                        <LedgerCard ledger={ledger} onChanged={refreshAll} variant="paid" />
+                                    </TabsContent>
+                                    {pausedInvoiceCount > 0 ? (
+                                        <TabsContent value="paused" className="mt-4">
+                                            <LedgerCard ledger={ledger} onChanged={refreshAll} variant="paused" />
+                                        </TabsContent>
+                                    ) : null}
+                                    <TabsContent value="ledger" className="mt-4">
+                                        <LedgerCard ledger={ledger} onChanged={refreshAll} variant="open" />
+                                    </TabsContent>
+                                </Tabs>
+                                    </>
+                                )}
+                            </>
+                        )
+                    ) : null}
+                </div>
+            )}
+        </AppShell>
     );
 }
