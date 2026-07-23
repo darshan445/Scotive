@@ -7,6 +7,7 @@ export const metadata = pageMetadata({
     description:
         "Zoho Books invoice chasing is on the Scotive roadmap. Pull unpaid invoices into one ledger, sync paid signals, and chase with human-approved email follow-ups — alongside Gmail and QuickBooks Online.",
     path: "/zoho-books-invoice-chasing",
+    noindex: true,
     keywords: [
         "Zoho Books collections",
         "Zoho Books invoice chasing",

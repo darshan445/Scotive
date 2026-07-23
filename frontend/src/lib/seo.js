@@ -18,6 +18,9 @@ export const PRIMARY_KEYWORDS = [
     "unpaid invoice reminder",
     "invoice to cash",
     "automated invoice reminders",
+    "invoice follow up",
+    "invoice reminder email template",
+    "how to politely follow up on an invoice",
 ];
 
 /** Competitor-overlap terms (Chaser, Upflow, Gaviti, PaidChaser, ChaseAI). */
@@ -62,6 +65,7 @@ export function pageMetadata({
     description,
     path,
     keywords = [],
+    noindex = false,
 }) {
     const fullTitle = title.includes("Scotive") ? title : `${title} · Scotive`;
     const kw = [
@@ -77,6 +81,9 @@ export function pageMetadata({
         description,
         keywords: kw,
         alternates: { canonical: path },
+        robots: noindex
+            ? { index: false, follow: true }
+            : { index: true, follow: true },
         openGraph: {
             url: path,
             title: fullTitle,

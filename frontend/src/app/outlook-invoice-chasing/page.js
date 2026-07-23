@@ -7,6 +7,7 @@ export const metadata = pageMetadata({
     description:
         "Outlook / Microsoft 365 invoice chasing is on the Scotive roadmap. Same conversation-aware unpaid invoice tracking and human-approved follow-ups — not locked to Gmail forever.",
     path: "/outlook-invoice-chasing",
+    noindex: true,
     keywords: [
         "Outlook invoice chasing",
         "Microsoft 365 accounts receivable",

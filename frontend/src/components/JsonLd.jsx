@@ -12,10 +12,15 @@ export function JsonLd() {
                 "@id": `${SITE}/#organization`,
                 name: "Scotive",
                 url: SITE,
-                logo: `${SITE}/logo512.png`,
+                logo: {
+                    "@type": "ImageObject",
+                    url: `${SITE}/logo512.png`,
+                },
+                image: `${SITE}/scotive-icon.png`,
                 description:
                     "Invoice chasing software for freelancers, agencies, consultants, and any team that bills clients — track unpaid invoices from email and accounting tools, with human-approved follow-ups.",
                 email: "support@scotive.com",
+                sameAs: [],
             },
             {
                 "@type": "WebSite",
@@ -27,12 +32,14 @@ export function JsonLd() {
             },
             {
                 "@type": "SoftwareApplication",
+                "@id": `${SITE}/#software`,
                 name: "Scotive",
                 applicationCategory: "BusinessApplication",
                 operatingSystem: "Web",
                 url: SITE,
+                image: `${SITE}/logo512.png`,
                 description:
-                    "Invoice chasing and accounts receivable follow-up software for freelancers, agencies, consultants, professional services, and other teams that bill clients. Connects email (Gmail today; Outlook next) and accounting (QuickBooks Online today; Zoho Books and FreshBooks next). Drafts payment follow-ups you approve before send.",
+                    "Invoice chasing software that tracks unpaid invoices from Gmail and QuickBooks Online, reads client replies for promises and disputes, and drafts follow-ups you approve before sending. Outlook, Zoho Books, and FreshBooks on the roadmap.",
                 audience: {
                     "@type": "Audience",
                     audienceType:
@@ -50,6 +57,7 @@ export function JsonLd() {
                     priceCurrency: "USD",
                     description: "Free to start",
                 },
+                provider: { "@id": `${SITE}/#organization` },
             },
         ],
     };

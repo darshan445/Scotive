@@ -13,8 +13,7 @@ export function MarketingShell({
 }) {
     const nav = [
         { href: "/invoice-chasing-software", label: "Invoice chasing" },
-        { href: "/chase-unpaid-invoices", label: "Unpaid invoices" },
-        { href: "/accounts-receivable-automation", label: "AR automation" },
+        { href: "/guides", label: "Guides" },
         { href: "/integrations", label: "Integrations" },
     ];
 
@@ -75,11 +74,10 @@ export function MarketingShell({
                             <li><Link href="/chase-unpaid-invoices" className="hover:text-foreground">Chase unpaid invoices</Link></li>
                             <li><Link href="/accounts-receivable-automation" className="hover:text-foreground">AR automation</Link></li>
                             <li><Link href="/overdue-invoice-reminder" className="hover:text-foreground">Overdue invoice reminders</Link></li>
+                            <li><Link href="/guides" className="hover:text-foreground">Guides</Link></li>
+                            <li><Link href="/guides/invoice-follow-up-email-templates" className="hover:text-foreground">Invoice follow-up templates</Link></li>
                             <li><Link href="/integrations" className="hover:text-foreground">Integrations</Link></li>
                             <li><Link href="/quickbooks-invoice-chasing" className="hover:text-foreground">QuickBooks invoice chasing</Link></li>
-                            <li><Link href="/outlook-invoice-chasing" className="hover:text-foreground">Outlook invoice chasing</Link></li>
-                            <li><Link href="/zoho-books-invoice-chasing" className="hover:text-foreground">Zoho Books</Link></li>
-                            <li><Link href="/freshbooks-invoice-chasing" className="hover:text-foreground">FreshBooks</Link></li>
                             <li><Link href="/register" className="hover:text-foreground">Get started</Link></li>
                         </ul>
                     </div>

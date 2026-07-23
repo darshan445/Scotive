@@ -18,6 +18,7 @@ import {
     Wallet,
 } from "lucide-react";
 import { BrandMark } from "@/components/BrandMark";
+import { FaqSection, HOME_FAQS } from "@/components/FaqSection";
 
 function SectionEyebrow({ children }) {
     return <div className="eyebrow mb-3">{children}</div>;
@@ -247,6 +248,12 @@ export default function LandingPage() {
                                 className="px-3 py-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
                             >
                                 Product
+                            </Link>
+                            <Link
+                                href="/guides"
+                                className="px-3 py-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                            >
+                                Guides
                             </Link>
                             <Link
                                 href="/integrations"
@@ -525,22 +532,22 @@ export default function LandingPage() {
                                     detail: "How Scotive compares to heavy AR suites.",
                                 },
                                 {
-                                    href: "/chase-unpaid-invoices",
+                                    href: "/guides/invoice-follow-up-email-templates",
+                                    icon: Send,
+                                    title: "Follow-up email templates",
+                                    detail: "Copy-paste reminders that don't sound awkward.",
+                                },
+                                {
+                                    href: "/guides/polite-reminder-for-unpaid-invoice",
                                     icon: BellRing,
-                                    title: "Chase unpaid invoices",
-                                    detail: "Human-approved follow-ups that actually get sent.",
+                                    title: "Unpaid invoice reminders",
+                                    detail: "When to nudge and what to say.",
                                 },
                                 {
-                                    href: "/accounts-receivable-automation",
-                                    icon: Wallet,
-                                    title: "AR automation",
-                                    detail: "Automation with a human gate — not fire-and-forget.",
-                                },
-                                {
-                                    href: "/overdue-invoice-reminder",
+                                    href: "/guides",
                                     icon: AlertTriangle,
-                                    title: "Overdue invoice reminders",
-                                    detail: "Tone that matches how late the invoice really is.",
+                                    title: "All guides",
+                                    detail: "Polite follow-ups, broken promises, and more.",
                                 },
                             ].map((item) => (
                                 <Link
@@ -621,6 +628,8 @@ export default function LandingPage() {
                     </div>
                 </section>
 
+                <FaqSection items={HOME_FAQS} />
+
                 <section className="py-20 md:py-28" data-testid="landing-final-cta">
                     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                         <div className="rounded-3xl ink-panel px-8 py-14 md:px-16 md:py-20 text-center relative overflow-hidden">
@@ -670,6 +679,7 @@ export default function LandingPage() {
                             <li><Link href="/invoice-chasing-software" className="hover:text-foreground">Invoice chasing software</Link></li>
                             <li><Link href="/chase-unpaid-invoices" className="hover:text-foreground">Chase unpaid invoices</Link></li>
                             <li><Link href="/accounts-receivable-automation" className="hover:text-foreground">AR automation</Link></li>
+                            <li><Link href="/guides" className="hover:text-foreground">Guides</Link></li>
                             <li><Link href="/integrations" className="hover:text-foreground">Integrations</Link></li>
                             <li><Link href="/register" className="hover:text-foreground">Get started</Link></li>
                         </ul>

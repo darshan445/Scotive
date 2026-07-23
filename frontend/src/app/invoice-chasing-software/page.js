@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { MarketingCta, MarketingHero, MarketingShell } from "@/components/MarketingShell";
+import { FaqSection, HOME_FAQS } from "@/components/FaqSection";
 import { pageMetadata } from "@/lib/seo";
 
 export const metadata = pageMetadata({
@@ -56,22 +57,25 @@ export default function InvoiceChasingSoftwarePage() {
                     </p>
                 </div>
                 <div>
-                    <h2 className="type-title text-2xl md:text-3xl">Built to rank — and to get you paid</h2>
+                    <h2 className="type-title text-2xl md:text-3xl">Practical follow-up guides</h2>
                     <p className="type-body mt-3 text-muted-foreground">
-                        Whether you searched for invoice chasing software, payment follow-up tools, or an overdue
-                        invoice tracker, Scotive combines tracking, reply intelligence, and human-approved sends in
-                        one calm workflow.{" "}
-                        <Link href="/chase-unpaid-invoices" className="text-foreground underline underline-offset-2">
-                            Learn how to chase unpaid invoices
+                        Free writing you can use today:{" "}
+                        <Link href="/guides/invoice-follow-up-email-templates" className="text-foreground underline underline-offset-2">
+                            invoice follow-up email templates
                         </Link>
                         {" · "}
-                        <Link href="/accounts-receivable-automation" className="text-foreground underline underline-offset-2">
-                            AR automation overview
+                        <Link href="/guides/polite-reminder-for-unpaid-invoice" className="text-foreground underline underline-offset-2">
+                            unpaid invoice reminders
+                        </Link>
+                        {" · "}
+                        <Link href="/guides" className="text-foreground underline underline-offset-2">
+                            all guides
                         </Link>
                         .
                     </p>
                 </div>
             </section>
+            <FaqSection items={HOME_FAQS} title="Invoice chasing FAQ" />
             <MarketingCta />
         </MarketingShell>
     );

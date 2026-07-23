@@ -7,6 +7,7 @@ export const metadata = pageMetadata({
     description:
         "FreshBooks invoice chasing is on the Scotive roadmap. Track unpaid FreshBooks invoices, sync paid status, and send human-approved payment follow-ups from your email — multi-accounting by design.",
     path: "/freshbooks-invoice-chasing",
+    noindex: true,
     keywords: [
         "FreshBooks payment follow up",
         "FreshBooks invoice chasing",
