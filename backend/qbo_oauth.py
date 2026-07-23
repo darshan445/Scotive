@@ -18,6 +18,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from gmail_oauth import decrypt_token, encrypt_token
+from qbo_client import extract_intuit_tid
 
 logger = logging.getLogger("scotive.qbo")
 
@@ -189,8 +190,12 @@ async def exchange_code_for_tokens(code: str) -> dict:
     }
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.post(QBO_TOKEN_ENDPOINT, data=data, headers=headers)
+        tid = extract_intuit_tid(r)
         if r.status_code != 200:
-            logger.warning("QBO token exchange failed: %s %s", r.status_code, r.text)
+            logger.warning(
+                "QBO token exchange failed: %s intuit_tid=%s %s",
+                r.status_code, tid or "-", r.text,
+            )
             raise HTTPException(status_code=400, detail="Failed to exchange QuickBooks authorization code.")
         return r.json()
 
@@ -207,8 +212,12 @@ async def refresh_access_token(refresh_token: str) -> dict:
     }
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.post(QBO_TOKEN_ENDPOINT, data=data, headers=headers)
+        tid = extract_intuit_tid(r)
         if r.status_code != 200:
-            logger.warning("QBO refresh failed: %s %s", r.status_code, r.text)
+            logger.warning(
+                "QBO refresh failed: %s intuit_tid=%s %s",
+                r.status_code, tid or "-", r.text,
+            )
             raise QboAuthError(r.text)
         return r.json()
 
@@ -366,7 +375,11 @@ def build_router(db, get_current_user):
         except QboAuthError as e:
             raise HTTPException(status_code=401, detail=str(e) or "QuickBooks auth failed.") from e
         except httpx.HTTPStatusError as e:
-            logger.warning("QBO import HTTP error: %s %s", e.response.status_code, e.response.text[:300])
+            tid = extract_intuit_tid(e.response) if e.response is not None else ""
+            logger.warning(
+                "QBO import HTTP error: %s intuit_tid=%s %s",
+                e.response.status_code, tid or "-", e.response.text[:300],
+            )
             raise HTTPException(
                 status_code=502,
                 detail="QuickBooks API error while importing invoices.",

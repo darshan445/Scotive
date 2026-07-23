@@ -14,6 +14,19 @@ QBO_MINOR_VERSION = int(os.environ.get("QBO_MINOR_VERSION", "75"))
 PAGE_SIZE = 100
 
 
+def extract_intuit_tid(response: httpx.Response) -> str:
+    """Intuit correlation id from response headers (for support / troubleshooting)."""
+    if response is None:
+        return ""
+    headers = response.headers
+    for key in ("intuit_tid", "intuit-tid", "Intuit_Tid", "Intuit-Tid"):
+        val = headers.get(key)
+        if val:
+            return str(val).strip()
+    # httpx headers are case-insensitive; try common form once more
+    return (headers.get("intuit_tid") or headers.get("intuit-tid") or "").strip()
+
+
 def api_base_url(env: Optional[str] = None) -> str:
     e = (env or os.environ.get("QBO_ENV") or "sandbox").strip().lower()
     if e == "production":
@@ -40,9 +53,15 @@ async def qbo_query(
     }
     async with httpx.AsyncClient(timeout=45.0) as client:
         r = await client.get(url, headers=headers)
+        tid = extract_intuit_tid(r)
         if r.status_code != 200:
-            logger.warning("QBO query failed: %s %s | sql=%s", r.status_code, r.text[:500], sql[:200])
+            logger.warning(
+                "QBO query failed: %s intuit_tid=%s %s | sql=%s",
+                r.status_code, tid or "-", r.text[:500], sql[:200],
+            )
             r.raise_for_status()
+        if tid:
+            logger.debug("QBO query ok intuit_tid=%s", tid)
         data = r.json()
         return data.get("QueryResponse") or {}
 
@@ -62,9 +81,15 @@ async def qbo_get(
     }
     async with httpx.AsyncClient(timeout=30.0) as client:
         r = await client.get(url, headers=headers)
+        tid = extract_intuit_tid(r)
         if r.status_code != 200:
-            logger.warning("QBO GET failed: %s %s | path=%s", r.status_code, r.text[:500], path)
+            logger.warning(
+                "QBO GET failed: %s intuit_tid=%s %s | path=%s",
+                r.status_code, tid or "-", r.text[:500], path,
+            )
             r.raise_for_status()
+        if tid:
+            logger.debug("QBO GET ok intuit_tid=%s path=%s", tid, path)
         return r.json()
 
 
@@ -86,9 +111,15 @@ async def qbo_post(
     }
     async with httpx.AsyncClient(timeout=45.0) as client:
         r = await client.post(url, headers=headers, json=body)
+        tid = extract_intuit_tid(r)
         if r.status_code not in (200, 201):
-            logger.warning("QBO POST failed: %s %s | path=%s", r.status_code, r.text[:800], path)
+            logger.warning(
+                "QBO POST failed: %s intuit_tid=%s %s | path=%s",
+                r.status_code, tid or "-", r.text[:800], path,
+            )
             r.raise_for_status()
+        if tid:
+            logger.debug("QBO POST ok intuit_tid=%s path=%s", tid, path)
         return r.json()
 
 
@@ -315,9 +346,15 @@ async def cdc_changes(
     }
     async with httpx.AsyncClient(timeout=60.0) as client:
         r = await client.get(url, headers=headers)
+        tid = extract_intuit_tid(r)
         if r.status_code != 200:
-            logger.warning("QBO CDC failed: %s %s", r.status_code, r.text[:500])
+            logger.warning(
+                "QBO CDC failed: %s intuit_tid=%s %s",
+                r.status_code, tid or "-", r.text[:500],
+            )
             r.raise_for_status()
+        if tid:
+            logger.debug("QBO CDC ok intuit_tid=%s", tid)
         data = r.json()
 
     out: dict[str, list[dict[str, Any]]] = {e: [] for e in entities}
