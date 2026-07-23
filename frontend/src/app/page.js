@@ -1,25 +1,23 @@
 import LandingPage from "@/views/Landing";
 import { GuestRoute } from "@/components/ProtectedRoute";
 import { JsonLd } from "@/components/JsonLd";
+import { DEFAULT_DESCRIPTION, DEFAULT_TITLE } from "@/lib/seo";
 
 export const metadata = {
     title: {
-        absolute:
-            "Scotive — Invoice Tracking Tool to Chase Unpaid Invoices | Gmail-Native",
+        absolute: DEFAULT_TITLE,
     },
-    description:
-        "Scotive is an invoice tracking tool that watches your Gmail and helps you chase unpaid invoices — automatically detecting invoices you've sent, reading client replies for promises, disputes, and payments.",
+    description: DEFAULT_DESCRIPTION,
     alternates: { canonical: "/" },
     openGraph: {
         url: "/",
-        title: "Scotive — Invoice Tracking Tool to Chase Unpaid Invoices | Gmail-Native",
-        description:
-            "Scotive is an invoice tracking tool that watches your Gmail and helps you chase unpaid invoices — detecting invoices you've sent and reading client replies for promises, disputes, and payments.",
+        title: DEFAULT_TITLE,
+        description: DEFAULT_DESCRIPTION,
     },
     twitter: {
-        title: "Scotive — Invoice Tracking Tool to Chase Unpaid Invoices | Gmail-Native",
+        title: DEFAULT_TITLE,
         description:
-            "Scotive is an invoice tracking tool that watches your Gmail and helps you chase unpaid invoices.",
+            "Invoice chasing software for email + accounting. Approve every follow-up before it sends.",
     },
 };
 

@@ -46,7 +46,7 @@ export default function RegisterPage() {
         <AuthShell
             eyebrow="Create account"
             title="Get paid faster, without the awkward chase."
-            subtitle="60 seconds to your first ledger. Read + send-with-approval Gmail access only."
+            subtitle="60 seconds to your first ledger. Connect email (and optional accounting) — nothing sends without your approval."
             footer={
                 <span>
                     Already have an account?{" "}

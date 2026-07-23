@@ -3,10 +3,13 @@ import {
     AlertTriangle,
     ArrowRight,
     BellRing,
+    BookOpen,
     Check,
     CheckCircle2,
+    Clock,
     Eye,
     Inbox,
+    Link2,
     Lock,
     MailCheck,
     MessageSquareQuote,
@@ -14,7 +17,6 @@ import {
     ShieldCheck,
     Wallet,
 } from "lucide-react";
-import { FcGoogle } from "react-icons/fc";
 import { BrandMark } from "@/components/BrandMark";
 
 function SectionEyebrow({ children }) {
@@ -106,7 +108,7 @@ function HeroMockup() {
                         <span className="type-title text-sm truncate">Needs you today</span>
                     </div>
                     <span className="text-[11px] font-medium text-muted-foreground bg-muted rounded-full px-2.5 py-1 flex-shrink-0">
-                        Watching Gmail
+                        Email + accounting
                     </span>
                 </div>
                 <ul className="divide-y divide-border">
@@ -141,20 +143,32 @@ function HeroMockup() {
 }
 
 function StepConnectMock() {
+    const rows = [
+        { name: "Gmail", status: "Connected", on: true },
+        { name: "QuickBooks Online", status: "Optional", on: true },
+        { name: "Outlook · Zoho · FreshBooks", status: "Soon", on: false },
+    ];
     return (
         <div className="rounded-xl border border-border bg-background p-4 space-y-2.5">
             <div className="flex items-center justify-between text-xs">
-                <span className="font-semibold text-foreground">Connect your Gmail</span>
+                <span className="font-semibold text-foreground">Connect your stack</span>
                 <span className="text-muted-foreground">OAuth 2.0</span>
             </div>
-            <div className="rounded-lg border border-border bg-card px-3 py-2.5 flex items-center gap-2">
-                <FcGoogle className="w-4 h-4 flex-shrink-0" />
-                <span className="text-xs font-medium truncate min-w-0 text-foreground">you@yourstudio.com</span>
-                <span className="ml-auto flex-shrink-0 text-[10px] font-semibold text-emerald-600 bg-emerald-50 rounded-full px-2 py-0.5">Connected</span>
-            </div>
-            <div className="text-[10px] text-muted-foreground">
-                Read + send-with-approval · revoke anytime
-            </div>
+            {rows.map((row) => (
+                <div key={row.name} className="rounded-lg border border-border bg-card px-3 py-2.5 flex items-center gap-2">
+                    <Link2 className={`w-3.5 h-3.5 flex-shrink-0 ${row.on ? "text-emerald-600" : "text-muted-foreground"}`} />
+                    <span className="text-xs font-medium truncate min-w-0 text-foreground">{row.name}</span>
+                    <span
+                        className={`ml-auto flex-shrink-0 text-[10px] font-semibold rounded-full px-2 py-0.5 ${
+                            row.on
+                                ? "text-emerald-600 bg-emerald-50"
+                                : "text-muted-foreground bg-muted"
+                        }`}
+                    >
+                        {row.status}
+                    </span>
+                </div>
+            ))}
         </div>
     );
 }
@@ -185,7 +199,7 @@ function StepApproveMock() {
         <div
             className="rounded-xl border border-border bg-background p-4 space-y-2.5"
             role="img"
-            aria-label="Follow-up email composer for chasing an unpaid invoice from Gmail"
+            aria-label="Follow-up email composer for chasing an unpaid invoice"
         >
             <div className="flex items-center justify-between gap-2 text-xs">
                 <span className="font-semibold text-foreground truncate">Follow up with Acme Studio</span>
@@ -197,7 +211,7 @@ function StepApproveMock() {
                 Hi Sarah — following up on INV-2041 ($2,400). You mentioned paying by last Friday…
             </div>
             <div className="flex gap-2">
-                <span className="flex-1 text-center text-[11px] font-semibold bg-primary text-primary-foreground rounded-lg py-1.5">Send from Gmail</span>
+                <span className="flex-1 text-center text-[11px] font-semibold bg-primary text-primary-foreground rounded-lg py-1.5">Approve &amp; send</span>
                 <span className="text-[11px] font-medium text-muted-foreground border border-border rounded-lg py-1.5 px-3">Edit</span>
             </div>
         </div>
@@ -224,9 +238,23 @@ export default function LandingPage() {
     return (
         <div className="min-h-screen bg-background text-foreground flex flex-col" data-testid="landing-page">
             <header className="border-b border-border/70 bg-background/80 backdrop-blur-md sticky top-0 z-30">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
                     <BrandMark size="md" />
-                    <nav className="flex items-center gap-2 sm:gap-4">
+                    <div className="flex items-center gap-2 sm:gap-4">
+                        <nav className="hidden md:flex items-center gap-1 text-sm">
+                            <Link
+                                href="/invoice-chasing-software"
+                                className="px-3 py-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                            >
+                                Product
+                            </Link>
+                            <Link
+                                href="/integrations"
+                                className="px-3 py-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                            >
+                                Integrations
+                            </Link>
+                        </nav>
                         <Link
                             href="/login"
                             className="text-sm font-medium px-3 py-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
@@ -242,7 +270,7 @@ export default function LandingPage() {
                             Start free
                             <ArrowRight className="w-3.5 h-3.5" />
                         </Link>
-                    </nav>
+                    </div>
                 </div>
             </header>
 
@@ -267,38 +295,38 @@ export default function LandingPage() {
                                 className="type-display text-4xl sm:text-5xl lg:text-[3.25rem]"
                                 data-testid="landing-headline"
                             >
-                                Payment ops inside Gmail.
+                                Invoice chasing that lives where you work.
                             </h1>
                             <p className="type-body mt-5 text-base md:text-lg max-w-xl" data-testid="landing-subhead">
-                                The invoice tracking tool for freelancers who bill from Gmail — stop chasing unpaid invoices manually.
+                                Track unpaid invoices from email and accounting, read client replies for promises and disputes, and approve every follow-up before it sends.
                             </p>
 
                             <div className="mt-8 flex flex-col sm:flex-row items-start sm:items-center gap-4">
                                 <Link
                                     href="/register"
-                                    className="group inline-flex items-center gap-3 rounded-xl bg-primary text-primary-foreground pl-2 pr-6 py-2 font-semibold text-base transition-all shadow-md hover:shadow-lg active:scale-[0.98] hover:bg-primary/90"
+                                    className="group inline-flex items-center gap-2.5 rounded-xl bg-primary text-primary-foreground px-6 py-3 font-semibold text-base transition-all shadow-md hover:shadow-lg active:scale-[0.98] hover:bg-primary/90"
                                     data-testid="landing-cta-primary"
                                 >
-                                    <span className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-background">
-                                        <FcGoogle className="w-5 h-5" />
-                                    </span>
-                                    Connect Gmail — free
+                                    Start free
                                     <ArrowRight className="w-4 h-4 opacity-70 transition-transform group-hover:translate-x-0.5" />
                                 </Link>
                                 <Link
-                                    href="/login"
+                                    href="/integrations"
                                     className="text-sm font-medium text-muted-foreground hover:text-foreground"
                                     data-testid="landing-cta-secondary"
                                 >
-                                    I already have an account →
+                                    See integrations →
                                 </Link>
                             </div>
 
                             <div className="mt-8 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-muted-foreground">
-                                <span className="inline-flex items-center gap-1.5"><Lock className="w-3.5 h-3.5" /> Read + send only</span>
-                                <span className="inline-flex items-center gap-1.5"><ShieldCheck className="w-3.5 h-3.5" /> Approval before every send</span>
-                                <span className="inline-flex items-center gap-1.5"><MailCheck className="w-3.5 h-3.5" /> Signed with your name</span>
+                                <span className="inline-flex items-center gap-1.5"><Lock className="w-3.5 h-3.5" /> Approval before every send</span>
+                                <span className="inline-flex items-center gap-1.5"><ShieldCheck className="w-3.5 h-3.5" /> Email + accounting</span>
+                                <span className="inline-flex items-center gap-1.5"><MailCheck className="w-3.5 h-3.5" /> Signed as you</span>
                             </div>
+                            <p className="mt-4 text-xs text-muted-foreground max-w-md">
+                                Live today: Gmail &amp; QuickBooks Online. Next: Outlook, Zoho Books, FreshBooks.
+                            </p>
                         </div>
 
                         <div className="animate-fade-up lg:pl-4" style={{ animationDelay: "120ms" }} data-testid="landing-preview-card">
@@ -342,7 +370,7 @@ export default function LandingPage() {
                             <div className="max-w-2xl">
                                 <SectionEyebrow>Simple setup</SectionEyebrow>
                                 <h2 className="type-title text-3xl md:text-4xl">
-                                    Keep invoicing from Gmail. Scotive does the rest.
+                                    Connect your tools. Scotive runs the chase.
                                 </h2>
                             </div>
                             <span className="pill">3 steps · about a minute</span>
@@ -350,22 +378,74 @@ export default function LandingPage() {
                         <div className="grid md:grid-cols-3 gap-4">
                             <HowItWorksStep
                                 index={1}
-                                title="Connect your Gmail"
-                                description="One click, two permissions: read mail, and send with your approval. Revoke anytime from Settings or Google."
+                                title="Connect email &amp; accounting"
+                                description="Start with Gmail today — optionally add QuickBooks Online. Outlook, Zoho Books, and FreshBooks are on the roadmap."
                                 mock={<StepConnectMock />}
                             />
                             <HowItWorksStep
                                 index={2}
                                 title="Pick what's still unpaid"
-                                description="Scotive finds invoices from your last 90 days of sent mail. Confirm what's open — you know your work; we build the ledger."
+                                description="Scotive finds open invoices from email and your accounting feed. Confirm what's open — you know your work; we build the ledger."
                                 mock={<StepPickMock />}
                             />
                             <HowItWorksStep
                                 index={3}
                                 title="Approve the follow-ups"
-                                description="When something is late or a promise breaks, a draft appears with a state-derived tone label. Edit, regenerate, or send — never auto-sent."
+                                description="When something is late or a promise breaks, a draft appears with a state-derived tone. Edit, regenerate, or send — never auto-sent."
                                 mock={<StepApproveMock />}
                             />
+                        </div>
+                    </div>
+                </section>
+
+                <section className="py-20 md:py-24 border-t border-border/70" data-testid="landing-integrations">
+                    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                        <div className="max-w-2xl mb-12">
+                            <SectionEyebrow>Not locked to one stack</SectionEyebrow>
+                            <h2 className="type-title text-3xl md:text-4xl">
+                                Built for the tools you already use.
+                            </h2>
+                            <p className="type-body mt-3">
+                                Invoice chasing across email and accounting — available connectors first, more without changing how you work.
+                            </p>
+                        </div>
+                        <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                            {[
+                                { name: "Gmail", status: "Available", on: true },
+                                { name: "QuickBooks Online", status: "Available", on: true, href: "/quickbooks-invoice-chasing" },
+                                { name: "Outlook", status: "Coming soon", on: false, href: "/outlook-invoice-chasing" },
+                                { name: "Zoho Books", status: "Coming soon", on: false, href: "/zoho-books-invoice-chasing" },
+                                { name: "FreshBooks", status: "Coming soon", on: false, href: "/freshbooks-invoice-chasing" },
+                            ].map((item) => {
+                                const card = (
+                                    <div className="surface-card p-4 h-full flex flex-col gap-2">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <span className="type-title text-base">{item.name}</span>
+                                            {item.on ? (
+                                                <Check className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                                            ) : (
+                                                <Clock className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                                            )}
+                                        </div>
+                                        <span className="text-xs text-muted-foreground">{item.status}</span>
+                                    </div>
+                                );
+                                return item.href ? (
+                                    <Link key={item.name} href={item.href} className="block hover:opacity-95 transition-opacity">
+                                        {card}
+                                    </Link>
+                                ) : (
+                                    <div key={item.name}>{card}</div>
+                                );
+                            })}
+                        </div>
+                        <div className="mt-6">
+                            <Link
+                                href="/integrations"
+                                className="text-sm font-medium text-primary hover:underline underline-offset-2"
+                            >
+                                Full integrations roadmap →
+                            </Link>
                         </div>
                     </div>
                 </section>
@@ -375,7 +455,7 @@ export default function LandingPage() {
                         <div className="max-w-2xl mb-12">
                             <SectionEyebrow>What you get</SectionEyebrow>
                             <h2 className="type-title text-3xl md:text-4xl">
-                                A collections brain that lives in your inbox.
+                                A collections brain for email + accounting.
                             </h2>
                             <p className="type-body mt-3">
                                 Scotive surfaces what needs you today — past due, broken promises, replies — and drafts the next move.
@@ -386,8 +466,8 @@ export default function LandingPage() {
                                 icon={Inbox}
                                 replaces="inbox archaeology"
                                 title="Automatic invoice tracking"
-                                description="Send invoices like you always do. Scotive detects them in sent mail and tracks amounts, clients, and due dates."
-                                chips={["Live Gmail watching", "Ledger by client", "Multi-currency"]}
+                                description="Detect invoices from email and optional accounting feeds. Track amounts, clients, and due dates in one ledger."
+                                chips={["Email watching", "Accounting import", "Ledger by client"]}
                             />
                             <FeatureCard
                                 icon={MessageSquareQuote}
@@ -400,30 +480,79 @@ export default function LandingPage() {
                                 icon={Send}
                                 replaces="awkward nudge writing"
                                 title="State-derived follow-ups"
-                                description="Drafts match the invoice state — Friendly reminder, Firm follow-up, Final notice, or Clarifying reply — signed with your Gmail name."
+                                description="Drafts match the invoice state — Friendly reminder, Firm follow-up, Final notice, or Clarifying reply — signed as you."
                                 chips={["Tone from ledger state", "Same-thread replies", "One-tap approve"]}
                             />
                             <FeatureCard
                                 icon={Wallet}
                                 replaces="manual reconciliation"
                                 title="Payment matching"
-                                description="Receipts and “says paid” claims land on the right invoice. Confirm received, or mark not yet — partials tracked."
-                                chips={["Receipt matching", "Partial payments", "Confirm prompts"]}
+                                description="Receipts and “says paid” claims land on the right invoice. Confirm received, or mark not yet — partials tracked. QBO paid sync when connected."
+                                chips={["Receipt matching", "Partial payments", "Paid sync"]}
                             />
                             <FeatureCard
                                 icon={Eye}
                                 replaces="constant checking-in"
                                 title="Needs you today"
-                                description="One prioritized list: past due, broken promises, replies, and confirmations. Optional daily digest from your Gmail."
+                                description="One prioritized list: past due, broken promises, replies, and confirmations. Optional daily digest."
                                 chips={["Priority-first", "Daily digest", "Review queue"]}
                             />
                             <FeatureCard
                                 icon={ShieldCheck}
                                 replaces="trust-me automation"
                                 title="You stay in control"
-                                description="Nothing is ever auto-sent. Two Gmail permissions. Email content isn't used to train Scotive's models. Disconnect anytime."
+                                description="Nothing is ever auto-sent. OAuth connectors only. Disconnect anytime. Content isn’t used to train Scotive’s models."
                                 chips={["Approval-only", "OAuth 2.0", "Delete account anytime"]}
                             />
+                        </div>
+                    </div>
+                </section>
+
+                <section className="py-20 md:py-24 border-t border-border/70" data-testid="landing-seo-links">
+                    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                        <div className="max-w-2xl mb-10">
+                            <SectionEyebrow>Explore</SectionEyebrow>
+                            <h2 className="type-title text-3xl md:text-4xl">
+                                Guides for getting paid faster.
+                            </h2>
+                        </div>
+                        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                            {[
+                                {
+                                    href: "/invoice-chasing-software",
+                                    icon: BookOpen,
+                                    title: "Invoice chasing software",
+                                    detail: "How Scotive compares to heavy AR suites.",
+                                },
+                                {
+                                    href: "/chase-unpaid-invoices",
+                                    icon: BellRing,
+                                    title: "Chase unpaid invoices",
+                                    detail: "Human-approved follow-ups that actually get sent.",
+                                },
+                                {
+                                    href: "/accounts-receivable-automation",
+                                    icon: Wallet,
+                                    title: "AR automation",
+                                    detail: "Automation with a human gate — not fire-and-forget.",
+                                },
+                                {
+                                    href: "/overdue-invoice-reminder",
+                                    icon: AlertTriangle,
+                                    title: "Overdue invoice reminders",
+                                    detail: "Tone that matches how late the invoice really is.",
+                                },
+                            ].map((item) => (
+                                <Link
+                                    key={item.href}
+                                    href={item.href}
+                                    className="surface-card p-5 hover:shadow-md transition-shadow block"
+                                >
+                                    <item.icon className="w-5 h-5 text-accent mb-3" strokeWidth={2} />
+                                    <h3 className="type-title text-base">{item.title}</h3>
+                                    <p className="type-body mt-1.5 text-sm">{item.detail}</p>
+                                </Link>
+                            ))}
                         </div>
                     </div>
                 </section>
@@ -431,7 +560,7 @@ export default function LandingPage() {
                 <section className="py-20 md:py-24 border-t border-border/70" data-testid="landing-outcomes">
                     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                         <div className="max-w-2xl mb-12">
-                            <SectionEyebrow>Built for people who bill from their inbox</SectionEyebrow>
+                            <SectionEyebrow>Built for people who bill and chase</SectionEyebrow>
                             <h2 className="type-title text-3xl md:text-4xl">
                                 Freelancers and studios stop leaking revenue.
                             </h2>
@@ -471,7 +600,7 @@ export default function LandingPage() {
                                     Get paid without the awkward chase.
                                 </h2>
                                 <p className="type-body mt-4 text-base md:text-lg opacity-80 max-w-xl mx-auto">
-                                    Connect in under a minute. Approve your first follow-up before your coffee gets cold.
+                                    Connect email today. Add accounting when you&apos;re ready. Approve your first follow-up before your coffee gets cold.
                                 </p>
                                 <div className="mt-9 flex flex-col sm:flex-row items-center justify-center gap-4">
                                     <Link
@@ -479,8 +608,7 @@ export default function LandingPage() {
                                         className="inline-flex items-center gap-2.5 rounded-xl bg-background text-foreground px-7 py-3.5 font-semibold text-base hover:opacity-95 transition-opacity shadow-lg"
                                         data-testid="landing-cta-final"
                                     >
-                                        <FcGoogle className="w-5 h-5" />
-                                        Start free with Gmail
+                                        Start free
                                         <ArrowRight className="w-4 h-4" />
                                     </Link>
                                 </div>
@@ -500,14 +628,17 @@ export default function LandingPage() {
                     <div className="md:col-span-2">
                         <BrandMark />
                         <p className="type-body mt-3 text-sm max-w-xs">
-                            Payment ops inside Gmail — for everyone who bills from their inbox.
+                            Invoice chasing software for freelancers and small teams — email + accounting, human-approved follow-ups.
                         </p>
                     </div>
                     <div>
                         <div className="type-title text-sm mb-3">Product</div>
                         <ul className="space-y-2 text-sm text-muted-foreground">
+                            <li><Link href="/invoice-chasing-software" className="hover:text-foreground">Invoice chasing software</Link></li>
+                            <li><Link href="/chase-unpaid-invoices" className="hover:text-foreground">Chase unpaid invoices</Link></li>
+                            <li><Link href="/accounts-receivable-automation" className="hover:text-foreground">AR automation</Link></li>
+                            <li><Link href="/integrations" className="hover:text-foreground">Integrations</Link></li>
                             <li><Link href="/register" className="hover:text-foreground">Get started</Link></li>
-                            <li><Link href="/login" className="hover:text-foreground">Log in</Link></li>
                         </ul>
                     </div>
                     <div>
@@ -525,7 +656,7 @@ export default function LandingPage() {
                         <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
                             <Link href="/terms" className="hover:text-foreground">Terms</Link>
                             <Link href="/privacy" className="hover:text-foreground">Privacy</Link>
-                            <span>Payment ops · Inside Gmail</span>
+                            <span>Get paid faster · You approve every send</span>
                         </div>
                     </div>
                 </div>

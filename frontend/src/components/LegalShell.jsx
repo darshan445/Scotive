@@ -9,6 +9,12 @@ export function LegalShell({ title, updated, children, testId }) {
                 <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
                     <BrandMark />
                     <nav className="flex items-center gap-4 text-sm">
+                        <Link href="/" className="text-muted-foreground hover:text-foreground transition-colors">
+                            Home
+                        </Link>
+                        <Link href="/integrations" className="text-muted-foreground hover:text-foreground transition-colors hidden sm:inline">
+                            Integrations
+                        </Link>
                         <Link href="/terms" className="text-muted-foreground hover:text-foreground transition-colors">
                             Terms
                         </Link>

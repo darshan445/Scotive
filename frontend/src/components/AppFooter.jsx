@@ -16,7 +16,10 @@ export function AppFooter({ compact = false }) {
                     <Link href="/privacy" className="hover:text-foreground transition-colors">
                         Privacy
                     </Link>
-                    <span className="hidden sm:inline">Payment ops · Inside Gmail</span>
+                    <Link href="/integrations" className="hover:text-foreground transition-colors hidden sm:inline">
+                        Integrations
+                    </Link>
+                    <span className="hidden md:inline">Get paid faster · You approve every send</span>
                 </div>
             </div>
         </footer>

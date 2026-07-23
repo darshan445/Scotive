@@ -29,20 +29,23 @@ const jetbrains = JetBrains_Mono({
 export const metadata = {
     metadataBase: new URL(SITE_URL),
     title: {
-        default: "Scotive — Payment ops inside Gmail",
+        default: "Scotive — Invoice Chasing Software to Get Paid Faster",
         template: "%s · Scotive",
     },
     description:
-        "Scotive is an invoice tracking tool that watches your Gmail and helps you chase unpaid invoices — automatically detecting invoices you've sent, reading client replies for promises, disputes, and payments.",
+        "Scotive is invoice chasing software that tracks unpaid invoices from your email and accounting tools — reads client replies for promises and disputes, and drafts follow-ups you approve before send. Gmail and QuickBooks Online today; Outlook, Zoho Books, and FreshBooks next.",
     applicationName: "Scotive",
     keywords: [
-        "invoice tracking",
-        "Gmail invoice tracker",
-        "accounts receivable",
+        "invoice chasing software",
         "chase unpaid invoices",
-        "freelance invoicing",
-        "payment follow-up",
-        "payment ops",
+        "accounts receivable automation",
+        "overdue invoice tracker",
+        "payment follow-up software",
+        "invoice tracking tool",
+        "QuickBooks invoice chasing",
+        "Gmail invoice tracker",
+        "Outlook invoice chasing",
+        "AR collections",
     ],
     authors: [{ name: "Scotive" }],
     creator: "Scotive",
@@ -56,9 +59,9 @@ export const metadata = {
         locale: "en_US",
         url: SITE_URL,
         siteName: "Scotive",
-        title: "Scotive — Payment ops inside Gmail",
+        title: "Scotive — Invoice Chasing Software to Get Paid Faster",
         description:
-            "Scotive is an invoice tracking tool that watches your Gmail and helps you chase unpaid invoices. No manual data entry. Nothing is sent without your review.",
+            "Track unpaid invoices from email and accounting. Draft follow-ups you approve. Gmail + QuickBooks Online now; Outlook, Zoho, FreshBooks next.",
         images: [
             {
                 url: "/logo512.png",
@@ -70,9 +73,9 @@ export const metadata = {
     },
     twitter: {
         card: "summary",
-        title: "Scotive — Payment ops inside Gmail",
+        title: "Scotive — Invoice Chasing Software to Get Paid Faster",
         description:
-            "Gmail-native invoice tracking tool to chase unpaid invoices — with drafts you review before anything sends.",
+            "Chase unpaid invoices with human-approved drafts. Email + accounting integrations.",
         images: ["/logo512.png"],
     },
     robots: {

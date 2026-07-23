@@ -4,7 +4,8 @@ import { GuestRoute } from "@/components/ProtectedRoute";
 
 export const metadata = {
     title: "Log in",
-    description: "Log in to Scotive to track invoices and follow-ups from Gmail.",
+    description:
+        "Log in to Scotive to track unpaid invoices and approve payment follow-ups from your connected tools.",
     alternates: { canonical: "/login" },
 };
 

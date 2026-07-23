@@ -3,7 +3,8 @@ import { GuestRoute } from "@/components/ProtectedRoute";
 
 export const metadata = {
     title: "Create account",
-    description: "Start free with Scotive — payment ops inside Gmail.",
+    description:
+        "Start free with Scotive — invoice chasing software for email and accounting. Approve every follow-up before it sends.",
     alternates: { canonical: "/register" },
 };
 
