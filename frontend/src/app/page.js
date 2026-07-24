@@ -1,16 +1,16 @@
 import LandingPage from "@/views/Landing";
 import { GuestRoute } from "@/components/ProtectedRoute";
 import { JsonLd } from "@/components/JsonLd";
-import { DEFAULT_DESCRIPTION, DEFAULT_TITLE } from "@/lib/seo";
+import { DEFAULT_DESCRIPTION, DEFAULT_TITLE, SITE_URL } from "@/lib/seo";
 
 export const metadata = {
     title: {
         absolute: DEFAULT_TITLE,
     },
     description: DEFAULT_DESCRIPTION,
-    alternates: { canonical: "/" },
+    alternates: { canonical: SITE_URL },
     openGraph: {
-        url: "/",
+        url: SITE_URL,
         title: DEFAULT_TITLE,
         description: DEFAULT_DESCRIPTION,
     },

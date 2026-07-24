@@ -5,8 +5,7 @@ import {
 } from "next/font/google";
 import "./globals.css";
 import { Providers } from "@/components/Providers";
-
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://www.scotive.com";
+import { SITE_URL } from "@/lib/seo";
 
 const inter = Inter({
     subsets: ["latin"],
@@ -52,7 +51,7 @@ export const metadata = {
     publisher: "Scotive",
     category: "business",
     alternates: {
-        canonical: "/",
+        canonical: SITE_URL,
     },
     openGraph: {
         type: "website",

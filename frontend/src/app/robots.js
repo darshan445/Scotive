@@ -1,4 +1,4 @@
-const SITE = process.env.NEXT_PUBLIC_SITE_URL || "https://www.scotive.com";
+import { SITE_URL } from "@/lib/seo";
 
 export default function robots() {
     return {
@@ -16,7 +16,7 @@ export default function robots() {
                 ],
             },
         ],
-        sitemap: `${SITE.replace(/\/$/, "")}/sitemap.xml`,
-        host: SITE.replace(/\/$/, ""),
+        sitemap: `${SITE_URL}/sitemap.xml`,
+        host: SITE_URL,
     };
 }

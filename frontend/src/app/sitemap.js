@@ -1,9 +1,5 @@
+import { SITE_URL } from "@/lib/seo";
 import { GUIDES } from "@/lib/guides";
-
-const SITE = (process.env.NEXT_PUBLIC_SITE_URL || "https://www.scotive.com").replace(
-    /\/$/,
-    "",
-);
 
 export default function sitemap() {
     const now = new Date();
@@ -28,7 +24,7 @@ export default function sitemap() {
     ];
     // Coming-soon integration pages are noindex — omit from sitemap until live.
     return pages.map(({ path, priority, changeFrequency }) => ({
-        url: path ? `${SITE}${path}` : SITE,
+        url: path ? `${SITE_URL}${path}` : SITE_URL,
         lastModified: now,
         changeFrequency,
         priority,

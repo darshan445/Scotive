@@ -1,8 +1,28 @@
-/** Shared SEO copy & keyword strategy for Scotive marketing pages. */
+/** Shared SEO copy, canonical site URL, and keyword strategy for Scotive marketing. */
 
-export const SITE_URL = (
-    process.env.NEXT_PUBLIC_SITE_URL || "https://www.scotive.com"
-).replace(/\/$/, "");
+/**
+ * Canonical public origin. Always prefer www for production scotive.com so
+ * metadata/sitemap/robots match Vercel (apex → www redirect).
+ * Localhost and other hosts are left unchanged.
+ */
+export function normalizePublicSiteUrl(raw) {
+    const fallback = "https://www.scotive.com";
+    const input = (raw || fallback).trim();
+    try {
+        const u = new URL(input);
+        if (u.hostname === "scotive.com") {
+            u.hostname = "www.scotive.com";
+        }
+        // Strip trailing slash from origin
+        return u.origin.replace(/\/$/, "");
+    } catch {
+        return fallback;
+    }
+}
+
+export const SITE_URL = normalizePublicSiteUrl(
+    process.env.NEXT_PUBLIC_SITE_URL || "https://www.scotive.com",
+);
 
 /** Primary + competitor-overlap keywords (Chaser/Upflow/PaidChaser style). */
 export const PRIMARY_KEYWORDS = [
@@ -68,6 +88,7 @@ export function pageMetadata({
     noindex = false,
 }) {
     const fullTitle = title.includes("Scotive") ? title : `${title} · Scotive`;
+    const canonical = absoluteUrl(path);
     const kw = [
         ...new Set([
             ...PRIMARY_KEYWORDS,
@@ -80,12 +101,12 @@ export function pageMetadata({
         title: { absolute: fullTitle },
         description,
         keywords: kw,
-        alternates: { canonical: path },
+        alternates: { canonical },
         robots: noindex
             ? { index: false, follow: true }
             : { index: true, follow: true },
         openGraph: {
-            url: path,
+            url: canonical,
             title: fullTitle,
             description,
             type: "website",
