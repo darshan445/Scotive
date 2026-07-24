@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Loader2, LogOut, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState, Fragment } from "react";
+import { ChevronDown, ChevronRight, Loader2, LogOut, RefreshCw } from "lucide-react";
 import { api, extractError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -41,6 +41,118 @@ function formatDate(value) {
     } catch {
         return "—";
     }
+}
+
+function formatMoney(amount, currency) {
+    if (amount == null || Number.isNaN(Number(amount))) return "—";
+    const cur = currency || "USD";
+    try {
+        return new Intl.NumberFormat(undefined, {
+            style: "currency",
+            currency: cur,
+            maximumFractionDigits: 2,
+        }).format(Number(amount));
+    } catch {
+        return `${cur} ${Number(amount).toFixed(2)}`;
+    }
+}
+
+function UserInvoicesPanel({ userId }) {
+    const [invoices, setInvoices] = useState(null);
+    const [error, setError] = useState("");
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            setLoading(true);
+            setError("");
+            try {
+                const { data } = await api.get(`/admin/users/${userId}/invoices`, {
+                    params: { limit: 100 },
+                });
+                if (!cancelled) setInvoices(data.invoices || []);
+            } catch (err) {
+                if (!cancelled) {
+                    setError(extractError(err));
+                    setInvoices([]);
+                }
+            } finally {
+                if (!cancelled) setLoading(false);
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [userId]);
+
+    if (loading) {
+        return (
+            <div className="px-4 py-6 text-muted-foreground text-sm flex items-center gap-2">
+                <Loader2 className="w-4 h-4 animate-spin" /> Loading invoices…
+            </div>
+        );
+    }
+    if (error) {
+        return <div className="px-4 py-4 text-sm text-red-700">{error}</div>;
+    }
+    if (!invoices?.length) {
+        return <div className="px-4 py-4 text-sm text-muted-foreground">No invoices for this user.</div>;
+    }
+
+    return (
+        <div className="px-4 py-3 space-y-3 bg-muted/20 border-t border-border">
+            <div className="text-xs font-medium text-muted-foreground">
+                Invoices ({invoices.length}) — subject + evidence for fetch QA
+            </div>
+            <ul className="space-y-3">
+                {invoices.map((inv) => (
+                    <li
+                        key={inv.id}
+                        className="rounded-lg border border-border bg-card p-3 text-sm"
+                        data-testid="admin-invoice-row"
+                    >
+                        <div className="flex flex-wrap items-baseline justify-between gap-2">
+                            <div className="font-medium text-foreground">
+                                {inv.invoice_ref || "No ref"} · {formatMoney(inv.amount, inv.currency)}
+                            </div>
+                            <div className="flex flex-wrap gap-1.5 text-[11px]">
+                                <span className="rounded-full bg-muted px-2 py-0.5 text-muted-foreground">
+                                    {inv.status || "unknown"}
+                                </span>
+                                {inv.source ? (
+                                    <span className="rounded-full bg-muted px-2 py-0.5 text-muted-foreground">
+                                        {inv.source}
+                                    </span>
+                                ) : null}
+                            </div>
+                        </div>
+                        <div className="mt-1 text-xs text-muted-foreground">
+                            {inv.counterparty_name || inv.counterparty_email || "Unknown client"}
+                            {inv.counterparty_name && inv.counterparty_email
+                                ? ` · ${inv.counterparty_email}`
+                                : ""}
+                            {inv.source_date || inv.due_date
+                                ? ` · sent ${inv.source_date || "—"} · due ${inv.due_date || "—"}`
+                                : ""}
+                        </div>
+                        <div className="mt-2">
+                            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Subject</div>
+                            <div className="text-foreground">{inv.source_subject || "—"}</div>
+                        </div>
+                        <div className="mt-2">
+                            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                                Evidence / snippet
+                            </div>
+                            <div className="text-muted-foreground whitespace-pre-wrap">
+                                {inv.evidence_sentence || "—"}
+                            </div>
+                        </div>
+                    </li>
+                ))}
+            </ul>
+        </div>
+    );
 }
 
 function AdminLogin({ onLoggedIn }) {
@@ -115,6 +227,7 @@ function AdminDashboard({ admin, onLogout }) {
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState("all");
+    const [expandedId, setExpandedId] = useState(null);
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -144,6 +257,10 @@ function AdminDashboard({ admin, onLogout }) {
     }, [dashboard, filter]);
 
     const stats = dashboard?.stats;
+
+    function toggleExpand(userId) {
+        setExpandedId((cur) => (cur === userId ? null : userId));
+    }
 
     return (
         <div className="min-h-screen bg-background text-foreground" data-testid="admin-dashboard">
@@ -210,6 +327,7 @@ function AdminDashboard({ admin, onLogout }) {
                         <table className="w-full text-sm">
                             <thead className="bg-muted/50 text-left text-xs text-muted-foreground">
                                 <tr>
+                                    <th className="px-4 py-3 font-medium w-8" />
                                     <th className="px-4 py-3 font-medium">User</th>
                                     <th className="px-4 py-3 font-medium">Joined</th>
                                     <th className="px-4 py-3 font-medium">Connections</th>
@@ -220,44 +338,79 @@ function AdminDashboard({ admin, onLogout }) {
                             <tbody className="divide-y divide-border">
                                 {loading && !dashboard ? (
                                     <tr>
-                                        <td colSpan={5} className="px-4 py-10 text-center text-muted-foreground">
+                                        <td colSpan={6} className="px-4 py-10 text-center text-muted-foreground">
                                             <Loader2 className="w-5 h-5 animate-spin inline-block" />
                                         </td>
                                     </tr>
                                 ) : rows.length === 0 ? (
                                     <tr>
-                                        <td colSpan={5} className="px-4 py-10 text-center text-muted-foreground">
+                                        <td colSpan={6} className="px-4 py-10 text-center text-muted-foreground">
                                             No users match this filter.
                                         </td>
                                     </tr>
                                 ) : (
-                                    rows.map((u) => (
-                                        <tr key={u.id} className="hover:bg-muted/30">
-                                            <td className="px-4 py-3">
-                                                <div className="font-medium text-foreground">{u.email}</div>
-                                                {u.name ? (
-                                                    <div className="text-xs text-muted-foreground">{u.name}</div>
+                                    rows.map((u) => {
+                                        const open = expandedId === u.id;
+                                        return (
+                                            <Fragment key={u.id}>
+                                                <tr
+                                                    className="hover:bg-muted/30 cursor-pointer"
+                                                    onClick={() => toggleExpand(u.id)}
+                                                    data-testid={`admin-user-row-${u.id}`}
+                                                >
+                                                    <td className="px-4 py-3 text-muted-foreground">
+                                                        {open ? (
+                                                            <ChevronDown className="w-4 h-4" />
+                                                        ) : (
+                                                            <ChevronRight className="w-4 h-4" />
+                                                        )}
+                                                    </td>
+                                                    <td className="px-4 py-3">
+                                                        <div className="font-medium text-foreground">{u.email}</div>
+                                                        {u.name ? (
+                                                            <div className="text-xs text-muted-foreground">{u.name}</div>
+                                                        ) : null}
+                                                    </td>
+                                                    <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
+                                                        {formatDate(u.created_at)}
+                                                    </td>
+                                                    <td className="px-4 py-3">
+                                                        <div className="flex flex-wrap gap-1.5">
+                                                            <ConnPill
+                                                                ok={u.gmail_connected}
+                                                                label={
+                                                                    u.gmail_connected
+                                                                        ? `Gmail · ${u.gmail_email || "on"}`
+                                                                        : "Gmail · off"
+                                                                }
+                                                            />
+                                                            <ConnPill
+                                                                ok={u.qbo_connected}
+                                                                label={
+                                                                    u.qbo_connected
+                                                                        ? `QBO · ${u.qbo_company || "on"}`
+                                                                        : "QBO · off"
+                                                                }
+                                                            />
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-4 py-3 text-right tabular-nums font-medium">
+                                                        {u.invoice_count}
+                                                    </td>
+                                                    <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
+                                                        {u.open_invoice_count}
+                                                    </td>
+                                                </tr>
+                                                {open ? (
+                                                    <tr>
+                                                        <td colSpan={6} className="p-0">
+                                                            <UserInvoicesPanel userId={u.id} />
+                                                        </td>
+                                                    </tr>
                                                 ) : null}
-                                            </td>
-                                            <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
-                                                {formatDate(u.created_at)}
-                                            </td>
-                                            <td className="px-4 py-3">
-                                                <div className="flex flex-wrap gap-1.5">
-                                                    <ConnPill
-                                                        ok={u.gmail_connected}
-                                                        label={u.gmail_connected ? `Gmail · ${u.gmail_email || "on"}` : "Gmail · off"}
-                                                    />
-                                                    <ConnPill
-                                                        ok={u.qbo_connected}
-                                                        label={u.qbo_connected ? `QBO · ${u.qbo_company || "on"}` : "QBO · off"}
-                                                    />
-                                                </div>
-                                            </td>
-                                            <td className="px-4 py-3 text-right tabular-nums font-medium">{u.invoice_count}</td>
-                                            <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">{u.open_invoice_count}</td>
-                                        </tr>
-                                    ))
+                                            </Fragment>
+                                        );
+                                    })
                                 )}
                             </tbody>
                         </table>

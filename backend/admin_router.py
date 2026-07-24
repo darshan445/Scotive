@@ -66,6 +66,28 @@ class AdminDashboard(BaseModel):
     users: list[AdminUserRow]
 
 
+class AdminInvoiceRow(BaseModel):
+    id: str
+    invoice_ref: Optional[str] = None
+    amount: Optional[float] = None
+    currency: Optional[str] = None
+    status: Optional[str] = None
+    counterparty_email: Optional[str] = None
+    counterparty_name: Optional[str] = None
+    source: Optional[str] = None
+    source_subject: Optional[str] = None
+    evidence_sentence: Optional[str] = None
+    source_date: Optional[str] = None
+    due_date: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class AdminInvoiceList(BaseModel):
+    user_id: str
+    user_email: Optional[str] = None
+    invoices: list[AdminInvoiceRow]
+
+
 def build_router(db, *, hash_password, verify_password, get_jwt_secret, is_https_env):
     router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -255,5 +277,64 @@ def build_router(db, *, hash_password, verify_password, get_jwt_secret, is_https
             total_invoices=total_invoices,
         )
         return AdminDashboard(stats=stats, users=users)
+
+    @router.get("/users/{user_id}/invoices", response_model=AdminInvoiceList)
+    async def admin_user_invoices(
+        user_id: str,
+        _admin: dict = Depends(get_current_admin),
+        limit: int = 100,
+    ):
+        try:
+            uid = ObjectId(user_id)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid user id.")
+        user = await db.users.find_one({"_id": uid})
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found.")
+
+        lim = max(1, min(int(limit or 100), 200))
+        rows: list[AdminInvoiceRow] = []
+        cursor = db.invoices.find({"user_id": uid}).sort(
+            [("created_at", -1), ("source_date", -1)]
+        ).limit(lim)
+        async for inv in cursor:
+            evidence = inv.get("evidence_sentence") or inv.get("approval_quote") or inv.get(
+                "needs_reply_quote"
+            ) or inv.get("payment_claim_quote")
+            if evidence and len(str(evidence)) > 400:
+                evidence = str(evidence)[:397] + "..."
+            created = inv.get("created_at")
+            if created is not None and not isinstance(created, str):
+                try:
+                    created = created.isoformat()
+                except Exception:
+                    created = str(created)
+            source = inv.get("source")
+            if not source and str(inv.get("source_message_id") or "").startswith("qbo:"):
+                source = "quickbooks"
+            elif not source and inv.get("source_message_id"):
+                source = "gmail"
+            rows.append(
+                AdminInvoiceRow(
+                    id=str(inv["_id"]),
+                    invoice_ref=inv.get("invoice_ref"),
+                    amount=float(inv["amount"]) if inv.get("amount") is not None else None,
+                    currency=inv.get("currency"),
+                    status=inv.get("status"),
+                    counterparty_email=inv.get("counterparty_email"),
+                    counterparty_name=inv.get("counterparty_name"),
+                    source=source,
+                    source_subject=inv.get("source_subject"),
+                    evidence_sentence=evidence,
+                    source_date=inv.get("source_date") if isinstance(inv.get("source_date"), str) else None,
+                    due_date=inv.get("due_date") if isinstance(inv.get("due_date"), str) else None,
+                    created_at=created,
+                )
+            )
+        return AdminInvoiceList(
+            user_id=user_id,
+            user_email=user.get("email"),
+            invoices=rows,
+        )
 
     return router
