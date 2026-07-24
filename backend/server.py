@@ -23,6 +23,7 @@ from gmail_oauth import build_router as build_gmail_router
 from qbo_oauth import build_router as build_qbo_router
 from scan_router import build_router as build_scan_router
 from settings_router import build_router as build_settings_router, seed_user_settings
+from admin_router import build_router as build_admin_router
 from incremental_sync import sync_all_users
 from escalation_scheduler import escalate_all_users
 from digest_sender import send_daily_digests
@@ -418,7 +419,15 @@ async def reset_password(payload: ResetPasswordInput):
 
 
 # Wire routers
+admin_router = build_admin_router(
+    db,
+    hash_password=hash_password,
+    verify_password=verify_password,
+    get_jwt_secret=get_jwt_secret,
+    is_https_env=_is_https_env,
+)
 api_router.include_router(auth_router)
+api_router.include_router(admin_router)
 api_router.include_router(build_gmail_router(db, get_current_user))
 api_router.include_router(build_qbo_router(db, get_current_user))
 api_router.include_router(build_scan_router(db, get_current_user))
@@ -594,23 +603,32 @@ async def _digest_loop(interval_seconds: int):
 
 
 async def seed_admin():
+    """Seed ops admin into separate `admins` collection (used by /admin).
+
+    Also keeps a matching users.role=admin row for legacy/local scripts that
+    still look there — password stays in sync with ADMIN_PASSWORD.
+    """
+    await admin_router.seed_admins()
+
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@scotive.com").lower()
     admin_password = os.environ.get("ADMIN_PASSWORD", "Admin@Scotive1")
+    admin_name = (os.environ.get("ADMIN_NAME") or "Scotive Admin").strip() or "Scotive Admin"
     existing = await db.users.find_one({"email": admin_email})
     if existing is None:
         await db.users.insert_one({
             "email": admin_email,
             "password_hash": hash_password(admin_password),
-            "name": "Scotive Admin",
+            "name": admin_name,
             "role": "admin",
             "created_at": datetime.now(timezone.utc),
         })
-        logger.info("Seeded admin user %s", admin_email)
+        logger.info("Seeded legacy admin user %s in users", admin_email)
     elif not verify_password(admin_password, existing["password_hash"]):
         await db.users.update_one(
-            {"email": admin_email}, {"$set": {"password_hash": hash_password(admin_password)}}
+            {"email": admin_email},
+            {"$set": {"password_hash": hash_password(admin_password), "role": "admin"}},
         )
-        logger.info("Updated admin password for %s", admin_email)
+        logger.info("Updated legacy admin password for %s", admin_email)
 
 
 async def recover_interrupted_work() -> None:

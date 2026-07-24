@@ -12,6 +12,7 @@ export default function robots() {
                     "/review",
                     "/settings",
                     "/invoices/",
+                    "/admin",
                     "/api/",
                 ],
             },
