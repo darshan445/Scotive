@@ -24,6 +24,7 @@ from qbo_oauth import build_router as build_qbo_router
 from scan_router import build_router as build_scan_router
 from settings_router import build_router as build_settings_router, seed_user_settings
 from admin_router import build_router as build_admin_router
+from contact_router import build_router as build_contact_router
 from incremental_sync import sync_all_users
 from escalation_scheduler import escalate_all_users
 from digest_sender import send_daily_digests
@@ -428,6 +429,7 @@ admin_router = build_admin_router(
 )
 api_router.include_router(auth_router)
 api_router.include_router(admin_router)
+api_router.include_router(build_contact_router(db))
 api_router.include_router(build_gmail_router(db, get_current_user))
 api_router.include_router(build_qbo_router(db, get_current_user))
 api_router.include_router(build_scan_router(db, get_current_user))
@@ -516,6 +518,9 @@ async def on_startup():
     await db.client_merges.create_index([("user_id", 1), ("alias_keys", 1)])
     await db.client_merge_prompts.create_index([("user_id", 1), ("status", 1), ("created_at", -1)])
     await db.client_merge_prompts.create_index([("user_id", 1), ("pair_key", 1), ("status", 1)])
+    await db.contact_messages.create_index([("created_at", -1)])
+    await db.contact_messages.create_index([("email", 1), ("created_at", -1)])
+    await db.contact_messages.create_index([("ip", 1), ("created_at", -1)])
     await seed_admin()
     # Safe only with a single Uvicorn worker — clears crash-stale locks & resumes seed jobs.
     await recover_interrupted_work()

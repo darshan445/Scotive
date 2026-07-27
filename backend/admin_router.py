@@ -88,6 +88,20 @@ class AdminInvoiceList(BaseModel):
     invoices: list[AdminInvoiceRow]
 
 
+class AdminContactMessage(BaseModel):
+    id: str
+    name: str
+    email: str
+    company: Optional[str] = None
+    message: str
+    created_at: Optional[str] = None
+    status: str = "new"
+
+
+class AdminContactMessageList(BaseModel):
+    messages: list[AdminContactMessage]
+
+
 def build_router(db, *, hash_password, verify_password, get_jwt_secret, is_https_env):
     router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -336,5 +350,51 @@ def build_router(db, *, hash_password, verify_password, get_jwt_secret, is_https
             user_email=user.get("email"),
             invoices=rows,
         )
+
+    @router.get("/contact-messages", response_model=AdminContactMessageList)
+    async def admin_contact_messages(
+        _admin: dict = Depends(get_current_admin),
+        limit: int = 100,
+    ):
+        lim = max(1, min(int(limit or 100), 200))
+        rows: list[AdminContactMessage] = []
+        cursor = db.contact_messages.find({}).sort("created_at", -1).limit(lim)
+        async for doc in cursor:
+            rows.append(
+                AdminContactMessage(
+                    id=str(doc["_id"]),
+                    name=doc.get("name") or "",
+                    email=doc.get("email") or "",
+                    company=doc.get("company"),
+                    message=doc.get("message") or "",
+                    created_at=doc.get("created_at")
+                    if isinstance(doc.get("created_at"), str)
+                    else None,
+                    status=doc.get("status") or "new",
+                )
+            )
+        return AdminContactMessageList(messages=rows)
+
+    @router.post("/contact-messages/{message_id}/read")
+    async def admin_mark_contact_read(
+        message_id: str,
+        _admin: dict = Depends(get_current_admin),
+    ):
+        try:
+            mid = ObjectId(message_id)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid message id.")
+        res = await db.contact_messages.update_one(
+            {"_id": mid},
+            {
+                "$set": {
+                    "status": "read",
+                    "read_at": datetime.now(timezone.utc).isoformat(),
+                }
+            },
+        )
+        if res.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Message not found.")
+        return {"ok": True}
 
     return router
