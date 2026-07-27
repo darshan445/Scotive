@@ -19,6 +19,7 @@ export default function sitemap() {
         })),
         { path: "/register", priority: 0.8, changeFrequency: "monthly" },
         { path: "/login", priority: 0.5, changeFrequency: "monthly" },
+        { path: "/contact", priority: 0.5, changeFrequency: "monthly" },
         { path: "/terms", priority: 0.3, changeFrequency: "yearly" },
         { path: "/privacy", priority: 0.3, changeFrequency: "yearly" },
     ];

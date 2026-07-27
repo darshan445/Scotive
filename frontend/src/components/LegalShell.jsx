@@ -15,6 +15,9 @@ export function LegalShell({ title, updated, children, testId }) {
                         <Link href="/integrations" className="text-muted-foreground hover:text-foreground transition-colors hidden sm:inline">
                             Integrations
                         </Link>
+                        <Link href="/contact" className="text-muted-foreground hover:text-foreground transition-colors hidden sm:inline">
+                            Contact
+                        </Link>
                         <Link href="/terms" className="text-muted-foreground hover:text-foreground transition-colors">
                             Terms
                         </Link>

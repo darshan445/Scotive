@@ -222,12 +222,114 @@ function AdminLogin({ onLoggedIn }) {
     );
 }
 
+function ContactInbox({ refreshKey }) {
+    const [messages, setMessages] = useState(null);
+    const [error, setError] = useState("");
+    const [loading, setLoading] = useState(true);
+
+    const load = useCallback(async () => {
+        setLoading(true);
+        setError("");
+        try {
+            const { data } = await api.get("/admin/contact-messages", { params: { limit: 50 } });
+            setMessages(data.messages || []);
+        } catch (err) {
+            setError(extractError(err));
+            setMessages([]);
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        load();
+    }, [load, refreshKey]);
+
+    async function markRead(id) {
+        try {
+            await api.post(`/admin/contact-messages/${id}/read`);
+            setMessages((prev) =>
+                (prev || []).map((m) => (m.id === id ? { ...m, status: "read" } : m))
+            );
+        } catch {
+            /* ignore */
+        }
+    }
+
+    return (
+        <div className="rounded-xl border border-border overflow-hidden" data-testid="admin-contact-inbox">
+            <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-3">
+                <div>
+                    <div className="type-title text-sm">Contact inbox</div>
+                    <div className="text-xs text-muted-foreground">Messages from /contact</div>
+                </div>
+                <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+                    <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${loading ? "animate-spin" : ""}`} />
+                    Refresh
+                </Button>
+            </div>
+            {error ? (
+                <div className="px-4 py-3 text-sm text-red-700">{error}</div>
+            ) : null}
+            {loading && !messages ? (
+                <div className="px-4 py-8 text-center text-muted-foreground">
+                    <Loader2 className="w-5 h-5 animate-spin inline-block" />
+                </div>
+            ) : !messages?.length ? (
+                <div className="px-4 py-8 text-sm text-muted-foreground text-center">
+                    No contact messages yet.
+                </div>
+            ) : (
+                <ul className="divide-y divide-border max-h-[28rem] overflow-y-auto">
+                    {messages.map((m) => (
+                        <li key={m.id} className="px-4 py-3 text-sm">
+                            <div className="flex flex-wrap items-baseline justify-between gap-2">
+                                <div className="font-medium text-foreground">
+                                    {m.name}
+                                    {m.company ? (
+                                        <span className="text-muted-foreground font-normal">
+                                            {" "}
+                                            · {m.company}
+                                        </span>
+                                    ) : null}
+                                </div>
+                                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                    <span>{formatDate(m.created_at)}</span>
+                                    {m.status === "new" ? (
+                                        <button
+                                            type="button"
+                                            onClick={() => markRead(m.id)}
+                                            className="rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 hover:bg-emerald-100"
+                                        >
+                                            Mark read
+                                        </button>
+                                    ) : (
+                                        <span className="rounded-full bg-muted px-2 py-0.5">read</span>
+                                    )}
+                                </div>
+                            </div>
+                            <a
+                                href={`mailto:${m.email}`}
+                                className="text-xs text-primary hover:underline underline-offset-2"
+                            >
+                                {m.email}
+                            </a>
+                            <p className="mt-2 text-muted-foreground whitespace-pre-wrap">{m.message}</p>
+                        </li>
+                    ))}
+                </ul>
+            )}
+        </div>
+    );
+}
+
 function AdminDashboard({ admin, onLogout }) {
     const [dashboard, setDashboard] = useState(null);
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState("all");
     const [expandedId, setExpandedId] = useState(null);
+    const [inboxKey, setInboxKey] = useState(0);
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -235,6 +337,7 @@ function AdminDashboard({ admin, onLogout }) {
         try {
             const { data } = await api.get("/admin/dashboard");
             setDashboard(data);
+            setInboxKey((k) => k + 1);
         } catch (err) {
             setError(extractError(err));
             setDashboard(null);
@@ -298,6 +401,8 @@ function AdminDashboard({ admin, onLogout }) {
                         <StatCard label="Invoices" value={stats.total_invoices} />
                     </div>
                 ) : null}
+
+                <ContactInbox refreshKey={inboxKey} />
 
                 <div className="flex flex-wrap gap-2">
                     {[

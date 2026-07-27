@@ -19,7 +19,7 @@ export function JsonLd() {
                 image: `${SITE}/scotive-icon.png`,
                 description:
                     "Invoice chasing software for freelancers, agencies, consultants, and any team that bills clients — track unpaid invoices from email and accounting tools, with human-approved follow-ups.",
-                email: "support@scotive.com",
+                email: "contact@scotive.com",
                 sameAs: [],
             },
             {

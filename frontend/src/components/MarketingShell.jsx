@@ -84,9 +84,10 @@ export function MarketingShell({
                     <div>
                         <div className="type-title text-sm mb-3">Legal</div>
                         <ul className="space-y-2 text-sm text-muted-foreground">
+                            <li><Link href="/contact" className="hover:text-foreground">Contact</Link></li>
                             <li><Link href="/terms" className="hover:text-foreground">Terms of Service</Link></li>
                             <li><Link href="/privacy" className="hover:text-foreground">Privacy Policy</Link></li>
-                            <li><a href="mailto:support@scotive.com" className="hover:text-foreground">support@scotive.com</a></li>
+                            <li><a href="mailto:contact@scotive.com" className="hover:text-foreground">contact@scotive.com</a></li>
                         </ul>
                     </div>
                 </div>

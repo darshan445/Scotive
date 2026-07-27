@@ -10,6 +10,9 @@ export function AppFooter({ compact = false }) {
             >
                 <span>© {new Date().getFullYear()} Scotive</span>
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                    <Link href="/contact" className="hover:text-foreground transition-colors">
+                        Contact
+                    </Link>
                     <Link href="/terms" className="hover:text-foreground transition-colors">
                         Terms
                     </Link>
