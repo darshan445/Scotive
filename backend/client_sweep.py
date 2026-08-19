@@ -26,10 +26,15 @@ from gmail_client import (
     parse_email_addresses,
 )
 
-logger = logging.getLogger("scotive.sweep")
+from llm_client import (
+    OPENAI_URL,
+    openai_api_key,
+    openai_headers,
+    openai_message_content,
+    openai_model,
+)
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-OPENROUTER_MODEL = "openai/gpt-4o-mini"
+logger = logging.getLogger("scotive.sweep")
 
 # Vendors/SaaS that bill the user — not clients
 VENDOR_DOMAINS = {
@@ -661,9 +666,9 @@ async def extract_client_with_ai(
     system_prompt: str | None = None,
     extra_context: str | None = None,
 ) -> Optional[dict]:
-    api_key = os.environ.get("OPENROUTER_API_KEY")
+    api_key = openai_api_key()
     if not api_key:
-        logger.warning("sweep.pass4 SKIP client=%s reason=no_openrouter_key", client_email)
+        logger.warning("sweep.pass4 SKIP client=%s reason=no_openai_key", client_email)
         return None
 
     anchor_set = set(anchor_ids)
@@ -688,15 +693,10 @@ async def extract_client_with_ai(
     try:
         async with httpx.AsyncClient(timeout=90.0) as c:
             r = await c.post(
-                OPENROUTER_URL,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": os.environ.get("FRONTEND_URL", "https://scotive.app"),
-                    "X-Title": "Scotive",
-                },
+                OPENAI_URL,
+                headers=openai_headers(),
                 json={
-                    "model": OPENROUTER_MODEL,
+                    "model": openai_model(),
                     "messages": [
                         {"role": "system", "content": prompt},
                         {"role": "user", "content": user_content[:14000]},
@@ -709,7 +709,7 @@ async def extract_client_with_ai(
             if r.status_code != 200:
                 logger.warning("sweep.pass4 FAIL client=%s status=%s", client_email, r.status_code)
                 return None
-            parsed = json.loads(r.json()["choices"][0]["message"]["content"])
+            parsed = json.loads(openai_message_content(r.json()))
             logger.info(
                 "sweep.pass4 OK client=%s receivable=%s invoices=%s events=%s conf=%.2f",
                 client_email,

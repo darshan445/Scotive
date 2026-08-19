@@ -422,7 +422,7 @@ async def run_gmail_sync(
                 new_invoices.extend(unit_new)
                 due_prompts.extend(unit_prompts)
 
-        if os.environ.get("OPENROUTER_API_KEY"):
+        if os.environ.get("OPENAI_API_KEY"):
             await _set_job_phase("ai", counts)
             # Onboarding (90d seed) + incremental new-invoice extract both use
             # rulebook_seed_scan.txt + prepared JSON I/O.
@@ -438,7 +438,7 @@ async def run_gmail_sync(
                 use_seed_rulebook=True,
             )
         else:
-            logger.warning("sync FALLBACK mode=%s reason=no_openrouter_key", mode)
+            logger.warning("sync FALLBACK mode=%s reason=no_openai_key", mode)
             fallback = _regex_fallback_candidates(
                 messages, my_email,
                 user_id=user_id, job_id=job_id or user_id,

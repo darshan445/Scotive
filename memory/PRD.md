@@ -212,7 +212,7 @@ Condensed technical inventory for agents. **Do not treat as product spec** — t
 |---|---|
 | Auth | JWT email/password, register/login/forgot/reset, lockout |
 | Gmail | OAuth readonly+send, encrypted tokens, reconnect banners |
-| Scan (legacy) | Client-sweep pipeline (`client_sweep.py`), 5-phase progress UI, OpenRouter AI per client |
+| Scan (legacy) | Client-sweep pipeline (`client_sweep.py`), 5-phase progress UI, OpenAI AI per client |
 | Ledger | Invoice rows, per-currency totals, domain client dedup, upsert by invoice ref |
 | Clients | List + detail, payment behavior stats, identities |
 | Lifecycle | States, grace, row actions, mark-paid/write-off + undo |
@@ -233,4 +233,4 @@ Condensed technical inventory for agents. **Do not treat as product spec** — t
 - **Do not change** sign-up, sign-in, or Gmail connect flows unless explicitly requested.
 - When implementing alignment items, update the **Alignment backlog** table (mark done / note deltas).
 - NO auto-testing unless user asks. User tests themselves.
-- Backend: `uvicorn server:app --reload --host 0.0.0.0 --port 8000`. Env: JWT_SECRET, GOOGLE_*, GMAIL_REDIRECT_URI, ENCRYPTION_KEY, OPENROUTER_API_KEY.
+- Backend: `uvicorn server:app --reload --host 0.0.0.0 --port 8000`. Env: JWT_SECRET, GOOGLE_*, GMAIL_REDIRECT_URI, ENCRYPTION_KEY, OPENAI_API_KEY.

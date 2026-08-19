@@ -13,7 +13,7 @@ Design:
   Bonus step: promise_broken with promise_date in the past → firm-tone draft
   quoting the client's own words. Uses a dedicated step_index = "promise_broken".
 
-The generator uses the same OpenRouter model as the manual draft endpoint,
+The generator uses the same OpenAI model as the manual draft endpoint,
 plus optional late-fee wording on the final step when `late_fee_enabled`.
 """
 from __future__ import annotations
@@ -28,7 +28,13 @@ from typing import Optional
 import httpx
 from bson import ObjectId
 
-from scan_pipeline import OPENROUTER_URL, OPENROUTER_MODEL
+from llm_client import (
+    OPENAI_URL,
+    openai_api_key,
+    openai_headers,
+    openai_message_content,
+    openai_model,
+)
 
 logger = logging.getLogger("scotive.escalation")
 
@@ -92,7 +98,7 @@ async def generate_draft(
 
     Never raises — returns None on failure so the scheduler can skip and retry.
     """
-    api_key = os.environ.get("OPENROUTER_API_KEY")
+    api_key = openai_api_key()
     if not api_key:
         return None
 
@@ -145,15 +151,10 @@ async def generate_draft(
     try:
         async with httpx.AsyncClient(timeout=30.0) as c:
             r = await c.post(
-                OPENROUTER_URL,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": os.environ.get("FRONTEND_URL", "https://scotive.app"),
-                    "X-Title": "Scotive",
-                },
+                OPENAI_URL,
+                headers=openai_headers(),
                 json={
-                    "model": OPENROUTER_MODEL,
+                    "model": openai_model(),
                     "messages": [
                         {"role": "system", "content": system},
                         {"role": "user", "content": user_msg},
@@ -166,7 +167,7 @@ async def generate_draft(
             if r.status_code != 200:
                 logger.warning("Escalation draft AI failed: %s %s", r.status_code, r.text[:200])
                 return None
-            content = r.json()["choices"][0]["message"]["content"]
+            content = openai_message_content(r.json())
             return json.loads(content)
     except Exception as e:  # pragma: no cover
         logger.warning("Escalation draft error: %s", e)

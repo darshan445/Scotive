@@ -169,7 +169,7 @@ async def reeval_after_user_outbound_send(
     if inv.get("status") not in OPEN_INVOICE_STATUSES:
         out["skipped"] = "not_open"
         return out
-    if not os.environ.get("OPENROUTER_API_KEY"):
+    if not os.environ.get("OPENAI_API_KEY"):
         out["skipped"] = "no_ai"
         return out
 
@@ -745,7 +745,7 @@ async def run_incremental_pipeline(db, user_id) -> dict[str, Any]:
     conn = await db.gmail_connections.find_one({"user_id": user_id})
     if not conn or conn.get("status") != "connected":
         return {**counts, "skipped": "no_connection"}
-    if not os.environ.get("OPENROUTER_API_KEY"):
+    if not os.environ.get("OPENAI_API_KEY"):
         # No AI available — legacy bulk path still writes regex-extracted rows.
         return await run_gmail_sync(db, user_id, "incremental",
                                     confidence_min=INCREMENTAL_CONFIDENCE_MIN)

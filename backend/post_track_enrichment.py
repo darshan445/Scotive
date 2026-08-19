@@ -485,8 +485,8 @@ async def run_pre_curation_enrichment(db, user_id, job_id) -> dict[str, Any]:
     import os
 
     counts: dict[str, Any] = {"candidates": 0, "staging_created": 0, "skipped": None}
-    if not os.environ.get("OPENROUTER_API_KEY"):
-        counts["skipped"] = "no_openrouter_key"
+    if not os.environ.get("OPENAI_API_KEY"):
+        counts["skipped"] = "no_openai_key"
         return counts
 
     candidates: list[dict] = []

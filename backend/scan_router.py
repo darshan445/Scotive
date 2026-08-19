@@ -1196,7 +1196,7 @@ def build_router(db, get_current_user):
     # ---- Chase drafts (Feature 7) ----------------------------------------
     @router.post("/invoices/{invoice_id}/draft-chase")
     async def draft_chase(invoice_id: str, payload: ChaseDraftInput, user: dict = Depends(get_current_user)):
-        from scan_pipeline import OPENROUTER_URL, OPENROUTER_MODEL
+        from llm_client import OPENAI_URL, openai_api_key, openai_headers, openai_message_content, openai_model
         import httpx, os, json
         try:
             inv = await db.invoices.find_one({"_id": ObjectId(invoice_id), "user_id": user["_id"]})
@@ -1297,16 +1297,27 @@ def build_router(db, get_current_user):
             f"Client's own words (broken promise or dispute): {dispute_quote or inv.get('evidence_sentence') or ''}\n"
             f"User extra note (one-time delivery steer only): {payload.note or ''}"
         )
-        api_key = os.environ.get("OPENROUTER_API_KEY")
+        api_key = openai_api_key()
         if not api_key:
             raise HTTPException(status_code=500, detail="AI not configured")
         async with httpx.AsyncClient(timeout=30.0) as c:
-            r = await c.post(OPENROUTER_URL, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                             json={"model": OPENROUTER_MODEL, "messages":[{"role":"system","content":sys},{"role":"user","content":user_msg}],
-                                   "temperature":0.4, "response_format":{"type":"json_object"}, "max_tokens":400})
+            r = await c.post(
+                OPENAI_URL,
+                headers=openai_headers(),
+                json={
+                    "model": openai_model(),
+                    "messages": [
+                        {"role": "system", "content": sys},
+                        {"role": "user", "content": user_msg},
+                    ],
+                    "temperature": 0.4,
+                    "response_format": {"type": "json_object"},
+                    "max_tokens": 400,
+                },
+            )
             if r.status_code != 200:
                 raise HTTPException(status_code=502, detail="AI draft failed")
-            content = r.json()["choices"][0]["message"]["content"]
+            content = openai_message_content(r.json())
             draft = json.loads(content)
         return {
             "subject": draft.get("subject", ""),
@@ -1379,7 +1390,7 @@ def build_router(db, get_current_user):
 
     @router.post("/quick-compose")
     async def quick_compose(payload: QuickComposeInput, user: dict = Depends(get_current_user)):
-        from scan_pipeline import OPENROUTER_URL, OPENROUTER_MODEL
+        from llm_client import OPENAI_URL, openai_api_key, openai_headers, openai_message_content, openai_model
         import httpx, os, json
         try:
             inv = await db.invoices.find_one({"_id": ObjectId(payload.invoice_id), "user_id": user["_id"]})
@@ -1402,12 +1413,27 @@ def build_router(db, get_current_user):
                     f"Invoice: {inv.get('invoice_ref') or 'n/a'} · {inv.get('amount')} {inv.get('currency','USD')}\n"
                     f"Sign emails as: {signer_name or 'n/a'}\n"
                     f"User rough intent: {payload.intent}")
-        api_key = os.environ.get("OPENROUTER_API_KEY")
+        api_key = openai_api_key()
+        if not api_key:
+            raise HTTPException(status_code=500, detail="AI not configured")
         async with httpx.AsyncClient(timeout=30.0) as c:
-            r = await c.post(OPENROUTER_URL, headers={"Authorization": f"Bearer {api_key}", "Content-Type":"application/json"},
-                             json={"model": OPENROUTER_MODEL, "messages":[{"role":"system","content":sys},{"role":"user","content":user_msg}],
-                                   "temperature":0.4, "response_format":{"type":"json_object"}, "max_tokens":400})
-            content = r.json()["choices"][0]["message"]["content"]
+            r = await c.post(
+                OPENAI_URL,
+                headers=openai_headers(),
+                json={
+                    "model": openai_model(),
+                    "messages": [
+                        {"role": "system", "content": sys},
+                        {"role": "user", "content": user_msg},
+                    ],
+                    "temperature": 0.4,
+                    "response_format": {"type": "json_object"},
+                    "max_tokens": 400,
+                },
+            )
+            if r.status_code != 200:
+                raise HTTPException(status_code=502, detail="AI draft failed")
+            content = openai_message_content(r.json())
             draft = json.loads(content)
         return {"subject": draft.get("subject",""), "body": draft.get("body",""),
                 "to": inv.get("counterparty_email"), "invoice_id": payload.invoice_id}

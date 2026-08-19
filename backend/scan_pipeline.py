@@ -13,6 +13,15 @@ import re
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
+from llm_client import (
+    OPENAI_URL,
+    OPENAI_MODEL,
+    openai_api_key,
+    openai_headers,
+    openai_message_content,
+    openai_model,
+)
+
 import httpx
 
 # Open-invoice statuses used by receipt reconciliation
@@ -145,10 +154,8 @@ def cheap_filter(msg: dict) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# AI extraction via OpenRouter (gpt-4o-mini)
+# AI extraction via OpenAI (gpt-4o-mini)
 # ---------------------------------------------------------------------------
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-OPENROUTER_MODEL = "openai/gpt-4o-mini"
 
 EXTRACTION_PROMPT = """You are analysing ONE email from a small business owner's inbox to determine whether it relates to money they are owed by a client (accounts receivable).
 
@@ -182,9 +189,9 @@ Rules:
 
 
 async def extract_with_ai(msg: dict, my_email: str = "") -> Optional[dict]:
-    api_key = os.environ.get("OPENROUTER_API_KEY")
+    api_key = openai_api_key()
     if not api_key:
-        logger.warning("pipeline.ai SKIP %s reason=no_openrouter_key", _msg_label(msg))
+        logger.warning("pipeline.ai SKIP %s reason=no_openai_key", _msg_label(msg))
         return None
 
     user_content = (
@@ -200,15 +207,10 @@ async def extract_with_ai(msg: dict, my_email: str = "") -> Optional[dict]:
     try:
         async with httpx.AsyncClient(timeout=30.0) as c:
             r = await c.post(
-                OPENROUTER_URL,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": os.environ.get("FRONTEND_URL", "https://scotive.app"),
-                    "X-Title": "Scotive",
-                },
+                OPENAI_URL,
+                headers=openai_headers(),
                 json={
-                    "model": OPENROUTER_MODEL,
+                    "model": openai_model(),
                     "messages": [
                         {"role": "system", "content": EXTRACTION_PROMPT},
                         {"role": "user", "content": user_content},
@@ -225,7 +227,7 @@ async def extract_with_ai(msg: dict, my_email: str = "") -> Optional[dict]:
                 )
                 return None
             data = r.json()
-            content = data["choices"][0]["message"]["content"]
+            content = openai_message_content(data)
             parsed = json.loads(content)
             logger.info(
                 "pipeline.ai OK %s -> money=%s kind=%s amount=%s conf=%s cp=%s",

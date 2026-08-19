@@ -41,10 +41,15 @@ from post_track_enrichment import (
     _out_of_thread_relevance,
 )
 
-logger = logging.getLogger("scotive.seed_ai")
+from llm_client import (
+    OPENAI_URL,
+    openai_api_key,
+    openai_headers,
+    openai_message_content,
+    openai_model,
+)
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-OPENROUTER_MODEL = os.environ.get("SEED_AI_MODEL", "openai/gpt-4o-mini")
+logger = logging.getLogger("scotive.seed_ai")
 SEED_AI_CONCURRENCY = int(os.environ.get("SEED_AI_CONCURRENCY", "4"))
 SEED_CONFIDENCE_MIN = float(os.environ.get("SEED_CONFIDENCE_MIN", "0.65"))
 MAX_MESSAGES_PER_CLIENT = 25
@@ -475,7 +480,7 @@ def _normalize_enriched_status(raw: str | None) -> str | None:
 
 async def ai_invoice_gate(msg: dict, my_email: str) -> bool:
     """Single-email LLM check: is this the user billing a client? Fails open."""
-    api_key = os.environ.get("OPENROUTER_API_KEY")
+    api_key = openai_api_key()
     if not api_key:
         return True
     atts = ", ".join(msg.get("attachment_names") or []) or "(none)"
@@ -490,15 +495,10 @@ async def ai_invoice_gate(msg: dict, my_email: str) -> bool:
     try:
         async with httpx.AsyncClient(timeout=30.0) as c:
             r = await c.post(
-                OPENROUTER_URL,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": os.environ.get("FRONTEND_URL", "https://scotive.app"),
-                    "X-Title": "Scotive",
-                },
+                OPENAI_URL,
+                headers=openai_headers(),
                 json={
-                    "model": OPENROUTER_MODEL,
+                    "model": openai_model(),
                     "messages": [
                         {"role": "system", "content": SEED_GATE_PROMPT},
                         {"role": "user", "content": content},
@@ -510,7 +510,7 @@ async def ai_invoice_gate(msg: dict, my_email: str) -> bool:
             )
             if r.status_code != 200:
                 return True
-            parsed = json.loads(r.json()["choices"][0]["message"]["content"])
+            parsed = json.loads(openai_message_content(r.json()))
             is_inv = parsed.get("is_invoice")
             conf = float(parsed.get("confidence") or 0)
             if is_inv is False and conf >= 0.5:
@@ -531,9 +531,9 @@ async def extract_client_invoices_with_ai(
     system_prompt: str | None = None,
     context_note: str | None = None,
 ) -> Optional[dict[str, Any]]:
-    api_key = os.environ.get("OPENROUTER_API_KEY")
+    api_key = openai_api_key()
     if not api_key:
-        logger.warning("seed.ai SKIP client=%s reason=no_openrouter_key", client_email)
+        logger.warning("seed.ai SKIP client=%s reason=no_openai_key", client_email)
         return None
 
     blocks = [_format_message_block(m, my_email=my_email) for m in messages]
@@ -551,15 +551,10 @@ async def extract_client_invoices_with_ai(
     try:
         async with httpx.AsyncClient(timeout=120.0) as c:
             r = await c.post(
-                OPENROUTER_URL,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": os.environ.get("FRONTEND_URL", "https://scotive.app"),
-                    "X-Title": "Scotive",
-                },
+                OPENAI_URL,
+                headers=openai_headers(),
                 json={
-                    "model": OPENROUTER_MODEL,
+                    "model": openai_model(),
                     "messages": [
                         {"role": "system", "content": system_prompt or SEED_CLIENT_PROMPT},
                         {"role": "user", "content": user_content},
@@ -572,7 +567,7 @@ async def extract_client_invoices_with_ai(
             if r.status_code != 200:
                 logger.warning("seed.ai FAIL client=%s status=%s", client_email, r.status_code)
                 return None
-            parsed = json.loads(r.json()["choices"][0]["message"]["content"])
+            parsed = json.loads(openai_message_content(r.json()))
             logger.info(
                 "seed.ai OK client=%s invoices=%s discarded=%s",
                 client_email,

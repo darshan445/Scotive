@@ -127,17 +127,16 @@ export default function PrivacyPage() {
                 <p>
                     To extract invoice details and draft emails, relevant content (for example
                     message subjects, body excerpts, PDF text snippets, and ledger fields) may be
-                    sent to third-party AI infrastructure — currently via{" "}
-                    <strong>OpenRouter</strong>, which routes requests to model providers
-                    (for example OpenAI models). That processing is for <strong>inference</strong>
-                    {" "}to operate features you use.
+                    sent to third-party AI infrastructure — currently{" "}
+                    <strong>OpenAI</strong> (Chat Completions API, gpt-4o-mini). That processing is
+                    for <strong>inference</strong> to operate features you use.
                 </p>
                 <p>
                     <strong>Scotive’s policy:</strong> we do not use your email content to train
                     Scotive’s own models. We configure and select providers with the intent that
                     customer content is not used to train their foundation models where the
                     provider offers such terms; provider policies may change, and you should
-                    review OpenRouter’s and the underlying model provider’s privacy terms as well.
+                    review OpenAI’s privacy terms as well.
                 </p>
                 <p>
                     AI outputs can be wrong. Always review drafts and ledger fields before acting.
@@ -159,8 +158,7 @@ export default function PrivacyPage() {
                         privacy policy
                     </li>
                     <li>
-                        <strong>OpenRouter / model providers</strong> — AI extraction and drafting
-                        as described above
+                        <strong>OpenAI</strong> — AI extraction and drafting as described above
                     </li>
                     <li>
                         <strong>Hosting and infrastructure</strong> — for example our application

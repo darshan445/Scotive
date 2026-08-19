@@ -28,10 +28,15 @@ from ledger_reconcile import (
 )
 from promise_dates import resolve_relative_date
 
-logger = logging.getLogger("scotive.seed_rulebook")
+from llm_client import (
+    OPENAI_URL,
+    openai_api_key,
+    openai_headers,
+    openai_message_content,
+    openai_model,
+)
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-OPENROUTER_MODEL = os.environ.get("SEED_AI_MODEL", "openai/gpt-4o-mini")
+logger = logging.getLogger("scotive.seed_rulebook")
 RULEBOOK_PATH = Path(__file__).resolve().parent / "prompts" / "rulebook_seed_scan.txt"
 
 _RULEBOOK_CACHE: str | None = None
@@ -241,10 +246,10 @@ async def extract_seed_scan_with_rulebook(
     client_email: str,
     prepared_input: dict[str, Any],
 ) -> Optional[dict[str, Any]]:
-    """Call OpenRouter with rulebook_seed_scan.txt as the sole system prompt."""
-    api_key = os.environ.get("OPENROUTER_API_KEY")
+    """Call OpenAI with rulebook_seed_scan.txt as the sole system prompt."""
+    api_key = openai_api_key()
     if not api_key:
-        logger.warning("seed.rulebook SKIP client=%s reason=no_openrouter_key", client_email)
+        logger.warning("seed.rulebook SKIP client=%s reason=no_openai_key", client_email)
         return None
 
     prompt = load_seed_scan_rulebook()
@@ -259,7 +264,7 @@ async def extract_seed_scan_with_rulebook(
         "seed.rulebook CALL client=%s model=%s system=rulebook_seed_scan.txt "
         "user_chars=%s msgs=%s anchor_ids=%s anchor_ref=%s io_log=%s",
         client_email,
-        OPENROUTER_MODEL,
+        openai_model(),
         len(user_content),
         len(prepared_input.get("messages") or []),
         prepared_input.get("anchor_message_ids"),
@@ -270,15 +275,10 @@ async def extract_seed_scan_with_rulebook(
     try:
         async with httpx.AsyncClient(timeout=90.0) as c:
             r = await c.post(
-                OPENROUTER_URL,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": os.environ.get("FRONTEND_URL", "https://scotive.app"),
-                    "X-Title": "Scotive",
-                },
+                OPENAI_URL,
+                headers=openai_headers(),
                 json={
-                    "model": OPENROUTER_MODEL,
+                    "model": openai_model(),
                     "messages": [
                         {"role": "system", "content": prompt},
                         {"role": "user", "content": user_content},
@@ -299,7 +299,7 @@ async def extract_seed_scan_with_rulebook(
                     r.text[:2000],
                 )
                 return None
-            raw_content = r.json()["choices"][0]["message"]["content"]
+            raw_content = openai_message_content(r.json())
             try:
                 raw_parsed = json.loads(raw_content)
             except json.JSONDecodeError:
