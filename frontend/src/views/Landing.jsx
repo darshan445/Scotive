@@ -677,7 +677,7 @@ export default function LandingPage() {
                         <div className="type-title text-sm mb-3">Product</div>
                         <ul className="space-y-2 text-sm text-muted-foreground">
                             <li><Link href="/invoice-chasing-software" className="hover:text-foreground">Invoice chasing software</Link></li>
-                            <li><Link href="/chase-unpaid-invoices" className="hover:text-foreground">Chase unpaid invoices</Link></li>
+                            <li><Link href="/chase-unpaid-invoices" className="hover:text-foreground">Unpaid invoices</Link></li>
                             <li><Link href="/accounts-receivable-automation" className="hover:text-foreground">AR automation</Link></li>
                             <li><Link href="/guides" className="hover:text-foreground">Guides</Link></li>
                             <li><Link href="/integrations" className="hover:text-foreground">Integrations</Link></li>

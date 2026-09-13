@@ -57,23 +57,27 @@ export function GuideArticle({
                 </div>
 
                 <aside className="mt-14 rounded-2xl border border-border bg-muted/30 p-6 md:p-8">
-                    <h2 className="type-title text-xl text-foreground">Skip writing these from scratch</h2>
+                    <div className="eyebrow mb-2">Scotive</div>
+                    <h2 className="type-title text-xl text-foreground">
+                        Skip rewriting this follow-up every week
+                    </h2>
                     <p className="type-body mt-2 text-sm text-muted-foreground">
-                        Scotive drafts invoice follow-ups matched to how late the invoice actually is —
-                        promises, disputes, and overdue balances included. You approve every send.
+                        This guide helps you word one email. Scotive tracks unpaid invoices from Gmail
+                        (and QuickBooks), drafts the next chase from real replies — promises, disputes,
+                        overdue — and waits for your approval before anything sends.
                     </p>
                     <div className="mt-4 flex flex-wrap gap-3">
                         <Link
                             href="/register"
                             className="inline-flex items-center rounded-xl bg-primary text-primary-foreground px-5 py-2.5 text-sm font-semibold hover:bg-primary/90"
                         >
-                            Start free
+                            Start free with Scotive
                         </Link>
                         <Link
                             href="/chase-unpaid-invoices"
                             className="inline-flex items-center rounded-xl border border-border px-5 py-2.5 text-sm font-medium hover:bg-muted"
                         >
-                            How chasing works
+                            How Scotive chases unpaid invoices
                         </Link>
                     </div>
                 </aside>
@@ -101,7 +105,11 @@ export function GuideArticle({
                     </div>
                 ) : null}
             </article>
-            <MarketingCta />
+            <MarketingCta
+                title="Use the tip — then automate the chase"
+                description="Scotive builds your unpaid-invoice list from email and accounting, drafts the next follow-up, and never sends without you."
+                buttonLabel="Start free with Scotive"
+            />
         </MarketingShell>
     );
 }

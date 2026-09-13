@@ -1,5 +1,11 @@
 import Link from "next/link";
-import { MarketingCta, MarketingHero, MarketingShell } from "@/components/MarketingShell";
+import {
+    MarketingCta,
+    MarketingHero,
+    MarketingHeroCtas,
+    MarketingShell,
+    MarketingSolveBlock,
+} from "@/components/MarketingShell";
 import { FaqSection, HOME_FAQS } from "@/components/FaqSection";
 import { pageMetadata } from "@/lib/seo";
 
@@ -19,17 +25,24 @@ export default function InvoiceChasingSoftwarePage() {
                 title="Chase invoices without becoming a collections department"
                 description="Competitors like Chaser and Upflow automate AR for finance teams. Scotive fits freelancers, agencies, consultants, and any team that bills clients: track unpaid invoices, understand replies, and send follow-ups only when you approve."
             >
-                <div className="mt-8 flex flex-wrap gap-3">
-                    <Link href="/register" className="inline-flex items-center rounded-xl bg-primary text-primary-foreground px-5 py-2.5 text-sm font-semibold hover:bg-primary/90">
-                        Start free
-                    </Link>
-                    <Link href="/integrations" className="inline-flex items-center rounded-xl border border-border px-5 py-2.5 text-sm font-medium hover:bg-muted">
-                        See integrations
-                    </Link>
-                </div>
+                <MarketingHeroCtas
+                    secondaryHref="/integrations"
+                    secondaryLabel="See integrations"
+                />
             </MarketingHero>
 
-            <section className="py-14 md:py-16 max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
+            <section className="py-14 md:py-16 max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 space-y-12">
+                <MarketingSolveBlock
+                    title="Scotive is invoice chasing software built around your approval"
+                    problem="You need unpaid invoices tracked and follow-ups written — without auto-sending awkward sequences to clients you still work with."
+                    points={[
+                        "Know which invoices are still unpaid from Gmail + QuickBooks",
+                        "Drafts that match overdue, promised, disputed, or says-paid",
+                        "You approve every send from your own mailbox",
+                    ]}
+                    ctaLabel="Start free with Scotive"
+                />
+
                 <div>
                     <h2 className="type-title text-2xl md:text-3xl">Who uses invoice chasing software</h2>
                     <p className="type-body mt-3 text-muted-foreground">
@@ -76,7 +89,11 @@ export default function InvoiceChasingSoftwarePage() {
                 </div>
             </section>
             <FaqSection items={HOME_FAQS} title="Invoice chasing FAQ" />
-            <MarketingCta />
+            <MarketingCta
+                title="Invoice chasing software that waits for your click"
+                description="Connect Gmail, see unpaid invoices, approve drafts. Nothing auto-sends."
+                buttonLabel="Start free with Scotive"
+            />
         </MarketingShell>
     );
 }
