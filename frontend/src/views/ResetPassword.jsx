@@ -67,9 +67,7 @@ export default function ResetPasswordPage() {
             ) : (
                 <form onSubmit={onSubmit} className="space-y-5" data-testid="reset-form">
                     <div className="space-y-2">
-                        <Label htmlFor="password" className="text-xs font-mono uppercase tracking-[0.2em] text-muted-foreground">
-                            New password
-                        </Label>
+                        <Label htmlFor="password">New password</Label>
                         <Input
                             id="password"
                             type="password"
@@ -83,9 +81,7 @@ export default function ResetPasswordPage() {
                         />
                     </div>
                     <div className="space-y-2">
-                        <Label htmlFor="confirm" className="text-xs font-mono uppercase tracking-[0.2em] text-muted-foreground">
-                            Confirm password
-                        </Label>
+                        <Label htmlFor="confirm">Confirm password</Label>
                         <Input
                             id="confirm"
                             type="password"
@@ -108,7 +104,7 @@ export default function ResetPasswordPage() {
                     <Button
                         type="submit"
                         disabled={submitting}
-                        className="w-full h-12 rounded-md bg-foreground text-background hover:bg-foreground/90 font-semibold text-base group"
+                        className="w-full h-12 rounded-full font-semibold text-base group"
                         data-testid="reset-submit-button"
                     >
                         {submitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}

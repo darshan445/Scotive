@@ -33,6 +33,7 @@ from gmail_client import (
     get_messages_batch,
     get_thread_messages,
     list_message_ids,
+    mailbox_tokens_for_user,
 )
 from client_sweep import (
     CONSUMER_DOMAINS,
@@ -742,8 +743,8 @@ async def run_incremental_pipeline(db, user_id) -> dict[str, Any]:
 
     if not await _onboarding_allows_incremental(db, user_id):
         return {**counts, "skipped": "awaiting_onboarding"}
-    conn = await db.gmail_connections.find_one({"user_id": user_id})
-    if not conn or conn.get("status") != "connected":
+    mailboxes = await mailbox_tokens_for_user(db, user_id)
+    if not mailboxes:
         return {**counts, "skipped": "no_connection"}
     if not os.environ.get("OPENAI_API_KEY"):
         # No AI available — legacy bulk path still writes regex-extracted rows.
@@ -760,21 +761,41 @@ async def run_incremental_pipeline(db, user_id) -> dict[str, Any]:
     )
 
     try:
-        try:
-            access = await get_access_token(db, user_id)
-        except GmailAuthError as e:
-            return {**counts, "skipped": "auth_error", "error": str(e)}
-
-        my_email = (conn.get("email") or "").lower()
         ignored = await _ignored_ids(db, user_id)
         blocklist = await load_blocklist(db, user_id)
         window_start = incremental_window_start(state.get("last_synced_at"))
         window = f"after:{int(window_start.timestamp())}"
 
-        # ---- Stage 1: bulk sent-mail fetch (window) + cheap filter ----------
-        messages, filter_stats = await fetch_filtered_sent_mail(
-            access, my_email, blocklist, ignored, "incremental", window,
-        )
+        messages: list[dict] = []
+        seen_ids: set[str] = set()
+        filter_stats = {"fetched": 0, "kept": 0, "dropped": 0}
+        my_email = ""
+        access = mailboxes[0][1]
+
+        for conn, token in mailboxes:
+            box_email = (conn.get("email") or "").lower()
+            if not my_email:
+                my_email = box_email
+            try:
+                box_msgs, box_stats = await fetch_filtered_sent_mail(
+                    token, box_email, blocklist, ignored, "incremental", window,
+                )
+            except GmailAuthError as e:
+                logger.warning("incremental mailbox auth fail provider=%s err=%s", conn.get("provider"), e)
+                continue
+            filter_stats["fetched"] += box_stats.get("fetched", 0)
+            filter_stats["kept"] += box_stats.get("kept", 0)
+            filter_stats["dropped"] += box_stats.get("dropped", 0)
+            for m in box_msgs:
+                mid = m.get("id")
+                if not mid or mid in seen_ids:
+                    continue
+                seen_ids.add(mid)
+                m["mailbox_email"] = box_email
+                m["mailbox_provider"] = conn.get("provider") or "google"
+                messages.append(m)
+            access = token
+
         counts.update(filter_stats)
 
         # ---- Stage 2: registry + known-vs-new split -------------------------
@@ -935,10 +956,12 @@ async def sync_all_users(db) -> dict[str, Any]:
         "state_changes": 0,
         "skipped": 0,
     }
+    seen_users: set = set()
     async for conn in db.gmail_connections.find({"status": "connected"}):
         uid = conn.get("user_id")
-        if not uid:
+        if not uid or uid in seen_users:
             continue
+        seen_users.add(uid)
         try:
             result = await run_incremental_sync(db, uid)
             if result.get("skipped"):

@@ -56,9 +56,7 @@ export default function ForgotPasswordPage() {
             ) : (
                 <form onSubmit={onSubmit} className="space-y-5" data-testid="forgot-form">
                     <div className="space-y-2">
-                        <Label htmlFor="email" className="text-xs font-mono uppercase tracking-[0.2em] text-muted-foreground">
-                            Work email
-                        </Label>
+                        <Label htmlFor="email">Email</Label>
                         <Input
                             id="email"
                             type="email"
@@ -81,7 +79,7 @@ export default function ForgotPasswordPage() {
                     <Button
                         type="submit"
                         disabled={submitting}
-                        className="w-full h-12 rounded-md bg-foreground text-background hover:bg-foreground/90 font-semibold text-base group"
+                        className="w-full h-12 rounded-full font-semibold text-base group"
                         data-testid="forgot-submit-button"
                     >
                         {submitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}

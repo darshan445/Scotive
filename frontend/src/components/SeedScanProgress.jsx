@@ -19,7 +19,7 @@ export function SeedScanProgress({ scanPhase, counts }) {
                     <Mail className="w-5 h-5 text-muted-foreground" />
                 </div>
                 <div>
-                    <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">First setup</div>
+                    <div className="eyebrow">First setup</div>
                     <h2 className="type-title text-xl">Finding invoices you sent</h2>
                 </div>
             </div>

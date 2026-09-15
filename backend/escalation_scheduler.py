@@ -305,10 +305,12 @@ async def escalate_all_users(db) -> dict:
     if not chasing_timing_enabled():
         totals["disabled"] = True
         return totals
+    seen_users: set = set()
     async for conn in db.gmail_connections.find({"status": "connected"}):
         uid = conn.get("user_id")
-        if not uid:
+        if not uid or uid in seen_users:
             continue
+        seen_users.add(uid)
         try:
             c = await run_escalation_tick(db, uid)
             totals["users"] += 1

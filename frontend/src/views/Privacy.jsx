@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { LegalSection, LegalShell } from "@/components/LegalShell";
 
-const UPDATED = "July 23, 2026";
+const UPDATED = "September 14, 2026";
 const PRIVACY_EMAIL = "privacy@scotive.com";
 const SUPPORT_EMAIL = "support@scotive.com";
 
@@ -12,9 +12,11 @@ export default function PrivacyPage() {
                 <p>
                     This Privacy Policy explains how Scotive (“we”, “us”) collects, uses, and
                     shares information when you use scotive.com and the Scotive service
-                    (the “Service”). It is written to match how the product actually works today:
-                    Gmail-connected invoice tracking, optional QuickBooks Online connection,
-                    human-approved sending, and AI-assisted extraction and drafting.
+                    (the “Service”). Not a new books app. You keep QBO/Xero. We run the chase.
+                    You already invoiced them. Scotive watches the thread and the open invoice, and
+                    handles the next chase. Live connections today: Gmail, Outlook, and optional
+                    QuickBooks Online. Approved Friendly cadence can send on the clock. Firm/Final
+                    still need a click. Pay link in the draft. AI-assisted extraction and drafting.
                 </p>
                 <p>
                     By using the Service you acknowledge this Policy. Related terms are in our{" "}
@@ -41,10 +43,12 @@ export default function PrivacyPage() {
                     digest settings.
                 </p>
                 <p>
-                    <strong>Google / Gmail connection.</strong> When you connect Gmail we receive
-                    OAuth tokens, the connected mailbox email, profile display name (when
-                    available), granted scopes, and connection status. Access and refresh tokens
-                    are encrypted at rest before storage.
+                    <strong>Email mailbox (Gmail or Outlook).</strong> When you connect email, the
+                    sign-in screen may show <strong>Unipile</strong>, our email connection partner.
+                    Unipile handles secure Google or Microsoft authorization. After you connect, we
+                    receive a mailbox link (account identifier), the connected email address, and
+                    connection status needed to read invoice-related mail and send follow-ups you
+                    approve. You can disconnect anytime in Settings.
                 </p>
                 <p>
                     <strong>Intuit / QuickBooks Online connection (optional).</strong> When you
@@ -96,18 +100,19 @@ export default function PrivacyPage() {
                 <ul>
                     <li>Provide, maintain, and secure the Service</li>
                     <li>
-                        Detect invoices you sent via Gmail and, when connected, import open invoices
+                        Detect invoices you sent via Gmail or Outlook and, when connected, import open invoices
                         from QuickBooks into your ledger
                     </li>
                     <li>
                         Keep your open / paid ledger current, including syncing paid status from
-                        QuickBooks and matching Gmail conversations to QuickBooks-sourced invoices
+                        QuickBooks and matching Gmail/Outlook conversations to QuickBooks-sourced invoices
                     </li>
                     <li>Interpret client replies (promises, disputes, payment claims, questions)</li>
                     <li>Generate follow-up and reply drafts for your review</li>
                     <li>
-                        Send email <strong>only when you explicitly approve</strong> (or send an
-                        optional daily digest you enabled), via your connected Gmail
+                        Send approved Friendly cadence from your connected Gmail or Outlook when you
+                        have approved the rules; Firm/Final only when you click; optional daily
+                        digest you enabled
                     </li>
                     <li>
                         When you mark an invoice paid or confirm payment received in Scotive for a
@@ -147,8 +152,15 @@ export default function PrivacyPage() {
                 <p>We share information only as needed to run the Service:</p>
                 <ul>
                     <li>
-                        <strong>Google</strong> — OAuth and Gmail API (read mail, send approved
-                        messages, profile identity)
+                        <strong>Unipile</strong> — our email connection partner. Google or
+                        Microsoft authorization for Gmail / Outlook runs through Unipile; they
+                        provide the API we use to read mailbox data and send messages you approve.
+                        Your use is also subject to Unipile’s, Google’s, and Microsoft’s terms and
+                        policies
+                    </li>
+                    <li>
+                        <strong>Google / Microsoft</strong> — account sign-in and mailbox access as
+                        authorized through Unipile (read mail, send approved messages)
                     </li>
                     <li>
                         <strong>Intuit / QuickBooks Online</strong> — OAuth and QuickBooks Online
@@ -176,8 +188,8 @@ export default function PrivacyPage() {
                 </ul>
                 <p>
                     We do not sell your personal information. Chase emails and digests are sent
-                    from <strong>your</strong> Gmail account to recipients you choose (or to you,
-                    for digests). QuickBooks data stays in your Intuit company except for the
+                    from <strong>your</strong> connected Gmail or Outlook account to recipients you
+                    choose (or to you, for digests). QuickBooks data stays in your Intuit company except for the
                     ledger facts and tokens we store to operate the integration.
                 </p>
             </LegalSection>

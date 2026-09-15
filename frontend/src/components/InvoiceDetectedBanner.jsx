@@ -32,7 +32,7 @@ export function InvoiceDetectedBanner({ detection, onDismiss }) {
             <button
                 type="button"
                 onClick={onDismiss}
-                className="inline-flex items-center gap-1 text-[11px] font-mono uppercase tracking-widest text-emerald-800 hover:text-emerald-950 flex-shrink-0"
+                className="inline-flex items-center gap-1 text-sm font-medium text-emerald-800 hover:text-emerald-950 flex-shrink-0"
                 data-testid="invoice-detected-dismiss">
                 <X className="w-3.5 h-3.5" />
                 Got it

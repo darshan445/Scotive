@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { LegalSection, LegalShell } from "@/components/LegalShell";
 
-const UPDATED = "July 23, 2026";
+const UPDATED = "September 14, 2026";
 const CONTACT = "support@scotive.com";
 
 export default function TermsPage() {
@@ -23,8 +23,10 @@ export default function TermsPage() {
 
             <LegalSection id="service" title="2. What Scotive does">
                 <p>
-                    Scotive is a payment-operations product that helps freelancers, agencies,
-                    consultants, and other businesses track invoices and follow up on unpaid amounts.
+                    Not a new books app. You keep QBO/Xero. We run the chase. You already
+                    invoiced them. Scotive watches the thread and the open invoice, and handles
+                    the next chase. Agency / studio ops or founder, ~8–40 people, B2B retainers,
+                    Gmail or Outlook + QBO. Consultant / fractional with 8+ open invoices.
                     Depending on features you enable, the Service may:
                 </p>
                 <ul>
@@ -49,16 +51,18 @@ export default function TermsPage() {
                         including third-party AI models
                     </li>
                     <li>
-                        Send emails <strong>only when you explicitly approve and click Send</strong>,
-                        from your own connected Gmail address
+                        Send approved Friendly cadence from your connected Gmail or Outlook when you
+                        have approved the rules; Firm/Final only when you click
                     </li>
                     <li>Optionally email you a daily digest of items that need attention</li>
                 </ul>
                 <p>
-                    Scotive does <strong>not</strong> auto-send chase emails. Drafts are suggestions;
-                    you remain responsible for reviewing and sending them. Gmail remains the
-                    conversation layer; QuickBooks is an optional invoice feed and paid-status
-                    signal, not a replacement for your books of record.
+                    Approved Friendly cadence = the user approves the rules once (or per client),
+                    not every Friendly email. Firm / Final still need a click. You remain
+                    responsible for reviewing Firm/Final and the content of emails sent from your
+                    address. Gmail / Outlook is the actual conversation. You keep QBO/Xero as the
+                    ledger. Scotive does not replace QuickBooks as your accounting system of record.
+                    Scotive is not a payments company. Not collections.
                 </p>
             </LegalSection>
 
@@ -75,28 +79,32 @@ export default function TermsPage() {
                 </p>
             </LegalSection>
 
-            <LegalSection id="gmail" title="4. Gmail connection and Google permissions">
+            <LegalSection id="gmail" title="4. Email connection (Gmail or Outlook)">
                 <p>
-                    To use core features you must connect a Google account. Scotive requests:
+                    To use core features you must connect a Gmail or Outlook / Microsoft 365
+                    mailbox. Sign-in is completed through <strong>Unipile</strong>, our email
+                    connection partner — Google or Microsoft may show Unipile on the consent
+                    screen. Through that connection Scotive uses:
                 </p>
                 <ul>
                     <li>
-                        <strong>Gmail readonly</strong> — to detect invoices you sent, read
+                        <strong>Mail read</strong> — to detect invoices you sent, read
                         related thread context, and keep your ledger current
                     </li>
                     <li>
-                        <strong>Gmail send</strong> — to send follow-ups you approve and optional digests
-                        from your address
+                        <strong>Mail send</strong> — to send approved Friendly cadence, Firm/Final you click,
+                        and optional digests from your address
                     </li>
                     <li>
-                        <strong>Basic profile identity</strong> (openid, email, profile) — to identify
-                        the connected mailbox and display name used when signing drafts
+                        <strong>Mailbox identity</strong> — to identify the connected address and
+                        display name used when signing drafts
                     </li>
                 </ul>
                 <p>
-                    Your use of Gmail through Scotive is also subject to Google’s terms and policies.
-                    You can disconnect Gmail at any time in Settings. Disconnecting removes stored
-                    OAuth tokens; your Scotive ledger may remain until you delete your account.
+                    Your use of email through Scotive is also subject to Google’s or Microsoft’s
+                    and Unipile’s terms and policies. You can disconnect anytime in Settings.
+                    Disconnecting removes the stored mailbox link; your Scotive ledger may remain
+                    until you delete your account.
                 </p>
                 <p>
                     You represent that you have the right to connect the mailbox you authorize and

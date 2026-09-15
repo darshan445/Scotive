@@ -1,56 +1,33 @@
-"""Gmail OAuth 2.0 web-server flow.
+"""Mailbox connect via Unipile Hosted Auth (Google Gmail + Microsoft Outlook).
 
-Requests exactly two Gmail scopes plus openid/email so we can identify the
-connected mailbox address: gmail.readonly and gmail.send.
+Unipile owns the provider OAuth verification surface. Scotive stores
+`unipile_account_id`, mailbox email, and `provider` (google | outlook).
+
+Also exports encrypt/decrypt helpers used by QBO token storage.
 """
 from __future__ import annotations
 
-import base64
-import json
 import logging
 import os
-import secrets
-from datetime import datetime, timezone, timedelta
-from typing import Optional
-from urllib.parse import urlencode
+from datetime import datetime, timezone
+from typing import Literal, Optional
 
-import httpx
+from bson import ObjectId
 from cryptography.fernet import Fernet, InvalidToken
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
+import unipile_client as unipile
 
 logger = logging.getLogger("scotive.gmail")
 
-# ---------------------------------------------------------------------------
-# OAuth constants
-# ---------------------------------------------------------------------------
-GMAIL_SCOPE_READ = "https://www.googleapis.com/auth/gmail.readonly"
-GMAIL_SCOPE_SEND = "https://www.googleapis.com/auth/gmail.send"
-IDENTITY_SCOPES = ["openid", "email", "profile"]
-REQUESTED_SCOPES = IDENTITY_SCOPES + [GMAIL_SCOPE_READ, GMAIL_SCOPE_SEND]
+ProviderKey = Literal["google", "outlook"]
 
-GOOGLE_AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
-GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
-GOOGLE_USERINFO_ENDPOINT = "https://www.googleapis.com/oauth2/v3/userinfo"
-GOOGLE_REVOKE_ENDPOINT = "https://oauth2.googleapis.com/revoke"
-
-STATE_TTL_MINUTES = 15
-
-
-# ---------------------------------------------------------------------------
-# Env-derived config
-# ---------------------------------------------------------------------------
-def _client_id() -> str:
-    return os.environ["GOOGLE_CLIENT_ID"]
-
-
-def _client_secret() -> str:
-    return os.environ["GOOGLE_CLIENT_SECRET"]
-
-
-def _redirect_uri() -> str:
-    return os.environ["GMAIL_REDIRECT_URI"]
+UNIPILE_PROVIDERS: dict[str, str] = {
+    "google": "GOOGLE",
+    "outlook": "OUTLOOK",
+}
 
 
 def _frontend_url() -> str:
@@ -73,9 +50,20 @@ def decrypt_token(ciphertext: str) -> str:
         raise HTTPException(status_code=500, detail="Encrypted token corrupted") from e
 
 
-# ---------------------------------------------------------------------------
-# Schemas
-# ---------------------------------------------------------------------------
+# Kept for any legacy imports; Unipile does not use Google token endpoint.
+GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
+
+
+class MailboxConnectionStatus(BaseModel):
+    provider: str
+    connected: bool
+    email: Optional[str] = None
+    account_name: Optional[str] = None
+    can_send: bool = False
+    connected_at: Optional[datetime] = None
+    status: str = "disconnected"
+
+
 class GmailStatus(BaseModel):
     connected: bool
     email: Optional[str] = None
@@ -83,21 +71,16 @@ class GmailStatus(BaseModel):
     can_send: bool = False
     connected_at: Optional[datetime] = None
     status: str = "disconnected"  # disconnected | connected | revoked | send_missing
+    provider: Optional[str] = None  # primary mailbox provider
+    connections: list[MailboxConnectionStatus] = []
 
 
-def name_from_userinfo(userinfo: dict) -> Optional[str]:
-    """Prefer Google profile display name, then given name."""
-    if not userinfo:
-        return None
-    for key in ("name", "given_name"):
-        val = (userinfo.get(key) or "").strip()
-        if val:
-            return val
-    return None
+class OAuthStartResponse(BaseModel):
+    authorization_url: str
+    provider: str
 
 
 def signer_fallback_from_email(email: Optional[str]) -> Optional[str]:
-    """Last-resort sign-off when Google profile name is unavailable."""
     if not email or "@" not in email:
         return None
     local = email.split("@", 1)[0].strip()
@@ -106,110 +89,121 @@ def signer_fallback_from_email(email: Optional[str]) -> Optional[str]:
     return local.replace(".", " ").replace("_", " ").title()
 
 
-class OAuthStartResponse(BaseModel):
-    authorization_url: str
+def _parse_user_id(raw: str):
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        return ObjectId(raw)
+    except Exception:
+        return raw
 
 
-# ---------------------------------------------------------------------------
-# DB helpers (db handle is injected by server.py through get_db)
-# ---------------------------------------------------------------------------
-def scopes_include_send(scope_str: str) -> bool:
-    granted = set((scope_str or "").split())
-    return GMAIL_SCOPE_SEND in granted
+def _normalize_provider(raw: str | None) -> str:
+    key = (raw or "google").strip().lower()
+    if key in ("outlook", "microsoft", "office365", "o365"):
+        return "outlook"
+    return "google"
 
 
-def scopes_include_read(scope_str: str) -> bool:
-    granted = set((scope_str or "").split())
-    return GMAIL_SCOPE_READ in granted
-
-
-async def upsert_gmail_connection(
+async def upsert_unipile_connection(
     db,
     user_id,
-    email,
-    tokens,
-    granted_scopes: str,
+    *,
+    account_id: str,
+    provider: str = "google",
+    email: Optional[str] = None,
     account_name: Optional[str] = None,
 ):
+    """Upsert one mailbox row keyed by (user_id, provider). Other providers stay."""
     now = datetime.now(timezone.utc)
+    provider = _normalize_provider(provider)
     doc = {
         "user_id": user_id,
-        "email": email,
-        "access_token_enc": encrypt_token(tokens["access_token"]),
-        "expires_at": (now + timedelta(seconds=int(tokens.get("expires_in", 3600)))).isoformat(),
-        "scopes": granted_scopes,
-        "can_send": scopes_include_send(granted_scopes),
-        "can_read": scopes_include_read(granted_scopes),
+        "unipile_account_id": account_id,
+        "provider": provider,
+        "via": "unipile",
+        "can_send": True,
+        "can_read": True,
         "status": "connected",
+        "scopes": f"unipile:{provider}",
         "updated_at": now.isoformat(),
+        "access_token_enc": None,
+        "refresh_token_enc": None,
+        "expires_at": None,
     }
+    if email:
+        doc["email"] = email.lower().strip()
     if account_name:
         doc["account_name"] = account_name.strip()
-    # Preserve stored refresh_token if Google didn't send a new one on re-consent
-    if tokens.get("refresh_token"):
-        doc["refresh_token_enc"] = encrypt_token(tokens["refresh_token"])
-    existing = await db.gmail_connections.find_one({"user_id": user_id})
+
+    existing = await db.gmail_connections.find_one({"user_id": user_id, "provider": provider})
+    # Legacy rows may lack provider — treat as google when upserting google
+    if existing is None and provider == "google":
+        existing = await db.gmail_connections.find_one({
+            "user_id": user_id,
+            "$or": [{"provider": {"$exists": False}}, {"provider": None}, {"provider": ""}],
+        })
+
+    old_account = (existing or {}).get("unipile_account_id")
     if existing is None:
         doc["connected_at"] = now.isoformat()
         await db.gmail_connections.insert_one(doc)
     else:
-        if "refresh_token_enc" not in doc and existing.get("refresh_token_enc"):
-            doc["refresh_token_enc"] = existing["refresh_token_enc"]
-        # Keep prior account_name if this reconnect didn't return a profile name
+        if "email" not in doc and existing.get("email"):
+            doc["email"] = existing["email"]
         if "account_name" not in doc and existing.get("account_name"):
             doc["account_name"] = existing["account_name"]
-        await db.gmail_connections.update_one({"user_id": user_id}, {"$set": doc})
+        if not existing.get("connected_at"):
+            doc["connected_at"] = now.isoformat()
+        await db.gmail_connections.update_one({"_id": existing["_id"]}, {"$set": doc})
+
+    # Re-link same provider only — never delete the other mailbox (Gmail vs Outlook)
+    if old_account and old_account != account_id:
+        try:
+            await unipile.delete_account(old_account)
+        except Exception as e:
+            logger.warning("unipile delete previous account best-effort: %s", e)
     return doc
 
 
 async def ensure_gmail_account_name(db, user_id) -> Optional[str]:
-    """Return stored Gmail profile name, backfilling from Google userinfo if missing."""
-    conn = await db.gmail_connections.find_one({"user_id": user_id})
-    if not conn:
-        return None
-    existing = (conn.get("account_name") or "").strip()
-    if existing:
-        return existing
-
-    # Lazy import — gmail_client imports decrypt helpers from this module.
-    try:
-        from gmail_client import get_access_token
-        access = await get_access_token(db, user_id)
-        info = await fetch_userinfo(access)
-        name = name_from_userinfo(info)
-    except Exception as e:
-        logger.warning("Could not backfill Gmail account_name for %s: %s", user_id, e)
-        name = None
-
-    if name:
-        await db.gmail_connections.update_one(
-            {"user_id": user_id},
-            {"$set": {"account_name": name}},
-        )
-        return name
-
-    return signer_fallback_from_email(conn.get("email"))
+    from gmail_client import list_connected_mailboxes
+    mailboxes = await list_connected_mailboxes(db, user_id)
+    if not mailboxes:
+        conn = await db.gmail_connections.find_one({"user_id": user_id})
+        if not conn:
+            return None
+        existing = (conn.get("account_name") or "").strip()
+        return existing or signer_fallback_from_email(conn.get("email"))
+    for conn in mailboxes:
+        existing = (conn.get("account_name") or "").strip()
+        if existing:
+            return existing
+    return signer_fallback_from_email(mailboxes[0].get("email"))
 
 
-def _make_status(conn: Optional[dict]) -> GmailStatus:
-    if not conn:
-        return GmailStatus(connected=False, status="disconnected")
-    status_val = conn.get("status", "connected")
+def _conn_to_mailbox_status(conn: dict) -> MailboxConnectionStatus:
     connected_at = conn.get("connected_at")
     if isinstance(connected_at, str):
         connected_at = datetime.fromisoformat(connected_at)
+    provider = _normalize_provider(conn.get("provider") or "google")
+    status_val = conn.get("status", "connected")
+    has_account = bool((conn.get("unipile_account_id") or "").strip())
     account_name = (conn.get("account_name") or "").strip() or None
-    if status_val == "revoked":
-        return GmailStatus(
+    if status_val == "revoked" or not has_account:
+        return MailboxConnectionStatus(
+            provider=provider,
             connected=False,
             email=conn.get("email"),
             account_name=account_name,
             can_send=False,
             connected_at=connected_at,
-            status="revoked",
+            status="revoked" if status_val == "revoked" else "disconnected",
         )
-    can_send = bool(conn.get("can_send"))
-    return GmailStatus(
+    can_send = bool(conn.get("can_send", True))
+    return MailboxConnectionStatus(
+        provider=provider,
         connected=True,
         email=conn.get("email"),
         account_name=account_name,
@@ -219,158 +213,227 @@ def _make_status(conn: Optional[dict]) -> GmailStatus:
     )
 
 
-# ---------------------------------------------------------------------------
-# HTTP calls to Google
-# ---------------------------------------------------------------------------
-async def exchange_code_for_tokens(code: str) -> dict:
-    data = {
-        "code": code,
-        "client_id": _client_id(),
-        "client_secret": _client_secret(),
-        "redirect_uri": _redirect_uri(),
-        "grant_type": "authorization_code",
-    }
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        r = await client.post(GOOGLE_TOKEN_ENDPOINT, data=data)
-        if r.status_code != 200:
-            logger.warning("Token exchange failed: %s %s", r.status_code, r.text)
-            raise HTTPException(status_code=400, detail="Failed to exchange authorization code.")
-        return r.json()
+async def _make_status(db, user_id) -> GmailStatus:
+    rows = []
+    async for conn in db.gmail_connections.find({"user_id": user_id}):
+        rows.append(conn)
+    if not rows:
+        return GmailStatus(connected=False, status="disconnected", connections=[])
 
+    connections = [_conn_to_mailbox_status(c) for c in rows]
+    # Sort: connected first, google before outlook
+    connections.sort(key=lambda c: (0 if c.connected else 1, 0 if c.provider == "google" else 1))
 
-async def fetch_userinfo(access_token: str) -> dict:
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        r = await client.get(
-            GOOGLE_USERINFO_ENDPOINT,
-            headers={"Authorization": f"Bearer {access_token}"},
+    primary = next((c for c in connections if c.connected), None)
+    if primary is None:
+        # All revoked / disconnected — surface first row for reconnect UX
+        any_revoked = any(c.status == "revoked" for c in connections)
+        first = connections[0]
+        return GmailStatus(
+            connected=False,
+            email=first.email,
+            account_name=first.account_name,
+            can_send=False,
+            connected_at=first.connected_at,
+            status="revoked" if any_revoked else "disconnected",
+            provider=first.provider,
+            connections=connections,
         )
-        if r.status_code != 200:
-            logger.warning("Userinfo failed: %s %s", r.status_code, r.text)
-            raise HTTPException(status_code=400, detail="Failed to fetch Google account info.")
-        return r.json()
+
+    return GmailStatus(
+        connected=True,
+        email=primary.email,
+        account_name=primary.account_name,
+        can_send=primary.can_send,
+        connected_at=primary.connected_at,
+        status=primary.status,
+        provider=primary.provider,
+        connections=connections,
+    )
 
 
-async def revoke_token(token: str) -> None:
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        try:
-            await client.post(GOOGLE_REVOKE_ENDPOINT, data={"token": token})
-        except Exception as e:  # pragma: no cover
-            logger.warning("Revoke best-effort failed: %s", e)
+def _verify_unipile_webhook(request: Request) -> None:
+    secret = unipile.webhook_secret()
+    if not secret:
+        return
+    got = request.headers.get("Unipile-Auth") or request.headers.get("unipile-auth") or ""
+    if got != secret:
+        raise HTTPException(status_code=401, detail="Invalid Unipile webhook auth")
 
 
-# ---------------------------------------------------------------------------
-# State token (opaque, TTL-checked in DB)
-# ---------------------------------------------------------------------------
-async def issue_state(db, user_id) -> str:
-    token = secrets.token_urlsafe(24)
-    await db.oauth_states.insert_one({
-        "state": token,
-        "user_id": user_id,
-        "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=STATE_TTL_MINUTES)).isoformat(),
-    })
-    return token
+async def _enrich_from_unipile_account(
+    db,
+    user_id,
+    account_id: str,
+    *,
+    fallback_provider: str | None = None,
+) -> None:
+    provider = _normalize_provider(fallback_provider)
+    email = None
+    try:
+        account = await unipile.get_account(account_id)
+        provider = unipile.provider_from_account(account) or provider
+        email = unipile.account_email(account)
+    except Exception as e:
+        logger.warning("unipile get_account failed id=%s err=%s", account_id, e)
+        await upsert_unipile_connection(
+            db, user_id, account_id=account_id, provider=provider,
+        )
+        return
+    await upsert_unipile_connection(
+        db,
+        user_id,
+        account_id=account_id,
+        provider=provider,
+        email=email,
+        account_name=signer_fallback_from_email(email),
+    )
 
 
-async def consume_state(db, state: str) -> Optional[str]:
-    doc = await db.oauth_states.find_one({"state": state})
-    if not doc:
-        return None
-    await db.oauth_states.delete_one({"_id": doc["_id"]})
-    expires_at = doc["expires_at"]
-    if isinstance(expires_at, str):
-        expires_at = datetime.fromisoformat(expires_at)
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at < datetime.now(timezone.utc):
-        return None
-    return doc["user_id"]
-
-
-# ---------------------------------------------------------------------------
-# Router factory (server.py wires in db + get_current_user)
-# ---------------------------------------------------------------------------
 def build_router(db, get_current_user):
     router = APIRouter(prefix="/gmail", tags=["gmail"])
 
     @router.get("/status", response_model=GmailStatus)
     async def status(user: dict = Depends(get_current_user)):
-        conn = await db.gmail_connections.find_one({"user_id": user["_id"]})
-        return _make_status(conn)
+        return await _make_status(db, user["_id"])
 
     @router.get("/oauth/start", response_model=OAuthStartResponse)
-    async def start(user: dict = Depends(get_current_user)):
-        state = await issue_state(db, user["_id"])
-        params = {
-            "response_type": "code",
-            "client_id": _client_id(),
-            "redirect_uri": _redirect_uri(),
-            "scope": " ".join(REQUESTED_SCOPES),
-            "access_type": "offline",
-            "prompt": "consent",
-            "include_granted_scopes": "true",
-            "state": state,
-        }
-        url = f"{GOOGLE_AUTH_ENDPOINT}?{urlencode(params)}"
-        return OAuthStartResponse(authorization_url=url)
-
-    @router.get("/oauth/callback")
-    async def callback(request: Request):
-        params = request.query_params
-        code = params.get("code")
-        state = params.get("state")
-        err = params.get("error")
+    async def start(
+        user: dict = Depends(get_current_user),
+        provider: str = Query("google", description="google | outlook"),
+    ):
+        provider_key = _normalize_provider(provider)
+        unipile_provider = UNIPILE_PROVIDERS[provider_key]
         frontend = _frontend_url()
-
-        # User cancelled the consent
-        if err or not code or not state:
-            if state:
-                await consume_state(db, state)
-            reason = err or "cancelled"
-            return RedirectResponse(f"{frontend}/dashboard?gmail={reason}")
-
-        user_id = await consume_state(db, state)
-        if user_id is None:
-            return RedirectResponse(f"{frontend}/dashboard?gmail=state_invalid")
-
+        conn = await db.gmail_connections.find_one({
+            "user_id": user["_id"],
+            "provider": provider_key,
+        })
+        if conn is None and provider_key == "google":
+            conn = await db.gmail_connections.find_one({
+                "user_id": user["_id"],
+                "$or": [{"provider": {"$exists": False}}, {"provider": None}, {"provider": ""}],
+            })
+        reconnect_id = None
+        if conn and conn.get("status") == "revoked" and conn.get("unipile_account_id"):
+            reconnect_id = conn["unipile_account_id"]
+        label = "outlook" if provider_key == "outlook" else "gmail"
         try:
-            tokens = await exchange_code_for_tokens(code)
-            granted = tokens.get("scope", "")
-            if not scopes_include_read(granted):
-                return RedirectResponse(f"{frontend}/dashboard?gmail=read_missing")
-            userinfo = await fetch_userinfo(tokens["access_token"])
-            email = (userinfo.get("email") or "").lower()
-            account_name = name_from_userinfo(userinfo)
-            await upsert_gmail_connection(
-                db, user_id, email, tokens, granted, account_name=account_name,
+            url = await unipile.create_hosted_auth_link(
+                user_key=str(user["_id"]),
+                providers=[unipile_provider],
+                success_redirect_url=f"{frontend}/dashboard?mail=connected&provider={provider_key}",
+                failure_redirect_url=f"{frontend}/dashboard?mail=error&provider={provider_key}",
+                reconnect_account_id=reconnect_id,
             )
-        except HTTPException as e:
-            logger.warning("OAuth callback error: %s", e.detail)
-            return RedirectResponse(f"{frontend}/dashboard?gmail=error")
+        except unipile.UnipileError as e:
+            logger.warning("Hosted auth link failed provider=%s: %s", provider_key, e)
+            raise HTTPException(
+                status_code=502,
+                detail=f"Could not start {label} connect",
+            ) from e
+        return OAuthStartResponse(authorization_url=url, provider=provider_key)
 
-        result = "connected" if scopes_include_send(granted) else "send_missing"
-        return RedirectResponse(f"{frontend}/dashboard?gmail={result}")
-
-    @router.post("/disconnect")
-    async def disconnect(user: dict = Depends(get_current_user)):
-        conn = await db.gmail_connections.find_one({"user_id": user["_id"]})
-        if conn:
-            # Best-effort revoke of the refresh token so Google forgets us
-            enc = conn.get("refresh_token_enc")
-            if enc:
-                try:
-                    await revoke_token(decrypt_token(enc))
-                except Exception:  # pragma: no cover
-                    pass
-            await db.gmail_connections.delete_one({"_id": conn["_id"]})
+    @router.post("/unipile/notify")
+    async def unipile_notify(request: Request):
+        """Hosted-auth notify_url — stores account_id ↔ user after mailbox connect."""
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        status_val = (payload.get("status") or "").upper()
+        account_id = (payload.get("account_id") or "").strip()
+        name = payload.get("name") or ""
+        user_id = _parse_user_id(str(name))
+        logger.info(
+            "unipile.notify status=%s account=%s name=%s",
+            status_val, account_id[:12] if account_id else None, name,
+        )
+        if status_val not in ("CREATION_SUCCESS", "RECONNECTED") or not account_id or user_id is None:
+            return JSONResponse({"ok": True, "ignored": True})
+        await _enrich_from_unipile_account(db, user_id, account_id)
         return {"ok": True}
 
-    @router.post("/mark-revoked")
-    async def mark_revoked(user: dict = Depends(get_current_user)):
-        """Dev helper: force the connection into 'revoked' state so we can preview
-        the reconnect banner. Removed once continuous sync detects revocation live."""
-        await db.gmail_connections.update_one(
-            {"user_id": user["_id"]}, {"$set": {"status": "revoked"}}
+    @router.post("/unipile/account-status")
+    async def unipile_account_status(request: Request):
+        """Dashboard/API webhook: CREDENTIALS → mark connection revoked."""
+        _verify_unipile_webhook(request)
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        account_id = (payload.get("account_id") or "").strip()
+        status_raw = (
+            payload.get("AccountStatus")
+            or payload.get("account_status")
+            or payload.get("status")
+            or payload.get("message")
+            or ""
         )
+        status_s = str(status_raw).upper()
+        logger.info("unipile.account_status account=%s status=%s", account_id[:12] if account_id else None, status_s)
+        if not account_id:
+            return {"ok": True}
+        conn = await db.gmail_connections.find_one({"unipile_account_id": account_id})
+        if not conn:
+            return {"ok": True, "unknown_account": True}
+        if status_s in ("CREDENTIALS", "ERROR", "DELETED", "STOPPED"):
+            await db.gmail_connections.update_one(
+                {"_id": conn["_id"]},
+                {"$set": {"status": "revoked", "updated_at": datetime.now(timezone.utc).isoformat()}},
+            )
+        elif status_s in ("OK", "RECONNECTED", "SYNC_SUCCESS"):
+            await db.gmail_connections.update_one(
+                {"_id": conn["_id"]},
+                {"$set": {"status": "connected", "updated_at": datetime.now(timezone.utc).isoformat()}},
+            )
+        return {"ok": True}
+
+    @router.post("/unipile/email")
+    async def unipile_email_webhook(request: Request):
+        """Optional mail_received/mail_sent webhook — ack only (polling still primary)."""
+        _verify_unipile_webhook(request)
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        logger.info(
+            "unipile.email event=%s account=%s email_id=%s",
+            payload.get("event"),
+            (payload.get("account_id") or "")[:12],
+            (payload.get("email_id") or "")[:12],
+        )
+        return {"ok": True}
+
+    @router.post("/disconnect")
+    async def disconnect(
+        user: dict = Depends(get_current_user),
+        provider: Optional[str] = Query(None, description="google | outlook; omit = all"),
+    ):
+        query: dict = {"user_id": user["_id"]}
+        if provider:
+            query["provider"] = _normalize_provider(provider)
+        deleted = 0
+        async for conn in db.gmail_connections.find(query):
+            account_id = conn.get("unipile_account_id")
+            if account_id:
+                try:
+                    await unipile.delete_account(account_id)
+                except Exception as e:
+                    logger.warning("unipile delete_account best-effort: %s", e)
+            await db.gmail_connections.delete_one({"_id": conn["_id"]})
+            deleted += 1
+        return {"ok": True, "deleted": deleted}
+
+    @router.post("/mark-revoked")
+    async def mark_revoked(
+        user: dict = Depends(get_current_user),
+        provider: Optional[str] = Query(None),
+    ):
+        query: dict = {"user_id": user["_id"]}
+        if provider:
+            query["provider"] = _normalize_provider(provider)
+        await db.gmail_connections.update_many(query, {"$set": {"status": "revoked"}})
         return {"ok": True}
 
     return router

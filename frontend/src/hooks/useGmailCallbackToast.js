@@ -4,8 +4,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 
 /**
- * Consumes ?gmail=<result> after the OAuth redirect and clears it from URL.
- * result values: connected | send_missing | cancelled | read_missing | state_invalid | error
+ * Consumes ?mail= / ?gmail= / ?outlook= after Unipile redirect and clears them from URL.
  */
 export function useGmailCallbackToast(onResolved) {
     const searchParams = useSearchParams();
@@ -13,35 +12,44 @@ export function useGmailCallbackToast(onResolved) {
     const pathname = usePathname();
 
     useEffect(() => {
-        const result = searchParams.get("gmail");
+        const result =
+            searchParams.get("mail") ||
+            searchParams.get("gmail") ||
+            searchParams.get("outlook");
         if (!result) return;
+
+        const providerParam = (searchParams.get("provider") || "").toLowerCase();
+        const providerLabel =
+            providerParam === "outlook" || searchParams.has("outlook")
+                ? "Outlook"
+                : "Gmail";
 
         switch (result) {
             case "connected":
-                toast.success("Gmail connected", {
-                    description: "Read + send access granted. Building your ledger next.",
+                toast.success(`${providerLabel} connected`, {
+                    description: "Mailbox linked. Building your ledger next.",
                 });
                 break;
             case "send_missing":
                 toast.warning("Connected — sending disabled", {
                     description:
-                        "You granted read access but skipped 'Send email'. Reconnect and check both boxes to enable one-tap chasers.",
+                        "Reconnect and grant send permission to enable one-tap chasers.",
                 });
                 break;
             case "read_missing":
                 toast.error("Read access is required", {
-                    description: "Scotive can't build a ledger without reading your Gmail. Try again and grant read access.",
+                    description: "Scotive can't build a ledger without reading your mail. Try again.",
                 });
                 break;
             case "cancelled":
             case "access_denied":
-                toast("Gmail connection cancelled", {
+                toast(`${providerLabel} connection cancelled`, {
                     description: "No worries — try again whenever you're ready.",
                 });
                 break;
             case "state_invalid":
                 toast.error("Session expired", {
-                    description: "Please click Connect Gmail again.",
+                    description: `Please click Connect ${providerLabel} again.`,
                 });
                 break;
             case "error":
@@ -53,7 +61,10 @@ export function useGmailCallbackToast(onResolved) {
                 break;
         }
         const params = new URLSearchParams(searchParams.toString());
+        params.delete("mail");
         params.delete("gmail");
+        params.delete("outlook");
+        params.delete("provider");
         const qs = params.toString();
         router.replace(qs ? `${pathname}?${qs}` : pathname);
         onResolved?.(result);

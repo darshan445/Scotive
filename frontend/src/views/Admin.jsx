@@ -137,11 +137,11 @@ function UserInvoicesPanel({ userId }) {
                                 : ""}
                         </div>
                         <div className="mt-2">
-                            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Subject</div>
+                            <div className="type-label text-muted-foreground">Subject</div>
                             <div className="text-foreground">{inv.source_subject || "—"}</div>
                         </div>
                         <div className="mt-2">
-                            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                            <div className="type-label text-muted-foreground">
                                 Evidence / snippet
                             </div>
                             <div className="text-muted-foreground whitespace-pre-wrap">

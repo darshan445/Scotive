@@ -127,7 +127,7 @@ function ReviewCard({ item, onChanged }) {
         <li className="rounded-2xl border border-border bg-card p-5" data-testid="review-card">
             <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
-                    <div className="text-[10px] font-mono uppercase tracking-[0.18em] text-muted-foreground">
+                    <div className="eyebrow">
                         {kindLabel}
                     </div>
                     <div className="font-heading font-semibold text-lg mt-0.5">
@@ -156,26 +156,26 @@ function ReviewCard({ item, onChanged }) {
 
             <dl className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
                 <div className="rounded-md border border-border/80 bg-muted/20 px-2.5 py-2">
-                    <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">Amount</dt>
+                    <dt className="type-label text-muted-foreground">Amount</dt>
                     <dd className="font-mono tabular-nums mt-0.5">{formatMoney(item.amount, item.currency || "USD")}</dd>
                 </div>
                 <div className="rounded-md border border-border/80 bg-muted/20 px-2.5 py-2">
-                    <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">Invoice #</dt>
+                    <dt className="type-label text-muted-foreground">Invoice #</dt>
                     <dd className="font-mono mt-0.5 truncate">{item.invoice_ref || "—"}</dd>
                 </div>
                 <div className="rounded-md border border-border/80 bg-muted/20 px-2.5 py-2">
-                    <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">Due</dt>
+                    <dt className="type-label text-muted-foreground">Due</dt>
                     <dd className="mt-0.5">{item.due_date ? formatDate(item.due_date) : "—"}</dd>
                 </div>
                 <div className="rounded-md border border-border/80 bg-muted/20 px-2.5 py-2">
-                    <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">Status</dt>
+                    <dt className="type-label text-muted-foreground">Status</dt>
                     <dd className="mt-0.5 capitalize">{(item.status || "invoiced").replace(/_/g, " ")}</dd>
                 </div>
             </dl>
 
             {(item.source_subject || item.source_from) ? (
                 <div className="mt-3 text-xs text-muted-foreground" data-testid="review-source">
-                    <span className="font-mono uppercase tracking-wider text-[10px]">Source · </span>
+                    <span className="type-label text-muted-foreground">Source · </span>
                     {item.source_from ? <span className="font-mono">{item.source_from}</span> : null}
                     {item.source_subject ? (
                         <span className="block sm:inline sm:ml-2 truncate">{item.source_subject}</span>

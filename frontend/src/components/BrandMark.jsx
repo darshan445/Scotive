@@ -11,11 +11,11 @@ export function BrandMark({ to = "/", size = "md", showWordmark = true }) {
     return (
         <Link
             href={to}
-            className={`inline-flex items-center ${s.gap} group`}
+            className={`inline-flex items-center ${s.gap} group shrink-0`}
             data-testid="brand-mark"
         >
             <img
-                src="/scotive-icon.png"
+                src="/scotive-mark.svg"
                 alt=""
                 width={32}
                 height={32}

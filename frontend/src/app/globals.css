@@ -5,27 +5,28 @@
 
 @layer base {
     :root {
-        /* Warm paper + ink + deep emerald — Gennai-inspired */
-        --background: 48 24% 97%;
-        --foreground: 168 32% 9%;
+        /* Workbench: cool canvas, navy ink, action blue. Shared by marketing + app. */
+        --background: 210 20% 98%;
+        --foreground: 222 47% 11%;
         --card: 0 0% 100%;
-        --card-foreground: 168 32% 9%;
+        --card-foreground: 222 47% 11%;
         --popover: 0 0% 100%;
-        --popover-foreground: 168 32% 9%;
-        --primary: 165 62% 17%;
-        --primary-foreground: 48 24% 97%;
-        --secondary: 150 12% 94%;
-        --secondary-foreground: 168 32% 12%;
-        --muted: 90 10% 94%;
-        --muted-foreground: 160 8% 40%;
-        --accent: 152 58% 38%;
-        --accent-foreground: 0 0% 100%;
-        --destructive: 0 68% 48%;
+        --popover-foreground: 222 47% 11%;
+        --primary: 221 70% 40%;
+        --primary-foreground: 0 0% 100%;
+        --secondary: 214 32% 95%;
+        --secondary-foreground: 222 47% 11%;
+        --muted: 210 20% 95%;
+        --muted-foreground: 215 14% 40%;
+        --accent: 221 45% 94%;
+        --accent-foreground: 221 70% 28%;
+        --destructive: 0 72% 51%;
         --destructive-foreground: 0 0% 100%;
-        --border: 100 8% 88%;
-        --input: 100 8% 86%;
-        --ring: 152 58% 38%;
-        --radius: 1rem;
+        --border: 214 20% 88%;
+        --input: 214 20% 86%;
+        --ring: 221 70% 40%;
+        --radius: 0.5rem;
+        --ink: 222 47% 11%;
     }
 }
 
@@ -43,7 +44,8 @@
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
         font-feature-settings: 'cv11', 'ss01';
-        line-height: 1.55;
+        line-height: 1.5;
+        --font-heading: var(--font-sans);
     }
     body {
         min-height: 100vh;
@@ -52,19 +54,15 @@
     .font-mono {
         font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
     }
-    .font-heading {
-        font-family: 'Bricolage Grotesque', var(--font-sans), ui-sans-serif, system-ui, sans-serif;
-        letter-spacing: -0.02em;
-    }
-    /* Semantic headings share one display face; color inherits (ink panels stay cream). */
-    h1, h2, h3, .font-heading {
-        font-family: 'Bricolage Grotesque', var(--font-sans), ui-sans-serif, system-ui, sans-serif;
-        letter-spacing: -0.02em;
-        font-weight: 700;
+    .font-heading,
+    h1, h2, h3 {
+        font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+        letter-spacing: -0.025em;
+        font-weight: 650;
     }
     ::selection {
-        background: hsl(152 58% 38% / 0.2);
-        color: hsl(168 32% 9%);
+        background: hsl(221 70% 40% / 0.16);
+        color: hsl(222 47% 11%);
     }
 }
 
@@ -72,18 +70,19 @@
     .tabular-nums {
         font-variant-numeric: tabular-nums;
     }
-    /* Shared type scale — use these instead of one-off sizes/weights */
     .type-display {
-        font-family: 'Bricolage Grotesque', var(--font-sans), ui-sans-serif, system-ui, sans-serif;
-        font-weight: 700;
-        letter-spacing: -0.03em;
-        line-height: 1.08;
+        font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+        font-weight: 650;
+        letter-spacing: -0.035em;
+        line-height: 1.12;
+        color: hsl(var(--foreground));
     }
     .type-title {
-        font-family: 'Bricolage Grotesque', var(--font-sans), ui-sans-serif, system-ui, sans-serif;
-        font-weight: 700;
-        letter-spacing: -0.02em;
-        line-height: 1.15;
+        font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+        font-weight: 650;
+        letter-spacing: -0.025em;
+        line-height: 1.2;
+        color: hsl(var(--foreground));
     }
     .type-body {
         font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
@@ -91,26 +90,35 @@
         line-height: 1.6;
         color: hsl(var(--muted-foreground));
     }
+    .type-label {
+        font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+        font-weight: 500;
+        font-size: 0.875rem;
+        letter-spacing: -0.01em;
+        line-height: 1.25;
+        color: hsl(var(--foreground));
+    }
     .surface-card {
-        @apply rounded-2xl border border-border bg-card shadow-sm;
+        @apply rounded-lg border border-border bg-card shadow-sm;
     }
     .pill {
-        @apply inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-muted-foreground;
+        @apply inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-xs font-medium text-muted-foreground;
     }
     .eyebrow {
-        @apply text-[11px] font-semibold uppercase tracking-[0.16em] text-accent;
+        @apply text-xs font-medium text-primary;
         font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+        letter-spacing: 0;
+        text-transform: none;
     }
     .stat-number {
-        font-family: var(--font-heading), var(--font-sans), sans-serif;
+        font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
         font-variant-numeric: tabular-nums;
         letter-spacing: -0.03em;
-        font-weight: 700;
+        font-weight: 650;
     }
-    /* Deep-green panel (hero mockups, dark CTA blocks) */
     .ink-panel {
-        background: linear-gradient(160deg, hsl(165 62% 13%) 0%, hsl(168 55% 18%) 55%, hsl(160 45% 22%) 100%);
-        color: hsl(48 24% 97%);
+        background: hsl(var(--ink));
+        color: hsl(210 20% 98%);
     }
     .ink-panel .type-display,
     .ink-panel .type-title,
@@ -121,8 +129,29 @@
         color: inherit;
     }
     .dot-grid {
-        background-image: radial-gradient(hsl(160 20% 40% / 0.14) 1px, transparent 1px);
-        background-size: 22px 22px;
+        background-image: radial-gradient(hsl(214 20% 70% / 0.35) 1px, transparent 1px);
+        background-size: 24px 24px;
+    }
+    .integration-logo-tile {
+        @apply flex items-center justify-center h-[4.75rem] rounded-xl bg-background px-5 border-2 border-border/70 transition-all duration-150 overflow-hidden;
+    }
+    .integration-logo-tile:hover {
+        @apply border-primary -translate-y-0.5 shadow-[0_10px_24px_-8px_hsl(221_70%_40%_/_0.35)];
+    }
+    .integration-logo-tile-page {
+        @apply flex flex-col items-center justify-center gap-3 min-h-[7.5rem] rounded-xl bg-background px-5 py-5 border-2 border-border/70 transition-all duration-150;
+    }
+    .integration-logo-tile-page:hover {
+        @apply border-primary -translate-y-0.5 shadow-[0_10px_24px_-8px_hsl(221_70%_40%_/_0.35)];
+    }
+    .btn-pill-outline {
+        @apply inline-flex items-center justify-center gap-2 rounded-full border border-foreground/20 bg-transparent px-5 py-2 font-medium text-foreground hover:bg-muted transition-colors;
+    }
+    .btn-pill-solid {
+        @apply inline-flex items-center justify-center gap-2 rounded-full bg-foreground text-background px-5 py-2 font-medium hover:bg-foreground/90 transition-colors;
+    }
+    .btn-pill-primary {
+        @apply inline-flex items-center justify-center gap-2 rounded-full bg-primary text-primary-foreground px-6 py-2.5 font-semibold hover:bg-primary/90 transition-colors;
     }
 }
 

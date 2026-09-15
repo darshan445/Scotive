@@ -24,56 +24,38 @@ export const SITE_URL = normalizePublicSiteUrl(
     process.env.NEXT_PUBLIC_SITE_URL || "https://www.scotive.com",
 );
 
-/** Primary + competitor-overlap keywords (Chaser/Upflow/PaidChaser style). */
+/** Pack §7.2 pass order, then §7.1 supporting terms. Chase layer, not AR / invoicing. */
 export const PRIMARY_KEYWORDS = [
-    "invoice chasing software",
-    "chase unpaid invoices",
-    "accounts receivable automation",
-    "overdue invoice tracker",
-    "overdue invoice reminder",
-    "payment follow-up software",
-    "invoice tracking tool",
-    "AR collections software",
-    "accounts receivable follow up",
-    "unpaid invoice reminder",
-    "invoice to cash",
-    "automated invoice reminders",
-    "invoice follow up",
-    "invoice reminder email template",
-    "how to politely follow up on an invoice",
-];
-
-/** Competitor-overlap terms (Chaser, Upflow, Gaviti, PaidChaser, ChaseAI). */
-export const COMPETITOR_KEYWORDS = [
-    "Chaser alternative",
-    "Upflow alternative",
-    "invoice collection software",
-    "accounts receivable software for freelancers",
-    "accounts receivable software for agencies",
+    "past due invoice reminder",
+    "invoice reminder software",
     "payment reminder software",
+    "automated invoice reminders",
+    "overdue invoice reminder email",
+    "past due invoice email",
+    "payment reminder email template",
+    "outstanding payment reminder",
+    "how to chase outstanding invoices",
+    "invoice follow up email",
+    "quickbooks invoice reminders",
+    "quickbooks automatic invoice reminders",
+    "xero invoice reminders",
+    "freshbooks invoice reminders",
+    "unpaid invoice reminder",
+    "automated invoice follow up",
+    "invoice chasing software",
 ];
 
-export const INTEGRATION_KEYWORDS = [
-    "Gmail invoice tracker",
-    "Outlook invoice chasing",
-    "QuickBooks invoice chasing",
-    "QuickBooks Online AR",
-    "Zoho Books collections",
-    "FreshBooks payment follow up",
-];
+export const DEFAULT_TITLE = "Scotive — Get paid without the awkward follow-up";
 
 export const DEFAULT_DESCRIPTION =
-    "Scotive is invoice chasing software that tracks unpaid invoices from your email and accounting tools — reads client replies for promises and disputes, and drafts follow-ups you approve before send. Gmail and QuickBooks Online today; Outlook, Zoho Books, and FreshBooks next.";
+    "Get paid without the awkward follow-up. Scotive fetches invoices from invoicing tools like QuickBooks, Xero, or FreshBooks. For each one, it reads the Gmail or Outlook thread, tracks where it stands, and drafts a personalized follow-up in their words. 30-day free trial.";
 
-export const DEFAULT_TITLE =
-    "Scotive — Invoice Chasing Software to Get Paid Faster";
-
-/** Who Scotive is for — keep marketing copy broad, not freelancer-only. */
+/** Pack §5.2 — who pays. Not “anyone who bills.” */
 export const AUDIENCE_BLURB =
-    "For freelancers, agencies, consultants, professional services, and any team that bills clients and chases payment.";
+    "Agency / studio ops or founder, ~8–40 people, B2B retainers, Gmail or Outlook + QBO. Consultant / fractional with 8+ open invoices.";
 
 export const AUDIENCE_SHORT =
-    "freelancers, agencies, and teams that bill clients";
+    "Agency / studio ops or founder; consultant with 8+ open invoices";
 
 export function absoluteUrl(path = "/") {
     const p = path.startsWith("/") ? path : `/${path}`;
@@ -89,18 +71,10 @@ export function pageMetadata({
 }) {
     const fullTitle = title.includes("Scotive") ? title : `${title} · Scotive`;
     const canonical = absoluteUrl(path);
-    const kw = [
-        ...new Set([
-            ...PRIMARY_KEYWORDS,
-            ...INTEGRATION_KEYWORDS,
-            ...COMPETITOR_KEYWORDS,
-            ...keywords,
-        ]),
-    ];
     return {
         title: { absolute: fullTitle },
         description,
-        keywords: kw,
+        keywords,
         alternates: { canonical },
         robots: noindex
             ? { index: false, follow: true }

@@ -10,6 +10,7 @@ export const API_BASE = `${BACKEND_URL}/api`;
 export const api = axios.create({
     baseURL: API_BASE,
     withCredentials: true,
+    timeout: 20000,
 });
 
 export function formatApiErrorDetail(detail) {
@@ -26,5 +27,16 @@ export function formatApiErrorDetail(detail) {
 }
 
 export function extractError(err) {
+    if (!err?.response) {
+        const code = err?.code || "";
+        if (
+            code === "ECONNABORTED" ||
+            code === "ERR_NETWORK" ||
+            code === "ECONNRESET" ||
+            /timeout|network|connection/i.test(err?.message || "")
+        ) {
+            return "Can't reach the server. Check that the API is running, then try again.";
+        }
+    }
     return formatApiErrorDetail(err?.response?.data?.detail) || err?.message || "Unexpected error";
 }

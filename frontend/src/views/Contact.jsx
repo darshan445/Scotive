@@ -50,8 +50,8 @@ export default function ContactPage() {
         <MarketingShell testId="contact-page" activePath="/contact">
             <MarketingHero
                 eyebrow="Contact"
-                title="Talk to us"
-                description="Questions about Scotive, a demo, or early access — send a note. We read every message."
+                title="Contact"
+                description="You already invoiced them. Scotive watches the thread and the open invoice, and handles the next chase. Email contact@scotive.com."
             />
             <section className="py-12 md:py-16 max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
                 <div className="rounded-xl border border-border bg-card px-5 py-4 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
@@ -74,7 +74,8 @@ export default function ContactPage() {
                 <div className="mt-10">
                     <h2 className="type-title text-xl md:text-2xl">Send a message</h2>
                     <p className="type-body mt-2 text-sm text-muted-foreground">
-                        Tell us what you bill, how you chase invoices today, or what you want to try.
+                        You already invoiced them. Scotive watches the thread and the open invoice, and
+                        handles the next chase.
                     </p>
 
                     {sent ? (
@@ -227,14 +228,14 @@ export default function ContactPage() {
                 <p className="mt-12 type-body text-sm text-muted-foreground">
                     Ready to try Scotive?{" "}
                     <Link href="/register" className="text-foreground underline underline-offset-2">
-                        Start free
+                        Start 30-day free trial
                     </Link>{" "}
                     or read{" "}
                     <Link
-                        href="/invoice-chasing-software"
+                        href="/invoice-reminder-software"
                         className="text-foreground underline underline-offset-2"
                     >
-                        how invoice chasing works
+                        Invoice reminder software
                     </Link>
                     .
                 </p>

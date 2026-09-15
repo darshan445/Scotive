@@ -3,6 +3,7 @@ export function FaqSection({
     items,
     title = "Frequently asked questions",
     eyebrow = "FAQ",
+    kicker,
 }) {
     const faqLd = {
         "@context": "https://schema.org",
@@ -24,7 +25,7 @@ export function FaqSection({
                 dangerouslySetInnerHTML={{ __html: JSON.stringify(faqLd) }}
             />
             <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
-                {eyebrow ? <div className="eyebrow mb-3">{eyebrow}</div> : null}
+                {kicker ?? (eyebrow ? <div className="eyebrow mb-3">{eyebrow}</div> : null)}
                 <h2 className="type-title text-3xl md:text-4xl">{title}</h2>
                 <dl className="mt-10 space-y-8">
                     {items.map((item) => (
@@ -40,31 +41,3 @@ export function FaqSection({
         </section>
     );
 }
-
-export const HOME_FAQS = [
-    {
-        question: "Does Scotive auto-send emails?",
-        answer:
-            "No. Scotive drafts follow-ups based on invoice state, but nothing is sent until you review and approve. You stay in control of every client email.",
-    },
-    {
-        question: "Is my email content used to train AI models?",
-        answer:
-            "No. Email content connected to Scotive is not used to train Scotive's models. You can disconnect integrations and delete your account anytime.",
-    },
-    {
-        question: "What email and accounting tools does Scotive support?",
-        answer:
-            "Gmail and QuickBooks Online are available now. Outlook / Microsoft 365, Zoho Books, and FreshBooks are on the roadmap — Scotive is built for email + accounting, not one vendor only.",
-    },
-    {
-        question: "Who is Scotive for?",
-        answer:
-            "Freelancers, agencies, consultants, professional services, and any team that bills clients and chases unpaid invoices — without needing an enterprise collections stack.",
-    },
-    {
-        question: "How is Scotive different from Chaser or Upflow?",
-        answer:
-            "Those tools often automate AR sequences for finance teams. Scotive watches the conversations and invoices you already have, drafts the next follow-up in context, and never sends without your click.",
-    },
-];

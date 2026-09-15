@@ -25,24 +25,27 @@ export default function LoginPage() {
         e.preventDefault();
         setError("");
         setSubmitting(true);
-        const res = await login(email, password);
-        setSubmitting(false);
-        if (!res.ok) {
-            setError(res.error);
-            return;
+        try {
+            const res = await login(email, password);
+            if (!res.ok) {
+                setError(res.error);
+                return;
+            }
+            router.replace(next);
+        } finally {
+            setSubmitting(false);
         }
-        router.replace(next);
     }
 
     return (
         <AuthShell
             eyebrow="Sign in"
-            title="Welcome back."
-            subtitle="Pick up where you left off — chase what's owed, approve every send."
+            title="Welcome back"
+            subtitle="Sign in to continue."
             footer={
                 <span>
                     New to Scotive?{" "}
-                    <Link href="/register" className="text-foreground font-semibold underline underline-offset-4 hover:text-accent" data-testid="link-to-register">
+                    <Link href="/register" className="text-foreground font-semibold underline underline-offset-4 hover:text-primary" data-testid="link-to-register">
                         Create an account
                     </Link>
                 </span>
@@ -50,9 +53,7 @@ export default function LoginPage() {
         >
             <form onSubmit={onSubmit} className="space-y-5" data-testid="login-form">
                 <div className="space-y-2">
-                    <Label htmlFor="email" className="text-xs font-mono uppercase tracking-[0.2em] text-muted-foreground">
-                        Work email
-                    </Label>
+                    <Label htmlFor="email">Email</Label>
                     <Input
                         id="email"
                         type="email"
@@ -67,9 +68,7 @@ export default function LoginPage() {
                 </div>
                 <div className="space-y-2">
                     <div className="flex items-baseline justify-between">
-                        <Label htmlFor="password" className="text-xs font-mono uppercase tracking-[0.2em] text-muted-foreground">
-                            Password
-                        </Label>
+                        <Label htmlFor="password">Password</Label>
                         <Link
                             href="/forgot-password"
                             className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
@@ -104,7 +103,7 @@ export default function LoginPage() {
                 <Button
                     type="submit"
                     disabled={submitting}
-                    className="w-full h-12 rounded-md bg-foreground text-background hover:bg-foreground/90 font-semibold text-base group"
+                    className="w-full h-12 rounded-full font-semibold text-base group"
                     data-testid="login-submit-button"
                 >
                     {submitting ? (

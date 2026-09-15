@@ -130,7 +130,7 @@ export function QboConnectionPanel({ status }) {
                         <CheckCircle2 className="w-5 h-5 text-emerald-700" />
                     </span>
                     <div className="min-w-0">
-                        <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">
+                        <div className="eyebrow">
                             QuickBooks connected
                         </div>
                         <div

@@ -1,68 +1,130 @@
 import Link from "next/link";
-import { MarketingCta, MarketingHero, MarketingShell } from "@/components/MarketingShell";
-import { pageMetadata } from "@/lib/seo";
+import {
+    MarketingHero,
+    MarketingHeroCtas,
+    MarketingShell,
+    MarketingSolveBlock,
+} from "@/components/MarketingShell";
+import { absoluteUrl } from "@/lib/seo";
 
-export const metadata = pageMetadata({
-    title: "Outlook Invoice Chasing (Coming Soon) — Microsoft 365 AR Follow-Up | Scotive",
-    description:
-        "Outlook / Microsoft 365 invoice chasing is on the Scotive roadmap. Same conversation-aware unpaid invoice tracking and human-approved follow-ups — not locked to Gmail forever.",
-    path: "/outlook-invoice-chasing",
-    noindex: true,
-    keywords: [
-        "Outlook invoice chasing",
-        "Microsoft 365 accounts receivable",
-        "Outlook unpaid invoice tracker",
-        "Office 365 invoice follow up",
-    ],
-});
+const PATH = "/outlook-invoice-chasing";
+const TITLE = "Outlook · Scotive";
+const DESCRIPTION =
+    "Gmail / Outlook is the actual conversation. We match the Gmail/Outlook thread to that invoice so you don't send 'just checking in' on an open reply. Chase from the owner's Outlook, not noreply@ accounting mail. Cadence runs Friendly, pauses on reply/promise, pay link in the draft. $49/month, or $490/year.";
+
+export const metadata = {
+    title: { absolute: TITLE },
+    description: DESCRIPTION,
+    keywords: [],
+    alternates: { canonical: absoluteUrl(PATH) },
+    robots: { index: true, follow: true },
+    openGraph: {
+        url: absoluteUrl(PATH),
+        title: TITLE,
+        description: DESCRIPTION,
+        type: "website",
+        siteName: "Scotive",
+    },
+    twitter: {
+        card: "summary_large_image",
+        title: TITLE,
+        description: DESCRIPTION,
+    },
+};
 
 export default function OutlookInvoiceChasingPage() {
     return (
         <MarketingShell testId="seo-outlook-chasing" activePath="/integrations">
             <MarketingHero
-                eyebrow="Outlook · Coming soon"
-                title="Invoice chasing for Outlook and Microsoft 365"
-                description="Scotive is not a Gmail-only product. Outlook / Microsoft 365 support is on the roadmap so teams on Microsoft mail get the same reply intelligence and approval-first chase drafts."
+                eyebrow="Chase layer"
+                title="Gmail / Outlook (the actual conversation)"
+                description="Connect Gmail or Outlook. You already invoiced them. Scotive watches the thread and the open invoice, and handles the next chase. QuickBooks and Xero remind a due date. Scotive reminds a conversation."
             >
-                <div className="mt-8 flex flex-wrap gap-3">
-                    <Link href="/register" className="inline-flex items-center rounded-xl bg-primary text-primary-foreground px-5 py-2.5 text-sm font-semibold hover:bg-primary/90">
-                        Start free with Gmail today
-                    </Link>
-                    <Link href="/integrations" className="inline-flex items-center rounded-xl border border-border px-5 py-2.5 text-sm font-medium hover:bg-muted">
-                        All integrations
-                    </Link>
-                </div>
+                <MarketingHeroCtas
+                    primaryLabel="Start 30-day free trial"
+                    secondaryHref="/integrations"
+                    secondaryLabel="See integrations"
+                />
             </MarketingHero>
 
-            <section className="py-14 md:py-16 max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
+            <section className="py-14 md:py-16 max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 space-y-12">
+                <MarketingSolveBlock
+                    title="Not a new books app. You keep QBO/Xero. We run the chase."
+                    problem="QBO knows it's overdue. It does not know they promised Friday."
+                    points={[
+                        "We match the Gmail/Outlook thread to that invoice so you don't send 'just checking in' on an open reply.",
+                        "Reminders pause when they talk back. Accounting reminders don't.",
+                        "The next email is in their words, from your address. You approve Firm/Final.",
+                        "Pay link in the draft — their existing QBO/Stripe/PayPal/bank pay URL. Scotive is not a payments company.",
+                    ]}
+                    ctaLabel="Start 30-day free trial"
+                />
+
                 <div>
-                    <h2 className="type-title text-2xl md:text-3xl">What’s coming</h2>
-                    <ul className="mt-4 space-y-3 type-body text-sm md:text-base text-muted-foreground list-disc pl-5">
-                        <li>Detect invoices and payment conversations in Outlook mail</li>
-                        <li>Read client replies for promises, disputes, and payment claims</li>
-                        <li>Draft follow-ups you approve before send from your Microsoft address</li>
-                    </ul>
-                </div>
-                <div>
-                    <h2 className="type-title text-2xl md:text-3xl">Available now</h2>
+                    <h2 className="type-title text-2xl md:text-3xl">
+                        Chase from the owner&apos;s Gmail/Outlook
+                    </h2>
                     <p className="type-body mt-3 text-muted-foreground">
-                        Use{" "}
-                        <Link href="/" className="text-foreground underline underline-offset-2">
-                            Scotive
-                        </Link>{" "}
-                        with Gmail today, optionally{" "}
-                        <Link href="/quickbooks-invoice-chasing" className="text-foreground underline underline-offset-2">
-                            QuickBooks Online
+                        QBO / Xero / FreshBooks know amount, due date, paid or not. They do not know the
+                        Gmail/Outlook thread. They do not know &quot;Paying Friday,&quot; a dispute, &quot;we
+                        already paid,&quot; a missing PO. A canned template from the accounting domain is not the
+                        client&apos;s words, from the owner&apos;s inbox.
+                    </p>
+                    <p className="type-body mt-3 text-muted-foreground">
+                        Native reminders do not pause when the client replies. They send reminder 2 on top of an
+                        open conversation. Scotive: chase from the owner&apos;s Gmail/Outlook; not a third cap of
+                        noreply@ accounting mail. &quot;People respond to people.&quot; Sends from the user&apos;s
+                        Gmail/Outlook, same thread, same invoice match.
+                    </p>
+                    <p className="type-body mt-3 text-muted-foreground">
+                        Client replied → hold. No &quot;just checking in&quot; on an open conversation. Promised
+                        (&quot;paying Friday&quot;) → hold until that date, then needs you (broken promise), not
+                        another generic reminder. Dispute / says paid / partial / needs your reply → hold. Human
+                        Follow-up. Paid → cadence dies. Never chase someone who paid.
+                    </p>
+                </div>
+
+                <div>
+                    <h2 className="type-title text-2xl md:text-3xl">
+                        Chase on top of that ledger and that inbox
+                    </h2>
+                    <pre className="type-body mt-4 overflow-x-auto rounded-xl border border-border bg-muted/40 p-4 text-sm text-muted-foreground whitespace-pre">{`Client work
+ → QBO / Xero / Zoho / FreshBooks (create invoice, due date, paid/unpaid, books)
+ → Gmail / Outlook (the actual conversation)
+ → Scotive (match thread to invoice, state, cadence, pause, pay link, drafts)`}</pre>
+                </div>
+
+                <div>
+                    <p className="type-body text-muted-foreground">
+                        Approved cadence = the user approves the rules once (or per client), not every Friendly
+                        email. Typical ladder: before due: short heads-up; due / 1–3 days late: Friendly reminder
+                        (can send on the clock); ~7 days: another Friendly; after that: Firm / Final still need a
+                        click.
+                    </p>
+                    <p className="type-body mt-3 text-muted-foreground">
+                        Cadence runs Friendly, pauses on reply/promise, pay link in the draft, keep QBO/Xero.
+                    </p>
+                    <p className="type-body mt-3 text-muted-foreground">
+                        $49/month, or $490/year (2 months free). Charge when there are more than a handful of open invoices. Agency / studio
+                        ops or founder, ~8–40 people, B2B retainers, Gmail or Outlook + QBO. Consultant /
+                        fractional with 8+ open invoices.
+                    </p>
+                    <p className="type-body mt-3 text-muted-foreground">
+                        <Link href="/invoice-reminder-software" className="text-foreground underline underline-offset-2">
+                            Invoice reminder software
                         </Link>
-                        . Want Outlook sooner? Email{" "}
-                        <a href="mailto:support@scotive.com" className="text-foreground underline underline-offset-2">
-                            support@scotive.com
-                        </a>
+                        {" · "}
+                        <Link href="/quickbooks-invoice-reminders" className="text-foreground underline underline-offset-2">
+                            QuickBooks invoice reminders
+                        </Link>
+                        {" · "}
+                        <Link href="/integrations" className="text-foreground underline underline-offset-2">
+                            Integrations
+                        </Link>
                         .
                     </p>
                 </div>
             </section>
-            <MarketingCta />
         </MarketingShell>
     );
 }

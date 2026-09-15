@@ -1,85 +1,85 @@
 import Link from "next/link";
+import { ArrowRight } from "lucide-react";
 import {
     MarketingCta,
     MarketingHero,
     MarketingHeroCtas,
     MarketingShell,
-    MarketingSolveBlock,
 } from "@/components/MarketingShell";
-import { GUIDES } from "@/lib/guides";
-import { pageMetadata } from "@/lib/seo";
+import { RESOURCE_LINKS } from "@/lib/guides";
+import { PRICE_AFTER_TRIAL, TRIAL_CTA } from "@/lib/site";
+import { absoluteUrl } from "@/lib/seo";
 
-export const metadata = pageMetadata({
-    title: "Guides — Invoice Follow-Ups, Reminders & Getting Paid | Scotive",
-    description:
-        "Practical guides on invoice follow-up emails, unpaid invoice reminders, and how to politely chase payment — for freelancers, agencies, and teams that bill clients. Then let Scotive draft the next one.",
-    path: "/guides",
+const PATH = "/guides";
+const TITLE = "Resources · Scotive";
+const DESCRIPTION =
+    "Invoice reminder software, past due emails, payment reminder templates, and how to follow up from Gmail or Outlook — on invoices from QuickBooks, Xero, or FreshBooks. 30-day free trial.";
+
+export const metadata = {
+    title: { absolute: TITLE },
+    description: DESCRIPTION,
     keywords: [
-        "invoice follow up",
-        "unpaid invoice reminder",
-        "invoice reminder email template",
-        "how to politely follow up on an invoice",
+        "invoice reminder software",
+        "past due invoice reminder",
+        "payment reminder email template",
+        "how to chase outstanding invoices",
     ],
-});
+    alternates: { canonical: absoluteUrl(PATH) },
+    robots: { index: true, follow: true },
+    openGraph: {
+        url: absoluteUrl(PATH),
+        title: TITLE,
+        description: DESCRIPTION,
+        type: "website",
+        siteName: "Scotive",
+    },
+    twitter: {
+        card: "summary_large_image",
+        title: TITLE,
+        description: DESCRIPTION,
+    },
+};
 
-export default function GuidesIndexPage() {
+export default function ResourcesIndexPage() {
     return (
         <MarketingShell testId="guides-index" activePath="/guides">
             <MarketingHero
-                eyebrow="Guides"
-                title="Get paid without the awkward chase"
-                description="Short, practical writing on invoice follow-ups, unpaid reminders, and broken payment promises. Use the templates today — or let Scotive draft the next chase from your real invoices."
+                eyebrow="Resources"
+                title="Follow-up that matches the conversation — not just the due date."
+                description="Scotive fetches invoices from invoicing tools like QuickBooks, Xero, or FreshBooks. For each one, it reads the Gmail or Outlook thread, tracks where it stands, and drafts a personalized follow-up in their words."
             >
                 <MarketingHeroCtas
-                    secondaryHref="/invoice-chasing-software"
-                    secondaryLabel="See the product"
+                    primaryLabel={TRIAL_CTA}
+                    secondaryHref="/invoice-reminder-software"
+                    secondaryLabel="Invoice reminder software"
                 />
             </MarketingHero>
-            <section className="py-12 md:py-16 max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
-                <MarketingSolveBlock
-                    title="Templates help once. Scotive helps every unpaid invoice."
-                    problem="These guides teach tone and timing. Scotive connects Gmail (and QuickBooks), tracks what’s unpaid, and drafts the next follow-up so you’re not rewriting the same email every week."
-                    points={[
-                        "Ledger of unpaid / overdue / promised invoices",
-                        "Drafts matched to client replies — you approve every send",
-                        "Free to start · disconnect anytime",
-                    ]}
-                    ctaLabel="Start free with Scotive"
-                />
-                <ul className="space-y-6">
-                    {GUIDES.map((guide) => (
-                        <li key={guide.slug} className="border-b border-border pb-6 last:border-0">
-                            <Link href={guide.path} className="group block">
-                                <h2 className="type-title text-xl md:text-2xl group-hover:underline underline-offset-2">
-                                    {guide.title}
-                                </h2>
-                                <p className="type-body mt-2 text-sm text-muted-foreground">
-                                    {guide.description}
-                                </p>
-                            </Link>
-                        </li>
+            <section className="py-14 md:py-16 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {RESOURCE_LINKS.map((item) => (
+                        <Link
+                            key={item.path}
+                            href={item.path}
+                            className="surface-card p-6 hover:shadow-md transition-shadow block group"
+                        >
+                            <h2 className="type-title text-xl group-hover:underline underline-offset-2">
+                                {item.title}
+                            </h2>
+                            <p className="type-body mt-2 text-sm text-muted-foreground">{item.description}</p>
+                            <span className="mt-4 inline-flex items-center gap-1 text-sm font-medium text-primary">
+                                Read
+                                <ArrowRight className="w-3.5 h-3.5" />
+                            </span>
+                        </Link>
                     ))}
-                </ul>
-                <p className="type-body text-sm text-muted-foreground">
-                    Looking for the product? See{" "}
-                    <Link href="/invoice-chasing-software" className="text-foreground underline underline-offset-2">
-                        invoice chasing software
-                    </Link>
-                    {" · "}
-                    <Link href="/chase-unpaid-invoices" className="text-foreground underline underline-offset-2">
-                        unpaid invoices
-                    </Link>
-                    {" · "}
-                    <Link href="/accounts-receivable-automation" className="text-foreground underline underline-offset-2">
-                        AR automation
-                    </Link>
-                    .
+                </div>
+                <p className="type-body mt-10 text-sm text-muted-foreground">
+                    {PRICE_AFTER_TRIAL}
                 </p>
             </section>
             <MarketingCta
-                title="Done reading. Ready to stop chasing by hand?"
-                description="Connect Gmail, see what’s unpaid, and approve Scotive’s next follow-up draft."
-                buttonLabel="Start free with Scotive"
+                title="Get paid without the awkward follow-up."
+                description="Connect Gmail or Outlook, plus QuickBooks, Xero, or FreshBooks. Every invoice gets a state and a next email in their words."
             />
         </MarketingShell>
     );

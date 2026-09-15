@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { useWorkspaceRefreshEffect } from "@/lib/workspaceRefresh";
 
-const linkBase = "px-3.5 py-2 rounded-full text-sm font-medium transition-colors";
+const linkBase = "px-3 py-2 rounded-md text-sm font-medium transition-colors";
 
 function NavItem({ href, children, testId, className = "" }) {
     const pathname = usePathname();
@@ -17,7 +17,7 @@ function NavItem({ href, children, testId, className = "" }) {
     return (
         <Link
             href={href}
-            className={`${linkBase} ${active ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"} ${className}`}
+            className={`${linkBase} ${active ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted"} ${className}`}
             data-testid={testId}
         >
             {children}
@@ -45,17 +45,17 @@ export function TopNav() {
     useWorkspaceRefreshEffect(loadReviewCount);
 
     return (
-        <header className="border-b border-border/70 bg-background/85 backdrop-blur-md sticky top-0 z-30">
+        <header className="border-b border-border bg-background/95 backdrop-blur-sm sticky top-0 z-30">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-                <div className="flex items-center gap-8">
+                <div className="flex items-center gap-6">
                     <BrandMark to="/dashboard" />
-                    <nav className="hidden md:flex items-center gap-1 bg-muted/60 rounded-full p-1">
+                    <nav className="hidden md:flex items-center gap-1" aria-label="App">
                         <NavItem href="/dashboard" testId="nav-dashboard">Home</NavItem>
                         <NavItem href="/clients" testId="nav-clients">Clients</NavItem>
                         <NavItem href="/review" testId="nav-review" className="relative">
                             Review
                             {reviewCount > 0 ? (
-                                <span className="ml-1.5 inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full bg-accent text-accent-foreground text-[10px] font-semibold px-1" data-testid="nav-review-badge">
+                                <span className="ml-1.5 inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-md bg-primary text-primary-foreground text-[10px] font-semibold px-1" data-testid="nav-review-badge">
                                     {reviewCount}
                                 </span>
                             ) : null}
@@ -65,12 +65,12 @@ export function TopNav() {
                 </div>
                 <div className="flex items-center gap-3">
                     <div className="hidden sm:flex items-center gap-2.5">
-                        <span className="w-8 h-8 rounded-full bg-primary/10 text-primary text-xs type-title inline-flex items-center justify-center uppercase">
+                        <span className="w-8 h-8 rounded-md bg-primary/10 text-primary text-xs type-title inline-flex items-center justify-center uppercase">
                             {(user?.email || "?").slice(0, 1)}
                         </span>
                         <span className="text-sm font-medium max-w-[180px] truncate" data-testid="nav-user-email">{user?.email}</span>
                     </div>
-                    <Button variant="ghost" size="sm" onClick={logout} className="rounded-full text-muted-foreground hover:text-foreground" data-testid="nav-logout-button">
+                    <Button variant="ghost" size="sm" onClick={logout} className="rounded-md text-muted-foreground hover:text-foreground" data-testid="nav-logout-button">
                         <LogOut className="w-4 h-4 mr-1.5" /> Sign out
                     </Button>
                 </div>

@@ -1332,17 +1332,27 @@ def build_router(db, get_current_user):
 
     @router.post("/invoices/{invoice_id}/send-chase")
     async def send_chase(invoice_id: str, payload: ChaseSendInput, user: dict = Depends(get_current_user)):
-        from gmail_client import get_access_token, send_gmail_reply
+        from gmail_client import get_access_token, resolve_mailbox_connection, send_gmail_reply
         try:
             inv = await db.invoices.find_one({"_id": ObjectId(invoice_id), "user_id": user["_id"]})
         except Exception:
             raise HTTPException(status_code=404, detail="Invoice not found")
         if not inv:
             raise HTTPException(status_code=404, detail="Invoice not found")
-        conn = await db.gmail_connections.find_one({"user_id": user["_id"]})
+        conn = await resolve_mailbox_connection(
+            db,
+            user["_id"],
+            provider=inv.get("mailbox_provider"),
+            email=inv.get("mailbox_email"),
+        )
         if not conn or not conn.get("can_send"):
-            raise HTTPException(status_code=400, detail="Gmail send scope missing. Reconnect Gmail.")
-        access = await get_access_token(db, user["_id"])
+            raise HTTPException(status_code=400, detail="Mailbox send missing. Reconnect Gmail or Outlook.")
+        access = await get_access_token(
+            db,
+            user["_id"],
+            provider=conn.get("provider"),
+            email=conn.get("email"),
+        )
         to_addr = inv.get("counterparty_email")
         from_addr = conn.get("email")
         try:
@@ -1581,8 +1591,8 @@ def build_router(db, get_current_user):
 
     @router.post("/chase-drafts/{draft_id}/send")
     async def send_chase_draft(draft_id: str, user: dict = Depends(get_current_user)):
-        """Send a queued draft via the user's Gmail. Marks the draft as sent."""
-        from gmail_client import get_access_token, send_gmail_reply
+        """Send a queued draft via the user's mailbox. Marks the draft as sent."""
+        from gmail_client import get_access_token, resolve_mailbox_connection, send_gmail_reply
         try:
             draft = await db.chase_drafts.find_one({"_id": ObjectId(draft_id), "user_id": user["_id"]})
         except Exception:
@@ -1591,15 +1601,22 @@ def build_router(db, get_current_user):
             raise HTTPException(status_code=404, detail="Draft not found")
         if draft.get("status") != "queued":
             raise HTTPException(status_code=400, detail="Draft is not queued for send.")
-        conn = await db.gmail_connections.find_one({"user_id": user["_id"]})
-        if not conn or not conn.get("can_send"):
-            raise HTTPException(status_code=400, detail="Gmail send scope missing. Reconnect Gmail.")
-        access = await get_access_token(db, user["_id"])
-        to_addr = draft.get("to")
-        from_addr = conn.get("email")
         inv = None
         if draft.get("invoice_id"):
             inv = await db.invoices.find_one({"_id": draft["invoice_id"], "user_id": user["_id"]})
+        conn = await resolve_mailbox_connection(
+            db,
+            user["_id"],
+            provider=(inv or {}).get("mailbox_provider"),
+            email=(inv or {}).get("mailbox_email"),
+        )
+        if not conn or not conn.get("can_send"):
+            raise HTTPException(status_code=400, detail="Mailbox send missing. Reconnect Gmail or Outlook.")
+        access = await get_access_token(
+            db, user["_id"], provider=conn.get("provider"), email=conn.get("email"),
+        )
+        to_addr = draft.get("to")
+        from_addr = conn.get("email")
         try:
             sent = await send_gmail_reply(
                 access,

@@ -4,7 +4,7 @@ import { absoluteUrl } from "@/lib/seo";
 export const metadata = {
     title: "Privacy Policy",
     description:
-        "How Scotive collects, uses, and protects your account, email, and accounting connection data for invoice chasing.",
+        "How Scotive collects, uses, and protects your account, email, and accounting connection data. Match Gmail/Outlook thread to invoice. Keep QBO/Xero.",
     alternates: { canonical: absoluteUrl("/privacy") },
     openGraph: { url: absoluteUrl("/privacy") },
 };

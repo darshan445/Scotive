@@ -14,15 +14,12 @@ If the totals of all four sections come to zero, we skip sending.
 """
 from __future__ import annotations
 
-import base64
 import html
 import logging
 import os
 from datetime import datetime, timezone, timedelta
 
-import httpx
-
-from gmail_client import get_access_token, GmailAuthError
+from gmail_client import get_access_token, resolve_mailbox_connection, GmailAuthError
 from ledger_reconcile import sort_by_email_date
 
 logger = logging.getLogger("scotive.digest")
@@ -508,7 +505,7 @@ async def send_digest_for_user(db, user_id, force: bool = False) -> dict:
     user = await db.users.find_one({"_id": user_id})
     if not user:
         return {**result, "reason": "user_not_found"}
-    conn = await db.gmail_connections.find_one({"user_id": user_id})
+    conn = await resolve_mailbox_connection(db, user_id)
     if not conn or conn.get("status") != "connected":
         return {**result, "reason": "no_gmail"}
     if not conn.get("can_send"):
@@ -545,28 +542,28 @@ async def send_digest_for_user(db, user_id, force: bool = False) -> dict:
     email = build_digest_email(user, sections, totals)
 
     try:
-        access = await get_access_token(db, user_id)
+        access = await get_access_token(
+            db, user_id, provider=conn.get("provider"), email=conn.get("email"),
+        )
     except GmailAuthError as e:
         return {**result, "reason": f"auth_error:{e}", "counts": counts}
 
     from_addr = conn.get("email")
     to_addr = user.get("email")  # digest goes to the app-account email
-    raw = _mime_message(from_addr, to_addr, email["subject"], email["body_text"], email["body_html"])
-    encoded = base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
 
     try:
-        async with httpx.AsyncClient(timeout=20.0) as c:
-            r = await c.post(
-                "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
-                headers={"Authorization": f"Bearer {access}", "Content-Type": "application/json"},
-                json={"raw": encoded},
-            )
-            if r.status_code >= 400:
-                logger.warning("Digest send failed: %s %s", r.status_code, r.text[:200])
-                return {**result, "reason": "gmail_send_failed", "counts": counts}
+        from gmail_client import send_mailbox_email
+        await send_mailbox_email(
+            access,
+            from_addr=from_addr,
+            to_addr=to_addr,
+            subject=email["subject"],
+            body_html=email["body_html"],
+            body_text=email["body_text"],
+        )
     except Exception as e:  # pragma: no cover
         logger.exception("Digest send exception: %s", e)
-        return {**result, "reason": "exception", "counts": counts}
+        return {**result, "reason": "gmail_send_failed", "counts": counts}
 
     now_iso = datetime.now(timezone.utc).isoformat()
     await db.user_settings.update_one(
@@ -588,10 +585,12 @@ async def send_daily_digests(db) -> dict:
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
     now_utc = datetime.now(timezone.utc)
     totals = {"users_considered": 0, "sent": 0, "skipped": 0}
+    seen_users: set = set()
     async for conn in db.gmail_connections.find({"status": "connected"}):
         uid = conn.get("user_id")
-        if not uid:
+        if not uid or uid in seen_users:
             continue
+        seen_users.add(uid)
         totals["users_considered"] += 1
         settings = await db.user_settings.find_one({"user_id": uid}) or {}
         if settings.get("daily_digest_enabled") is False:

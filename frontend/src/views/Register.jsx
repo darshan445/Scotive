@@ -33,24 +33,27 @@ export default function RegisterPage() {
         } catch {
             timezone = null;
         }
-        const res = await register(email, password, name.trim() || null, timezone);
-        setSubmitting(false);
-        if (!res.ok) {
-            setError(res.error);
-            return;
+        try {
+            const res = await register(email, password, name.trim() || null, timezone);
+            if (!res.ok) {
+                setError(res.error);
+                return;
+            }
+            router.replace("/dashboard");
+        } finally {
+            setSubmitting(false);
         }
-        router.replace("/dashboard");
     }
 
     return (
         <AuthShell
             eyebrow="Create account"
-            title="Get paid faster, without the awkward chase."
-            subtitle="60 seconds to your first ledger. Connect email (and optional accounting) — nothing sends without your approval."
+            title="Create your account"
+            subtitle="Start a 30-day free trial. No card required."
             footer={
                 <span>
                     Already have an account?{" "}
-                    <Link href="/login" className="text-foreground font-semibold underline underline-offset-4 hover:text-accent" data-testid="link-to-login">
+                    <Link href="/login" className="text-foreground font-semibold underline underline-offset-4 hover:text-primary" data-testid="link-to-login">
                         Sign in
                     </Link>
                 </span>
@@ -58,8 +61,8 @@ export default function RegisterPage() {
         >
             <form onSubmit={onSubmit} className="space-y-5" data-testid="register-form">
                 <div className="space-y-2">
-                    <Label htmlFor="name" className="text-xs font-mono uppercase tracking-[0.2em] text-muted-foreground">
-                        Your name <span className="normal-case tracking-normal text-muted-foreground/70">(optional)</span>
+                    <Label htmlFor="name">
+                        Name <span className="font-normal text-muted-foreground">(optional)</span>
                     </Label>
                     <Input
                         id="name"
@@ -73,9 +76,7 @@ export default function RegisterPage() {
                     />
                 </div>
                 <div className="space-y-2">
-                    <Label htmlFor="email" className="text-xs font-mono uppercase tracking-[0.2em] text-muted-foreground">
-                        Work email
-                    </Label>
+                    <Label htmlFor="email">Email</Label>
                     <Input
                         id="email"
                         type="email"
@@ -89,9 +90,7 @@ export default function RegisterPage() {
                     />
                 </div>
                 <div className="space-y-2">
-                    <Label htmlFor="password" className="text-xs font-mono uppercase tracking-[0.2em] text-muted-foreground">
-                        Password
-                    </Label>
+                    <Label htmlFor="password">Password</Label>
                     <Input
                         id="password"
                         type="password"
@@ -119,7 +118,7 @@ export default function RegisterPage() {
                 <Button
                     type="submit"
                     disabled={submitting}
-                    className="w-full h-12 rounded-md bg-foreground text-background hover:bg-foreground/90 font-semibold text-base group"
+                    className="w-full h-12 rounded-full font-semibold text-base group"
                     data-testid="register-submit-button"
                 >
                     {submitting ? (

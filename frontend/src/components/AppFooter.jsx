@@ -22,7 +22,7 @@ export function AppFooter({ compact = false }) {
                     <Link href="/integrations" className="hover:text-foreground transition-colors hidden sm:inline">
                         Integrations
                     </Link>
-                    <span className="hidden md:inline">Get paid faster · You approve every send</span>
+                    <span className="hidden md:inline">You approve Firm/Final</span>
                 </div>
             </div>
         </footer>

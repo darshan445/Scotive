@@ -7,8 +7,8 @@ export function AuthShell({ eyebrow, title, subtitle, children, footer }) {
             <header className="px-6 md:px-10 py-6 flex items-center justify-between">
                 <BrandMark />
                 <div className="hidden sm:flex items-center gap-2 text-xs font-medium text-muted-foreground">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                    Invoice chasing · email + accounting
+                    <span className="w-1.5 h-1.5 rounded-full bg-primary" />
+                    30-day free trial
                 </div>
             </header>
 
@@ -42,7 +42,6 @@ export function AuthShell({ eyebrow, title, subtitle, children, footer }) {
                     <Link href="/terms" className="hover:text-foreground transition-colors">Terms</Link>
                     <Link href="/privacy" className="hover:text-foreground transition-colors">Privacy</Link>
                     <Link href="/integrations" className="hover:text-foreground transition-colors hidden sm:inline">Integrations</Link>
-                    <span className="hidden md:inline">You approve every send</span>
                 </div>
             </footer>
         </div>

@@ -69,7 +69,7 @@ export function DueDatePromptBanner({ prompt, onDismiss, onChanged }) {
                     type="button"
                     onClick={skipDueDate}
                     disabled={busy}
-                    className="inline-flex items-center gap-1 text-[11px] font-mono uppercase tracking-widest text-amber-800 hover:text-amber-950 flex-shrink-0"
+                    className="inline-flex items-center gap-1 text-sm font-medium text-amber-800 hover:text-amber-950 flex-shrink-0"
                     data-testid="due-date-prompt-dismiss">
                     <X className="w-3.5 h-3.5" />
                 </button>

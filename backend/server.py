@@ -467,7 +467,21 @@ async def on_startup():
     await db.login_attempts.create_index("identifier")
     await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
     await db.password_reset_tokens.create_index("token")
-    await db.gmail_connections.create_index("user_id", unique=True)
+    try:
+        await db.gmail_connections.drop_index("user_id_1")
+    except Exception:
+        pass
+    await db.gmail_connections.create_index(
+        [("user_id", 1), ("provider", 1)],
+        unique=True,
+        name="user_id_1_provider_1",
+    )
+    await db.gmail_connections.create_index("unipile_account_id")
+    # Backfill missing provider on legacy single-mailbox rows
+    await db.gmail_connections.update_many(
+        {"$or": [{"provider": {"$exists": False}}, {"provider": None}, {"provider": ""}]},
+        {"$set": {"provider": "google"}},
+    )
     await db.qbo_connections.create_index("user_id", unique=True)
     await db.qbo_connections.create_index("realm_id")
     # Unique only when qbo_id is a real string — sparse unique still indexes
@@ -524,6 +538,14 @@ async def on_startup():
     await seed_admin()
     # Safe only with a single Uvicorn worker — clears crash-stale locks & resumes seed jobs.
     await recover_interrupted_work()
+
+    # Register Unipile account_status webhook when PUBLIC_API_URL is set (idempotent).
+    if os.environ.get("UNIPILE_API_KEY") and os.environ.get("PUBLIC_API_URL"):
+        try:
+            from unipile_client import ensure_account_status_webhook
+            await ensure_account_status_webhook()
+        except Exception as e:
+            logger.warning("Unipile webhook setup skipped: %s", e)
 
     # Kick off continuous loops (F9a). Interval 0 disables that loop.
     # Defaults: sync/escalation hourly; digest check every 15m (send still once/day per user).

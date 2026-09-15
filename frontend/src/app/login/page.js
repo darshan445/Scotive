@@ -6,7 +6,7 @@ import { absoluteUrl } from "@/lib/seo";
 export const metadata = {
     title: "Log in",
     description:
-        "Log in to Scotive to track unpaid invoices and approve payment follow-ups from your connected tools.",
+        "Log in to Scotive.",
     alternates: { canonical: absoluteUrl("/login") },
     openGraph: { url: absoluteUrl("/login") },
 };

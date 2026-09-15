@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, extractError } from "@/lib/api";
 
-// status shape from backend GmailStatus
+// status shape from backend GmailStatus (mailbox — Gmail or Outlook)
 export function useGmailConnection() {
     const [status, setStatus] = useState(null); // null = loading
     const [error, setError] = useState("");
@@ -14,7 +14,7 @@ export function useGmailConnection() {
             return data;
         } catch (e) {
             setError(extractError(e));
-            setStatus({ connected: false, status: "disconnected", can_send: false, email: null });
+            setStatus({ connected: false, status: "disconnected", can_send: false, email: null, provider: null });
             return null;
         }
     }, []);
@@ -23,18 +23,20 @@ export function useGmailConnection() {
         refresh();
     }, [refresh]);
 
-    const startConnect = useCallback(async () => {
+    const startConnect = useCallback(async (provider = "google") => {
         try {
-            const { data } = await api.get("/gmail/oauth/start");
+            const p = provider === "outlook" ? "outlook" : "google";
+            const { data } = await api.get("/gmail/oauth/start", { params: { provider: p } });
             window.location.href = data.authorization_url;
         } catch (e) {
             setError(extractError(e));
         }
     }, []);
 
-    const disconnect = useCallback(async () => {
+    const disconnect = useCallback(async (provider) => {
         try {
-            await api.post("/gmail/disconnect");
+            const params = provider ? { provider } : undefined;
+            await api.post("/gmail/disconnect", null, { params });
             await refresh();
             return { ok: true };
         } catch (e) {

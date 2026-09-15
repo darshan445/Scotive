@@ -2,11 +2,10 @@ import ContactPage from "@/views/Contact";
 import { pageMetadata } from "@/lib/seo";
 
 export const metadata = pageMetadata({
-    title: "Contact Scotive — Demo, Early Access & Support",
+    title: "Contact",
     description:
-        "Get in touch with Scotive about invoice chasing, a product demo, or early access. Email contact@scotive.com or send a message.",
+        "You already invoiced them. Scotive watches the thread and the open invoice, and handles the next chase. Email contact@scotive.com.",
     path: "/contact",
-    keywords: ["contact Scotive", "Scotive support", "invoice chasing demo"],
 });
 
 export default function Page() {

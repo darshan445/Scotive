@@ -4,7 +4,7 @@ import Link from "next/link";
 import { AlertTriangle, ArrowUpRight, CalendarClock, Loader2, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/AppShell";
-import { ConnectGmailButton } from "@/components/ConnectGmailButton";
+import { ConnectMailboxButton } from "@/components/ConnectGmailButton";
 import { LedgerCard } from "@/components/LedgerCard";
 import { TodayCard } from "@/components/TodayCard";
 import { SyncStatusBar } from "@/components/SyncStatusBar";
@@ -123,6 +123,8 @@ function StatsStrip({ ledger }) {
 
 function GmailIssueBanner({ status }) {
     const revoked = status?.status === "revoked";
+    const label = status?.provider === "outlook" ? "Outlook" : "Gmail";
+    const provider = status?.provider === "outlook" ? "outlook" : "google";
     return (
         <div
             className="rounded-2xl border border-amber-200 bg-amber-50 p-5 flex flex-col sm:flex-row sm:items-center gap-4"
@@ -131,14 +133,14 @@ function GmailIssueBanner({ status }) {
                 <AlertTriangle className="w-5 h-5 text-amber-700 mt-0.5 flex-shrink-0" />
                 <div className="min-w-0">
                     <div className="font-heading font-semibold text-amber-900">
-                        {revoked ? "Gmail access was revoked" : "Connected — but sending is off"}
+                        {revoked ? `${label} access was revoked` : "Connected — but sending is off"}
                     </div>
                     <div className="text-sm text-amber-800 mt-1">
                         {revoked ? (
                             <>
                                 Reconnect to keep your ledger fresh.
                                 {status.email ? (
-                                    <> Access to <span className="font-mono">{status.email}</span> was removed in Google.</>
+                                    <> Access to <span className="font-mono">{status.email}</span> was removed.</>
                                 ) : null}
                             </>
                         ) : (
@@ -150,14 +152,15 @@ function GmailIssueBanner({ status }) {
                     <Link
                         href="/settings"
                         className="inline-flex items-center gap-1 mt-2 text-xs font-semibold text-amber-900 underline underline-offset-2 hover:text-amber-950">
-                        Gmail settings <ArrowUpRight className="w-3 h-3" />
+                        Mailbox settings <ArrowUpRight className="w-3 h-3" />
                     </Link>
                 </div>
             </div>
-            <ConnectGmailButton
-                label="Reconnect Gmail"
+            <ConnectMailboxButton
+                provider={provider}
+                label={`Reconnect ${label}`}
                 testId="reconnect-gmail-button"
-                variant={revoked ? "default" : "secondary"}
+                variant={revoked ? "primary" : "secondary"}
             />
         </div>
     );
@@ -403,6 +406,8 @@ export default function DashboardPage() {
                     <OnboardingConnections
                         gmailConnected={gmailConnected || Boolean(onboarding?.gmail_connected)}
                         qboConnected={qboIsConnected}
+                        mailProvider={status?.provider || null}
+                        connections={status?.connections || []}
                         onContinue={handleConnectionsContinue}
                         onQboImported={() => {
                             qboImportRef.current = true;

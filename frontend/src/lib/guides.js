@@ -1,61 +1,60 @@
-/** Long-tail guide posts for SEO (index + sitemap). */
+/** Search landing pages listed on /guides and in Resources. Not a blog. */
 
-export const GUIDES = [
+export const RESOURCE_LINKS = [
     {
-        slug: "invoice-follow-up-email-templates",
-        path: "/guides/invoice-follow-up-email-templates",
-        title: "Invoice Follow-Up Email Templates That Don't Sound Awkward",
+        path: "/invoice-reminder-software",
+        title: "Invoice reminder software",
+        navLabel: "Invoice reminder software",
         description:
-            "Copy-paste invoice follow-up and unpaid invoice reminder email templates — friendly, firm, and final — that sound like you, not a collections bot.",
-        keywords: [
-            "invoice follow up",
-            "invoice reminder email template",
-            "invoice reminder email sample",
-            "invoice follow up email",
-        ],
-        published: "2026-07-23",
+            "Follow-ups from Gmail or Outlook, matched to invoices from QuickBooks, Xero, or FreshBooks — pausing when the client replies.",
     },
     {
-        slug: "polite-reminder-for-unpaid-invoice",
-        path: "/guides/polite-reminder-for-unpaid-invoice",
-        title: "How to Send a Polite Reminder for an Unpaid Invoice",
+        path: "/past-due-invoice-reminder",
+        title: "Past due invoice reminder",
+        navLabel: "Past due reminder",
         description:
-            "A practical unpaid invoice reminder workflow: when to nudge, what to say, and a polite reminder for an unpaid invoice you can send today.",
-        keywords: [
-            "unpaid invoice reminder",
-            "reminder for unpaid invoice",
-            "polite invoice reminder",
-        ],
-        published: "2026-07-23",
+            "When the due date passed, the next email should know if they promised Friday, said they paid, or already replied.",
     },
     {
-        slug: "how-to-follow-up-on-an-invoice-politely",
-        path: "/guides/how-to-follow-up-on-an-invoice-politely",
-        title: "How to Follow Up on an Invoice Without Sounding Rude",
+        path: "/payment-reminder-email-template",
+        title: "Payment reminder email template",
+        navLabel: "Email templates",
         description:
-            "How to politely follow up on an invoice: timing, tone, and wording that protects the relationship while getting you paid.",
-        keywords: [
-            "how to politely follow up on an invoice",
-            "follow up on invoice politely",
-            "polite invoice follow up",
-        ],
-        published: "2026-07-23",
+            "Copy-paste reminder emails with invoice number, amount, due date, and a payment link — plus when not to send them.",
     },
     {
-        slug: "client-said-ill-pay-friday",
-        path: "/guides/client-said-ill-pay-friday",
-        title: "What to Do When a Client Says “I'll Pay Friday” — and Doesn't",
+        path: "/how-to-chase-outstanding-invoices",
+        title: "How to chase outstanding invoices",
+        navLabel: "How to chase invoices",
         description:
-            "Broken payment promises are common. Here's how to follow up when a client said they'd pay Friday and didn't — without burning the relationship.",
-        keywords: [
-            "broken payment promise",
-            "client said they would pay",
-            "invoice follow up after promise",
-        ],
-        published: "2026-07-23",
+            "A simple follow-up cadence for agencies and consultants with a pile of open invoices — not a memory exercise.",
+    },
+    {
+        path: "/quickbooks-invoice-reminders",
+        title: "QuickBooks invoice reminders",
+        navLabel: "QuickBooks reminders",
+        description:
+            "QuickBooks knows the due date. It does not read the Gmail or Outlook thread. Keep QuickBooks; follow up from your inbox.",
+    },
+    {
+        path: "/xero-invoice-reminders",
+        title: "Xero invoice reminders",
+        navLabel: "Xero reminders",
+        description:
+            "Xero reminders cap out and send from xero.com. Keep Xero; Scotive follows up from Gmail or Outlook.",
+    },
+    {
+        path: "/freshbooks-invoice-reminders",
+        title: "FreshBooks invoice reminders",
+        navLabel: "FreshBooks reminders",
+        description:
+            "FreshBooks knows the due date. It does not read the Gmail or Outlook thread. Keep FreshBooks; follow up from your inbox.",
     },
 ];
 
-export function getGuide(slug) {
-    return GUIDES.find((g) => g.slug === slug) || null;
+/** @deprecated Use RESOURCE_LINKS */
+export const GUIDE_LINKS = RESOURCE_LINKS;
+
+export function relatedResources(currentPath) {
+    return RESOURCE_LINKS.filter((item) => item.path !== currentPath);
 }

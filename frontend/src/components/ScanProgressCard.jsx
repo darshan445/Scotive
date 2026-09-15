@@ -22,7 +22,7 @@ export function ScanProgressCard({ state }) {
         <div className="rounded-2xl border border-border bg-card p-6 md:p-8 shadow-sm" data-testid="scan-progress-card">
             <div className="flex items-center justify-between mb-6">
                 <div>
-                    <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">
+                    <div className="eyebrow">
                         {isError ? "Scan interrupted" : state.status === "complete" ? "Scan complete" : "Scanning your inbox"}
                     </div>
                     <h2 className="type-title text-2xl mt-1">

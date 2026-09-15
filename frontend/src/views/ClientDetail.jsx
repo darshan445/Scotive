@@ -56,9 +56,9 @@ function PaymentBehaviorCard({ stats }) {
                         testid="stat-promise-rate"
                     />
                 </div>
-                <div className="mt-5 text-[11px] font-mono uppercase tracking-widest text-muted-foreground">
+                <p className="mt-5 type-body text-sm">
                     Based on {stats.payment_cycles} completed cycles. Updates as more invoices settle.
-                </div>
+                </p>
             </div>
         </section>
     );
@@ -67,7 +67,7 @@ function PaymentBehaviorCard({ stats }) {
 function Stat({ label, value, detail, testid }) {
     return (
         <div data-testid={testid}>
-            <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">
+            <div className="eyebrow">
                 {label}
             </div>
             <div className="mt-1 type-title text-2xl tabular-nums">

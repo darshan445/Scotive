@@ -13,7 +13,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
-from gmail_client import GmailAuthError, get_access_token, get_messages_batch, list_message_ids
+from gmail_client import GmailAuthError, get_access_token, get_messages_batch, list_message_ids, mailbox_tokens_for_user
 from client_sweep import (
     CONSUMER_DOMAINS,
     _sender_domain,
@@ -306,8 +306,8 @@ async def run_gmail_sync(
         if not await _onboarding_allows_incremental(db, user_id):
             return {**counts, "skipped": "awaiting_onboarding"}
 
-    conn = await db.gmail_connections.find_one({"user_id": user_id})
-    if not conn or conn.get("status") != "connected":
+    mailboxes = await mailbox_tokens_for_user(db, user_id)
+    if not mailboxes:
         return {**counts, "skipped": "no_connection"}
 
     state = await db.gmail_sync_state.find_one({"user_id": user_id}) or {}
@@ -335,26 +335,44 @@ async def run_gmail_sync(
         )
 
     try:
-        try:
-            access = await get_access_token(db, user_id)
-        except GmailAuthError as e:
-            if job_id:
-                await db.seed_jobs.update_one(
-                    {"_id": job_id},
-                    {"$set": {"status": "error", "error": str(e), "updated_at": now_iso}},
-                )
-            return {**counts, "skipped": "auth_error", "error": str(e)}
-
-        my_email = ((conn or {}).get("email") or "").lower()
         ignored = await _ignored_ids(db, user_id)
         blocklist = await load_blocklist(db, user_id)
-
         window = sync_window_clause(mode, last_synced_at=state.get("last_synced_at"))
-        messages, filter_stats = await fetch_filtered_sent_mail(
-            access, my_email, blocklist, ignored, mode, window,
-        )
+
+        messages: list[dict] = []
+        seen_ids: set[str] = set()
+        filter_stats = {"fetched": 0, "kept": 0, "dropped": 0}
+        primary_email = ""
+        access = mailboxes[0][1]
+
+        for conn, token in mailboxes:
+            my_email = ((conn or {}).get("email") or "").lower()
+            if not primary_email:
+                primary_email = my_email
+            try:
+                box_msgs, box_stats = await fetch_filtered_sent_mail(
+                    token, my_email, blocklist, ignored, mode, window,
+                )
+            except GmailAuthError as e:
+                logger.warning("sync mailbox auth fail provider=%s err=%s", conn.get("provider"), e)
+                continue
+            filter_stats["fetched"] += box_stats.get("fetched", 0)
+            filter_stats["kept"] += box_stats.get("kept", 0)
+            filter_stats["dropped"] += box_stats.get("dropped", 0)
+            for m in box_msgs:
+                mid = m.get("id")
+                if not mid or mid in seen_ids:
+                    continue
+                seen_ids.add(mid)
+                m["mailbox_email"] = my_email
+                m["mailbox_provider"] = conn.get("provider") or "google"
+                messages.append(m)
+            access = token  # last successful token ok for downstream AI that needs one account
+
         counts.update(filter_stats)
         await _set_job_phase("filtering", counts)
+        my_email = primary_email
+
 
         if not messages:
             if mode == "onboarding" and job_id:

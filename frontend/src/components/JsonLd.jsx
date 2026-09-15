@@ -1,6 +1,8 @@
-import { DEFAULT_DESCRIPTION, SITE_URL } from "@/lib/seo";
+import { AUDIENCE_SHORT, DEFAULT_DESCRIPTION, SITE_URL } from "@/lib/seo";
+import { ANNUAL_TOTAL, MONTHLY_PRICE } from "@/lib/site";
 
 const SITE = SITE_URL;
+const DESCRIPTION = DEFAULT_DESCRIPTION;
 
 /** JSON-LD for Google rich results / knowledge understanding. */
 export function JsonLd() {
@@ -17,8 +19,7 @@ export function JsonLd() {
                     url: `${SITE}/logo512.png`,
                 },
                 image: `${SITE}/scotive-icon.png`,
-                description:
-                    "Invoice chasing software for freelancers, agencies, consultants, and any team that bills clients — track unpaid invoices from email and accounting tools, with human-approved follow-ups.",
+                description: DESCRIPTION,
                 email: "contact@scotive.com",
                 sameAs: [],
             },
@@ -28,7 +29,7 @@ export function JsonLd() {
                 url: SITE,
                 name: "Scotive",
                 publisher: { "@id": `${SITE}/#organization` },
-                description: DEFAULT_DESCRIPTION,
+                description: DESCRIPTION,
             },
             {
                 "@type": "SoftwareApplication",
@@ -38,25 +39,34 @@ export function JsonLd() {
                 operatingSystem: "Web",
                 url: SITE,
                 image: `${SITE}/logo512.png`,
-                description:
-                    "Invoice chasing software that tracks unpaid invoices from Gmail and QuickBooks Online, reads client replies for promises and disputes, and drafts follow-ups you approve before sending. Outlook, Zoho Books, and FreshBooks on the roadmap.",
+                description: DESCRIPTION,
                 audience: {
                     "@type": "Audience",
-                    audienceType:
-                        "Freelancers, agencies, consultants, professional services, and businesses that bill clients",
+                    audienceType: AUDIENCE_SHORT,
                 },
                 featureList: [
-                    "Invoice tracking from email and accounting",
-                    "Client reply intelligence (promises, disputes, payment claims)",
-                    "Human-approved chase drafts",
-                    "QuickBooks Online unpaid invoice import and paid sync",
+                    "Match Gmail/Outlook thread to invoice",
+                    "Conversation states from invoiced to paid",
+                    "Next follow-up drafted in the client's own language",
+                    "Approved Friendly cadence that pauses on reply/promise",
+                    "Pay link in the draft",
+                    "Firm/Final still a click",
+                    "Keep QBO/Xero as the ledger",
                 ],
-                offers: {
-                    "@type": "Offer",
-                    price: "0",
-                    priceCurrency: "USD",
-                    description: "Free to start",
-                },
+                offers: [
+                    {
+                        "@type": "Offer",
+                        name: "Monthly",
+                        price: String(MONTHLY_PRICE),
+                        priceCurrency: "USD",
+                    },
+                    {
+                        "@type": "Offer",
+                        name: "Yearly",
+                        price: String(ANNUAL_TOTAL),
+                        priceCurrency: "USD",
+                    },
+                ],
                 provider: { "@id": `${SITE}/#organization` },
             },
         ],

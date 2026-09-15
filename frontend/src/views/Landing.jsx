@@ -5,149 +5,86 @@ import {
     BellRing,
     BookOpen,
     Check,
-    CheckCircle2,
-    Clock,
-    Eye,
-    Inbox,
     Link2,
-    Lock,
-    MailCheck,
-    MessageSquareQuote,
+    Calendar,
+    ListChecks,
+    Pause,
+    PenLine,
     Send,
-    ShieldCheck,
-    Wallet,
 } from "lucide-react";
-import { BrandMark } from "@/components/BrandMark";
-import { FaqSection, HOME_FAQS } from "@/components/FaqSection";
+import { FaqSection } from "@/components/FaqSection";
+import { HeroProductPreview } from "@/components/HeroProductPreview";
+import { MarketingShell } from "@/components/MarketingShell";
+import { PRICE_AFTER_TRIAL, TRIAL_CTA, TRIAL_LABEL } from "@/lib/site";
 
-function SectionEyebrow({ children }) {
-    return <div className="eyebrow mb-3">{children}</div>;
+function SectionEyebrow({ index, children }) {
+    const n = String(index).padStart(2, "0");
+    return (
+        <div className="flex items-center gap-3 mb-4">
+            <span className="inline-flex items-center justify-center min-w-[2.25rem] h-9 px-2 rounded-lg bg-primary text-primary-foreground text-sm font-semibold tabular-nums">
+                {n}
+            </span>
+            <span className="text-base md:text-lg font-semibold tracking-tight text-foreground">
+                {children}
+            </span>
+            <span className="hidden sm:block h-px flex-1 max-w-[7rem] bg-border" aria-hidden />
+        </div>
+    );
 }
 
-function PainCard({ quote, detail }) {
+function GapCard({ title, detail, icon: Icon, tone }) {
+    const isSolution = tone === "solution";
     return (
         <div className="surface-card p-6">
-            <MessageSquareQuote className="w-5 h-5 text-accent mb-4" strokeWidth={2} />
-            <p className="type-title text-lg leading-snug">{quote}</p>
+            <div className="flex items-center justify-between gap-3 mb-4">
+                <span className="inline-flex items-center justify-center w-10 h-10 rounded-xl bg-primary/5 text-primary">
+                    <Icon className="w-5 h-5" strokeWidth={2} />
+                </span>
+                <span
+                    className={`inline-flex items-center gap-1 text-[11px] font-semibold rounded-full px-2.5 py-1 ${
+                        isSolution ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800"
+                    }`}
+                >
+                    {isSolution ? <Check className="w-3 h-3" strokeWidth={2.5} /> : null}
+                    {isSolution ? "Scotive" : "The gap"}
+                </span>
+            </div>
+            <h3 className="type-title text-lg leading-snug">{title}</h3>
             <p className="type-body mt-3 text-sm">{detail}</p>
         </div>
     );
 }
 
-function FeatureCard({ replaces, title, description, chips, icon: Icon }) {
-    return (
-        <div className="surface-card p-6 hover:shadow-md transition-shadow flex flex-col gap-4">
-            <div className="flex items-center justify-between">
-                <span className="inline-flex items-center justify-center w-10 h-10 rounded-xl bg-primary/5 text-primary">
-                    <Icon className="w-5 h-5" strokeWidth={2} />
-                </span>
-                <span className="text-[11px] font-medium text-muted-foreground bg-muted rounded-full px-2.5 py-1">
-                    Replaces: {replaces}
-                </span>
-            </div>
-            <div>
-                <h3 className="type-title text-lg">{title}</h3>
-                <p className="type-body mt-1.5 text-sm">{description}</p>
-            </div>
-            <div className="mt-auto flex flex-wrap gap-1.5">
-                {chips.map((c) => (
-                    <span key={c} className="text-[11px] font-medium text-primary/80 bg-primary/5 rounded-full px-2.5 py-1">
-                        {c}
-                    </span>
-                ))}
-            </div>
-        </div>
-    );
-}
-
-function OutcomeCard({ quote, metric, name, role }) {
-    return (
-        <div className="surface-card p-6 flex flex-col gap-4">
-            <p className="type-body text-sm text-foreground/90">“{quote}”</p>
-            <div className="mt-auto flex items-center justify-between gap-3">
-                <div>
-                    <div className="text-sm font-semibold text-foreground">{name}</div>
-                    <div className="text-xs text-muted-foreground">{role}</div>
-                </div>
-                <span className="type-title text-sm text-accent bg-accent/10 rounded-full px-3 py-1 whitespace-nowrap">
-                    {metric}
-                </span>
-            </div>
-        </div>
-    );
-}
-
-function HeroMockup() {
-    const rows = [
-        { icon: AlertTriangle, name: "Acme Studio", ref: "INV-2041", amount: "$2,400", tag: "Broken promise", tone: "red", action: "Firm follow-up" },
-        { icon: BellRing, name: "Meraki Co.", ref: "INV-2044", amount: "$1,850", tag: "Promised Friday", tone: "amber", action: "Watching" },
-        { icon: MessageSquareQuote, name: "Northwind", ref: "FS-413", amount: "$3,200", tag: "Needs your reply", tone: "slate", action: "Clarifying reply" },
-        { icon: CheckCircle2, name: "Juliet Studio", ref: "INV-2038", amount: "$2,200", tag: "Paid yesterday", tone: "green", action: null },
-    ];
-    const toneText = {
-        red: "text-red-600",
-        amber: "text-amber-600",
-        slate: "text-muted-foreground",
-        green: "text-emerald-600",
-    };
-    return (
-        <div
-            className="rounded-3xl ink-panel p-3 shadow-2xl shadow-primary/20"
-            role="img"
-            aria-label="Invoice tracking dashboard showing broken promises and unpaid invoices"
-        >
-            <div className="rounded-2xl bg-card text-foreground overflow-hidden">
-                <div className="px-5 py-4 border-b border-border flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                        <img
-                            src="/scotive-mark.png"
-                            alt="Scotive invoice tracking mark"
-                            className="w-5 h-5 flex-shrink-0"
-                            width={20}
-                            height={20}
-                        />
-                        <span className="type-title text-sm truncate">Needs you today</span>
-                    </div>
-                    <span className="text-[11px] font-medium text-muted-foreground bg-muted rounded-full px-2.5 py-1 flex-shrink-0">
-                        Email + accounting
-                    </span>
-                </div>
-                <ul className="divide-y divide-border">
-                    {rows.map((row) => (
-                        <li key={row.name} className="px-5 py-3.5 flex items-center gap-3">
-                            <row.icon className={`w-4 h-4 flex-shrink-0 ${toneText[row.tone]}`} />
-                            <div className="min-w-0 flex-1">
-                                <div className="flex items-baseline gap-2">
-                                    <span className="text-sm font-semibold text-foreground truncate">{row.name}</span>
-                                    <span className="text-[11px] font-mono text-muted-foreground">{row.ref}</span>
-                                </div>
-                                <span className={`text-[11px] ${toneText[row.tone]}`}>{row.tag}</span>
-                            </div>
-                            <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                                <span className="font-mono text-sm tabular-nums font-medium text-foreground">{row.amount}</span>
-                                {row.action ? (
-                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border border-border bg-muted/50 text-muted-foreground">
-                                        {row.action}
-                                    </span>
-                                ) : null}
-                            </div>
-                        </li>
-                    ))}
-                </ul>
-                <div className="px-5 py-3 bg-muted/40 flex items-center justify-between text-[11px] text-muted-foreground">
-                    <span>Nothing sends without your approval</span>
-                    <span className="font-mono tabular-nums">$7,450 open</span>
-                </div>
-            </div>
-        </div>
-    );
-}
+const LANDING_FAQS = [
+    {
+        question: "How does the free trial work?",
+        answer:
+            `Every account starts with a 30-day free trial. ${PRICE_AFTER_TRIAL}`,
+    },
+    {
+        question: "What happens when a client replies?",
+        answer:
+            "The reminder schedule pauses. If they promised a date, Scotive waits until that date. If they asked a question, disputed the invoice, or said they already paid, it waits for you — it does not send another ‘just checking in’.",
+    },
+    {
+        question: "Do I still need QuickBooks, Xero, or FreshBooks?",
+        answer:
+            "Yes. Those stay the ledger. Scotive sits on top: it matches each open invoice to the Gmail or Outlook thread and runs the follow-up from your address.",
+    },
+    {
+        question: "Will it send firmer emails on its own?",
+        answer:
+            "Friendly reminders can go out on the schedule you approve. Anything firmer waits for a click.",
+    },
+];
 
 function StepConnectMock() {
     const rows = [
         { name: "Gmail", status: "Connected", on: true },
-        { name: "QuickBooks Online", status: "Optional", on: true },
-        { name: "Outlook · Zoho · FreshBooks", status: "Soon", on: false },
+        { name: "Outlook", status: "Connected", on: true },
+        { name: "QuickBooks Online", status: "Connected", on: true },
+        { name: "Xero", status: "Connected", on: true },
+        { name: "FreshBooks", status: "Connected", on: true },
     ];
     return (
         <div className="rounded-xl border border-border bg-background p-4 space-y-2.5">
@@ -157,12 +94,12 @@ function StepConnectMock() {
             </div>
             {rows.map((row) => (
                 <div key={row.name} className="rounded-lg border border-border bg-card px-3 py-2.5 flex items-center gap-2">
-                    <Link2 className={`w-3.5 h-3.5 flex-shrink-0 ${row.on ? "text-emerald-600" : "text-muted-foreground"}`} />
+                    <Link2 className={`w-3.5 h-3.5 flex-shrink-0 ${row.on ? "text-primary" : "text-muted-foreground"}`} />
                     <span className="text-xs font-medium truncate min-w-0 text-foreground">{row.name}</span>
                     <span
                         className={`ml-auto flex-shrink-0 text-[10px] font-semibold rounded-full px-2 py-0.5 ${
                             row.on
-                                ? "text-emerald-600 bg-emerald-50"
+                                ? "text-primary bg-primary/10"
                                 : "text-muted-foreground bg-muted"
                         }`}
                     >
@@ -174,26 +111,54 @@ function StepConnectMock() {
     );
 }
 
-function StepPickMock() {
+function StepTodayMock() {
     const items = [
-        { name: "Acme Studio — $2,400", on: true },
-        { name: "Meraki Co. — $1,850", on: true },
-        { name: "Old retainer — $600", on: false },
+        { name: "Acme Studio", action: "Past due" },
+        { name: "Meraki Co.", action: "Promise broken" },
+        { name: "Northwind", action: "Needs your reply" },
     ];
     return (
         <div className="rounded-xl border border-border bg-background p-4 space-y-2">
-            <div className="text-xs font-semibold mb-1 text-foreground">Which are still unpaid?</div>
+            <div className="text-xs font-semibold mb-1 text-foreground">Needs you today</div>
             {items.map((it) => (
-                <div key={it.name} className="flex items-center gap-2.5 rounded-lg border border-border bg-card px-3 py-2">
-                    <span className={`w-4 h-4 rounded flex items-center justify-center ${it.on ? "bg-accent text-white" : "border border-border"}`}>
-                        {it.on ? <Check className="w-3 h-3" /> : null}
+                <div key={it.name} className="flex items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2">
+                    <span className="text-xs text-foreground truncate">{it.name}</span>
+                    <span className="text-[10px] font-semibold text-primary bg-primary/10 rounded-full px-2 py-0.5 flex-shrink-0">
+                        {it.action}
                     </span>
-                    <span className="text-xs text-foreground">{it.name}</span>
                 </div>
             ))}
         </div>
     );
 }
+
+function StepReplyMock() {
+    return (
+        <div className="rounded-xl border border-border bg-background p-4 space-y-2.5">
+            <div className="text-xs font-semibold text-foreground">New reply · Northwind</div>
+            <div className="rounded-lg border border-border bg-card px-3 py-2.5 text-[11px] leading-relaxed text-muted-foreground">
+                Can you resend the missing PO line so AP can process FS-413?
+            </div>
+            <div className="flex items-center justify-between text-[10px]">
+                <span className="text-muted-foreground">Same invoice</span>
+                <span className="font-semibold text-primary bg-primary/10 rounded-full px-2 py-0.5">Needs your reply</span>
+            </div>
+        </div>
+    );
+}
+
+const CONVERSATION_STATUSES = [
+    { name: "Invoiced", meaning: "Sent. Waiting on the due date — no chase needed yet." },
+    { name: "Past due", meaning: "The due date passed. No promise, no payment." },
+    { name: "Promised", meaning: "They named a date. The chase holds until then." },
+    { name: "Promise broken", meaning: "That date passed. Needs you — not another generic reminder." },
+    { name: "Disputed", meaning: "A question, a PO, or a disagreement. Hold. You reply." },
+    { name: "Partially paid", meaning: "Some money in. A balance is still open." },
+    { name: "Says paid", meaning: "They said they paid. Not confirmed in your invoicing tool yet." },
+    { name: "Needs your reply", meaning: "They emailed. This invoice waits on you." },
+    { name: "Gone quiet", meaning: "No conversation in a long time. Still unpaid." },
+    { name: "Paid", meaning: "Confirmed. The chase stops. No more follow-ups." },
+];
 
 function StepApproveMock() {
     return (
@@ -221,345 +186,227 @@ function StepApproveMock() {
 
 function HowItWorksStep({ index, title, description, mock }) {
     return (
-        <div className="surface-card p-6 flex flex-col gap-5" data-testid={`landing-how-step-${index}`}>
-            <div className="flex items-center gap-3">
-                <span className="eyebrow mb-0">Step 0{index}</span>
-                <span className="h-px flex-1 bg-border" />
-            </div>
+        <article
+            className={`surface-card p-6 lg:p-7 ${
+                mock ? "grid lg:grid-cols-[minmax(0,1fr)_minmax(0,17rem)] gap-6 items-start" : ""
+            }`}
+            data-testid={`landing-how-step-${index}`}
+        >
             <div>
+                <div className="flex items-center gap-3 mb-3">
+                    <span className="inline-flex items-center justify-center min-w-[2rem] h-8 px-2 rounded-md bg-primary/10 text-primary text-xs font-semibold tabular-nums">
+                        {String(index).padStart(2, "0")}
+                    </span>
+                    <span className="h-px flex-1 bg-border" />
+                </div>
                 <h3 className="type-title text-xl">{title}</h3>
                 <p className="type-body mt-2 text-sm">{description}</p>
             </div>
-            <div className="mt-auto">{mock}</div>
-        </div>
+            {mock ? <div className="lg:mt-1">{mock}</div> : null}
+        </article>
     );
 }
 
 export default function LandingPage() {
     return (
-        <div className="min-h-screen bg-background text-foreground flex flex-col" data-testid="landing-page">
-            <header className="border-b border-border/70 bg-background/80 backdrop-blur-md sticky top-0 z-30">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
-                    <BrandMark size="md" />
-                    <div className="flex items-center gap-2 sm:gap-4">
-                        <nav className="hidden md:flex items-center gap-1 text-sm">
-                            <Link
-                                href="/invoice-chasing-software"
-                                className="px-3 py-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                            >
-                                Product
-                            </Link>
-                            <Link
-                                href="/guides"
-                                className="px-3 py-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                            >
-                                Guides
-                            </Link>
-                            <Link
-                                href="/integrations"
-                                className="px-3 py-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                            >
-                                Integrations
-                            </Link>
-                        </nav>
-                        <Link
-                            href="/login"
-                            className="text-sm font-medium px-3 py-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                            data-testid="landing-signin"
+        <MarketingShell testId="landing-page" activePath="/">
+                <section
+                    className="relative overflow-hidden border-b border-border bg-gradient-to-b from-primary/[0.07] to-background"
+                    data-testid="landing-hero"
+                >
+                    <div className="relative max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-16 md:pt-24 text-center">
+                        <p className="eyebrow mb-4">{TRIAL_LABEL}</p>
+                        <h1
+                            className="type-display text-4xl sm:text-5xl lg:text-[3.4rem] text-balance"
+                            data-testid="landing-headline"
                         >
-                            Log in
-                        </Link>
-                        <Link
-                            href="/register"
-                            className="inline-flex items-center gap-1.5 text-sm font-semibold bg-primary text-primary-foreground px-4 py-2 rounded-xl hover:bg-primary/90 transition-colors shadow-sm"
-                            data-testid="landing-signup"
+                            Get paid without the awkward follow-up.
+                        </h1>
+                        <p
+                            className="type-body mt-5 text-base md:text-lg max-w-2xl mx-auto"
+                            data-testid="landing-subhead"
                         >
-                            Start free
-                            <ArrowRight className="w-3.5 h-3.5" />
-                        </Link>
+                            Scotive fetches invoices from invoicing tools like QuickBooks, Xero, or FreshBooks.
+                            For each one, it reads the Gmail or Outlook thread, tracks where it stands, and
+                            drafts a personalized follow-up in their words.
+                        </p>
+                        <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3">
+                            <Link
+                                href="/register"
+                                className="btn-pill-primary text-base px-7 py-3"
+                                data-testid="landing-cta-primary"
+                            >
+                                {TRIAL_CTA}
+                                <ArrowRight className="w-4 h-4" />
+                            </Link>
+                            <Link
+                                href="/pricing"
+                                className="btn-pill-outline text-base px-7 py-3"
+                                data-testid="landing-cta-secondary"
+                            >
+                                View pricing
+                            </Link>
+                        </div>
                     </div>
-                </div>
-            </header>
-
-            <main className="flex-1">
-                <section className="relative overflow-hidden" data-testid="landing-hero">
-                    <div className="absolute inset-0 dot-grid pointer-events-none" aria-hidden />
-                    <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-14 md:pt-20 pb-16 md:pb-24 grid lg:grid-cols-2 gap-12 lg:gap-16 items-center">
-                        <div className="animate-fade-up">
-                            <div className="flex items-center gap-3 mb-6">
-                                <img
-                                    src="/scotive-mark.png"
-                                    alt="Scotive"
-                                    width={44}
-                                    height={44}
-                                    className="w-11 h-11"
-                                />
-                                <span className="type-display text-3xl sm:text-4xl">
-                                    Scotive
-                                </span>
-                            </div>
-                            <h1
-                                className="type-display text-4xl sm:text-5xl lg:text-[3.25rem]"
-                                data-testid="landing-headline"
-                            >
-                                Invoice chasing that lives where you work.
-                            </h1>
-                            <p className="type-body mt-5 text-base md:text-lg max-w-xl" data-testid="landing-subhead">
-                                Track unpaid invoices from email and accounting, read client replies for promises and disputes, and approve every follow-up before it sends.
-                            </p>
-
-                            <div className="mt-8 flex flex-col sm:flex-row items-start sm:items-center gap-4">
-                                <Link
-                                    href="/register"
-                                    className="group inline-flex items-center gap-2.5 rounded-xl bg-primary text-primary-foreground px-6 py-3 font-semibold text-base transition-all shadow-md hover:shadow-lg active:scale-[0.98] hover:bg-primary/90"
-                                    data-testid="landing-cta-primary"
-                                >
-                                    Start free
-                                    <ArrowRight className="w-4 h-4 opacity-70 transition-transform group-hover:translate-x-0.5" />
-                                </Link>
-                                <Link
-                                    href="/integrations"
-                                    className="text-sm font-medium text-muted-foreground hover:text-foreground"
-                                    data-testid="landing-cta-secondary"
-                                >
-                                    See integrations →
-                                </Link>
-                            </div>
-
-                            <div className="mt-8 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-muted-foreground">
-                                <span className="inline-flex items-center gap-1.5"><Lock className="w-3.5 h-3.5" /> Approval before every send</span>
-                                <span className="inline-flex items-center gap-1.5"><ShieldCheck className="w-3.5 h-3.5" /> Email + accounting</span>
-                                <span className="inline-flex items-center gap-1.5"><MailCheck className="w-3.5 h-3.5" /> Signed as you</span>
-                            </div>
-                            <p className="mt-4 text-xs text-muted-foreground max-w-md">
-                                Live today: Gmail &amp; QuickBooks Online. Next: Outlook, Zoho Books, FreshBooks.
-                            </p>
-                        </div>
-
-                        <div className="animate-fade-up lg:pl-4" style={{ animationDelay: "120ms" }} data-testid="landing-preview-card">
-                            <HeroMockup />
-                        </div>
+                    <div className="relative max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 pt-12 md:pt-16 pb-16 md:pb-24">
+                        <HeroProductPreview />
                     </div>
                 </section>
 
                 <section className="py-20 md:py-24 border-t border-border/70" data-testid="landing-pain">
                     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                         <div className="max-w-2xl mb-12">
-                            <SectionEyebrow>Sound familiar?</SectionEyebrow>
+                            <SectionEyebrow index={1}>The problem</SectionEyebrow>
                             <h2 className="type-title text-3xl md:text-4xl">
-                                You did the work. Now you&apos;re doing collections too.
-                            </h2>
-                        </div>
-                        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
-                            <PainCard
-                                quote="Did they ever pay that March invoice?"
-                                detail="Scrolling months of sent mail to reconstruct who owes what — every single week."
-                            />
-                            <PainCard
-                                quote="They said 'paying Friday' two Fridays ago"
-                                detail="Promises get buried in reply chains. Nobody tracks whether they were kept."
-                            />
-                            <PainCard
-                                quote="I hate writing the awkward nudge"
-                                detail="Chasing feels rude, so it gets postponed — and postponed invoices become forgotten ones."
-                            />
-                            <PainCard
-                                quote="I found an unpaid invoice from months ago"
-                                detail="No system means silent leaks. Every forgotten invoice is money you already earned."
-                            />
-                        </div>
-                    </div>
-                </section>
-
-                <section className="py-20 md:py-24 border-t border-border/70" data-testid="landing-how-it-works">
-                    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                        <div className="flex flex-wrap items-end justify-between gap-4 mb-12">
-                            <div className="max-w-2xl">
-                                <SectionEyebrow>Simple setup</SectionEyebrow>
-                                <h2 className="type-title text-3xl md:text-4xl">
-                                    Connect your tools. Scotive runs the chase.
-                                </h2>
-                            </div>
-                            <span className="pill">3 steps · about a minute</span>
-                        </div>
-                        <div className="grid md:grid-cols-3 gap-4">
-                            <HowItWorksStep
-                                index={1}
-                                title="Connect email &amp; accounting"
-                                description="Start with Gmail today — optionally add QuickBooks Online. Outlook, Zoho Books, and FreshBooks are on the roadmap."
-                                mock={<StepConnectMock />}
-                            />
-                            <HowItWorksStep
-                                index={2}
-                                title="Pick what's still unpaid"
-                                description="Scotive finds open invoices from email and your accounting feed. Confirm what's open — you know your work; we build the ledger."
-                                mock={<StepPickMock />}
-                            />
-                            <HowItWorksStep
-                                index={3}
-                                title="Approve the follow-ups"
-                                description="When something is late or a promise breaks, a draft appears with a state-derived tone. Edit, regenerate, or send — never auto-sent."
-                                mock={<StepApproveMock />}
-                            />
-                        </div>
-                    </div>
-                </section>
-
-                <section className="py-20 md:py-24 border-t border-border/70" data-testid="landing-integrations">
-                    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                        <div className="max-w-2xl mb-12">
-                            <SectionEyebrow>Not locked to one stack</SectionEyebrow>
-                            <h2 className="type-title text-3xl md:text-4xl">
-                                Built for the tools you already use.
+                                Your invoicing tools already send reminders, but they only know the date —
+                                and they are dumb.
                             </h2>
                             <p className="type-body mt-3">
-                                Invoice chasing across email and accounting — available connectors first, more without changing how you work.
+                                QuickBooks, Xero, and FreshBooks send dumb reminders on a schedule. They cannot
+                                see the Gmail or Outlook thread — what the client said — so they cannot tell
+                                where that invoice actually stands, or what to send next.
                             </p>
                         </div>
-                        <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-3">
-                            {[
-                                { name: "Gmail", status: "Available", on: true },
-                                { name: "QuickBooks Online", status: "Available", on: true, href: "/quickbooks-invoice-chasing" },
-                                { name: "Outlook", status: "Coming soon", on: false, href: "/outlook-invoice-chasing" },
-                                { name: "Zoho Books", status: "Coming soon", on: false, href: "/zoho-books-invoice-chasing" },
-                                { name: "FreshBooks", status: "Coming soon", on: false, href: "/freshbooks-invoice-chasing" },
-                            ].map((item) => {
-                                const card = (
-                                    <div className="surface-card p-4 h-full flex flex-col gap-2">
-                                        <div className="flex items-center justify-between gap-2">
-                                            <span className="type-title text-base">{item.name}</span>
-                                            {item.on ? (
-                                                <Check className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-                                            ) : (
-                                                <Clock className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-                                            )}
-                                        </div>
-                                        <span className="text-xs text-muted-foreground">{item.status}</span>
-                                    </div>
-                                );
-                                return item.href ? (
-                                    <Link key={item.name} href={item.href} className="block hover:opacity-95 transition-opacity">
-                                        {card}
-                                    </Link>
-                                ) : (
-                                    <div key={item.name}>{card}</div>
-                                );
-                            })}
+                        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+                            <GapCard
+                                tone="problem"
+                                icon={Calendar}
+                                title="A calendar is not context"
+                                detail="Day 7 overdue is not the same as “paying Friday,” a question on the PO, or “we already paid.” Date-based reminders treat all of those as the same stamp."
+                            />
+                            <GapCard
+                                tone="problem"
+                                icon={PenLine}
+                                title="You still have to write the next email"
+                                detail="The invoicing tool sends a canned note from its own domain. You are still in Gmail guessing the wording — and waiting weeks because it feels awkward."
+                            />
+                            <GapCard
+                                tone="problem"
+                                icon={Pause}
+                                title="They do not know when to stop"
+                                detail="If the client already replied, the next dated reminder still goes. If they promised a day, you still get “overdue.” You are the one who has to notice and pull it back."
+                            />
+                            <GapCard
+                                tone="problem"
+                                icon={ListChecks}
+                                title="Overdue is not a status"
+                                detail="Promised, disputed, says-paid, waiting on your reply — none of that lives in the reminder calendar. You rebuild it from sent mail, every week, across a pile of open invoices."
+                            />
                         </div>
-                        <div className="mt-6">
+                        <div className="mt-10 text-center" data-testid="landing-pain-bridge">
+                            <p className="type-title text-xl md:text-2xl">
+                                Don’t worry. Scotive is built for all four.
+                            </p>
                             <Link
-                                href="/integrations"
-                                className="text-sm font-medium text-primary hover:underline underline-offset-2"
+                                href="#the-solution"
+                                className="btn-pill-primary text-base px-6 py-3 mt-5 inline-flex"
+                                data-testid="landing-pain-bridge-cta"
                             >
-                                Full integrations roadmap →
+                                See how it solves them
+                                <ArrowRight className="w-4 h-4" />
                             </Link>
                         </div>
                     </div>
                 </section>
 
-                <section className="py-20 md:py-24 border-t border-border/70" data-testid="landing-features">
+                <section
+                    id="the-solution"
+                    className="py-20 md:py-24 border-t border-border/70 scroll-mt-24"
+                    data-testid="landing-solution"
+                >
                     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                         <div className="max-w-2xl mb-12">
-                            <SectionEyebrow>What you get</SectionEyebrow>
+                            <SectionEyebrow index={2}>The solution</SectionEyebrow>
                             <h2 className="type-title text-3xl md:text-4xl">
-                                A collections brain for email + accounting.
+                                Same four gaps. Closed from the thread on that invoice.
                             </h2>
                             <p className="type-body mt-3">
-                                Scotive surfaces what needs you today — past due, broken promises, replies — and drafts the next move.
+                                Scotive fetches the invoice, reads the Gmail or Outlook conversation, tracks
+                                where it stands, and drafts what to send next — in their words.
                             </p>
                         </div>
-                        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-                            <FeatureCard
-                                icon={Inbox}
-                                replaces="inbox archaeology"
-                                title="Automatic invoice tracking"
-                                description="Detect invoices from email and optional accounting feeds. Track amounts, clients, and due dates in one ledger."
-                                chips={["Email watching", "Accounting import", "Ledger by client"]}
+                        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+                            <GapCard
+                                tone="solution"
+                                icon={Calendar}
+                                title="The thread is the context"
+                                detail="It reads that invoice’s Gmail or Outlook conversation. Promised Friday, a PO question, and “we already paid” are different states — not the same overdue stamp."
                             />
-                            <FeatureCard
-                                icon={MessageSquareQuote}
-                                replaces="memory & sticky notes"
-                                title="Reply & promise intelligence"
-                                description="Reads client replies for promises, disputes, and payment claims — and flags when a promise date slips."
-                                chips={["Promise dates", "Broken-promise alerts", "Dispute rounds"]}
+                            <GapCard
+                                tone="solution"
+                                icon={PenLine}
+                                title="The next email is already drafted"
+                                detail="The follow-up is written from what that client actually said, in their language. You are not guessing “just checking in.”"
                             />
-                            <FeatureCard
-                                icon={Send}
-                                replaces="awkward nudge writing"
-                                title="State-derived follow-ups"
-                                description="Drafts match the invoice state — Friendly reminder, Firm follow-up, Final notice, or Clarifying reply — signed as you."
-                                chips={["Tone from ledger state", "Same-thread replies", "One-tap approve"]}
+                            <GapCard
+                                tone="solution"
+                                icon={Pause}
+                                title="It knows when to hold"
+                                detail="If they replied or named a pay date, the chase waits. No second reminder on an open conversation. Firmer emails still need a click."
                             />
-                            <FeatureCard
-                                icon={Wallet}
-                                replaces="manual reconciliation"
-                                title="Payment matching"
-                                description="Receipts and “says paid” claims land on the right invoice. Confirm received, or mark not yet — partials tracked. QBO paid sync when connected."
-                                chips={["Receipt matching", "Partial payments", "Paid sync"]}
-                            />
-                            <FeatureCard
-                                icon={Eye}
-                                replaces="constant checking-in"
-                                title="Needs you today"
-                                description="One prioritized list: past due, broken promises, replies, and confirmations. Optional daily digest."
-                                chips={["Priority-first", "Daily digest", "Review queue"]}
-                            />
-                            <FeatureCard
-                                icon={ShieldCheck}
-                                replaces="trust-me automation"
-                                title="You stay in control"
-                                description="Nothing is ever auto-sent. OAuth connectors only. Disconnect anytime. Content isn’t used to train Scotive’s models."
-                                chips={["Approval-only", "OAuth 2.0", "Delete account anytime"]}
+                            <GapCard
+                                tone="solution"
+                                icon={ListChecks}
+                                title="Status from the conversation"
+                                detail="Each invoice has a state from invoiced to paid — promised, disputed, says-paid, waiting on you — so you are not rebuilding it from sent mail."
                             />
                         </div>
                     </div>
                 </section>
 
-                <section className="py-20 md:py-24 border-t border-border/70" data-testid="landing-seo-links">
+                <section id="how-it-works" className="py-20 md:py-24 border-t border-border/70 scroll-mt-24" data-testid="landing-how-it-works">
                     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                        <div className="max-w-2xl mb-10">
-                            <SectionEyebrow>Explore</SectionEyebrow>
+                        <div className="max-w-2xl mb-12">
+                            <SectionEyebrow index={3}>How it works</SectionEyebrow>
                             <h2 className="type-title text-3xl md:text-4xl">
-                                Guides for getting paid faster.
+                                Sign up. Connect. Then every invoice has a state — and a next email.
                             </h2>
+                            <p className="type-body mt-3">
+                                Scotive pulls invoices from your invoicing tools, keeps the Gmail or Outlook
+                                thread on each one in sync, and runs the chase from that conversation.
+                            </p>
                         </div>
-                        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                            {[
-                                {
-                                    href: "/invoice-chasing-software",
-                                    icon: BookOpen,
-                                    title: "Invoice chasing software",
-                                    detail: "How Scotive compares to heavy AR suites.",
-                                },
-                                {
-                                    href: "/guides/invoice-follow-up-email-templates",
-                                    icon: Send,
-                                    title: "Follow-up email templates",
-                                    detail: "Copy-paste reminders that don't sound awkward.",
-                                },
-                                {
-                                    href: "/guides/polite-reminder-for-unpaid-invoice",
-                                    icon: BellRing,
-                                    title: "Unpaid invoice reminders",
-                                    detail: "When to nudge and what to say.",
-                                },
-                                {
-                                    href: "/guides",
-                                    icon: AlertTriangle,
-                                    title: "All guides",
-                                    detail: "Polite follow-ups, broken promises, and more.",
-                                },
-                            ].map((item) => (
-                                <Link
-                                    key={item.href}
-                                    href={item.href}
-                                    className="surface-card p-5 hover:shadow-md transition-shadow block"
-                                >
-                                    <item.icon className="w-5 h-5 text-accent mb-3" strokeWidth={2} />
-                                    <h3 className="type-title text-base">{item.title}</h3>
-                                    <p className="type-body mt-1.5 text-sm">{item.detail}</p>
-                                </Link>
-                            ))}
+                        <div className="space-y-4">
+                            <HowItWorksStep
+                                index={1}
+                                title="Connect the inbox and the invoicing tool"
+                                description="After you sign up, connect Gmail or Outlook — or both — where clients actually talk. Then connect QuickBooks, Xero, or FreshBooks. Scotive pulls the invoices, then the conversations that belong to them. New mail keeps syncing, so a reply tomorrow is on the same invoice."
+                                mock={<StepConnectMock />}
+                            />
+                            <HowItWorksStep
+                                index={2}
+                                title="See where each invoice stands"
+                                description="From what the client said — a promise, a question, “we already paid,” silence — Scotive sets the state. Not a due-date stamp. Ten states, from invoiced to paid. What needs you today sits at the top: past due, promise broken, says paid, waiting on you, gone quiet."
+                                mock={<StepTodayMock />}
+                            />
+                            <HowItWorksStep
+                                index={3}
+                                title="The next email, already written"
+                                description="When a follow-up is due, Scotive drafts it from that client’s own messages — their language, their promise, their question. You review it. One click sends from your address. Firmer emails still wait for you."
+                                mock={<StepApproveMock />}
+                            />
+                            <HowItWorksStep
+                                index={4}
+                                title="They reply. The same invoice moves."
+                                description="A reply lands on that invoice, not in a separate pile. Status updates — promised, disputed, says paid, needs your reply. The chase holds while they are talking. You see the thread and the state together."
+                                mock={<StepReplyMock />}
+                            />
+                        </div>
+
+                        <div className="mt-14" data-testid="landing-how-statuses">
+                            <h3 className="type-title text-2xl md:text-3xl">Statuses we track — and what they mean</h3>
+                            <p className="type-body mt-2 max-w-2xl">
+                                These come from the Gmail or Outlook conversation on that invoice, plus the
+                                due date and paid status from your invoicing tool.
+                            </p>
+                            <div className="mt-8 grid sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                                {CONVERSATION_STATUSES.map((item) => (
+                                    <div key={item.name} className="surface-card p-4">
+                                        <div className="text-sm font-semibold text-foreground">{item.name}</div>
+                                        <p className="type-body mt-1.5 text-xs">{item.meaning}</p>
+                                    </div>
+                                ))}
+                            </div>
                         </div>
                     </div>
                 </section>
@@ -567,24 +414,21 @@ export default function LandingPage() {
                 <section className="py-20 md:py-24 border-t border-border/70" data-testid="landing-who">
                     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                         <div className="max-w-2xl mb-10">
-                            <SectionEyebrow>Who it&apos;s for</SectionEyebrow>
+                            <SectionEyebrow index={4}>Who it’s for</SectionEyebrow>
                             <h2 className="type-title text-3xl md:text-4xl">
-                                Anyone who bills clients and follows up on payment.
+                                Built for agencies and consultants who already send invoices.
                             </h2>
                             <p className="type-body mt-3">
-                                Scotive isn&apos;t locked to one job title — if you send invoices and chase unpaid ones, it fits.
+                                If you have a pile of open invoices and still follow up from Gmail or Outlook, Scotive is the layer on top of the books you already keep.
                             </p>
                         </div>
                         <div className="flex flex-wrap gap-2">
                             {[
-                                "Freelancers",
-                                "Agencies",
-                                "Consultants",
-                                "Studios & creative teams",
-                                "Professional services",
-                                "Small businesses",
-                                "Founders & ops",
-                                "Finance & AR owners",
+                                "Agency owner",
+                                "Managing director",
+                                "Head of operations",
+                                "Studio manager",
+                                "Principal consultant",
                             ].map((label) => (
                                 <span
                                     key={label}
@@ -597,38 +441,59 @@ export default function LandingPage() {
                     </div>
                 </section>
 
-                <section className="py-20 md:py-24 border-t border-border/70" data-testid="landing-outcomes">
+                <section className="py-20 md:py-24 border-t border-border/70" data-testid="landing-seo-links">
                     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                        <div className="max-w-2xl mb-12">
-                            <SectionEyebrow>Built for people who bill and chase</SectionEyebrow>
+                        <div className="max-w-2xl mb-10">
+                            <SectionEyebrow index={5}>Guides</SectionEyebrow>
                             <h2 className="type-title text-3xl md:text-4xl">
-                                Stop leaking revenue to forgotten invoices.
+                                Guides
                             </h2>
                         </div>
-                        <div className="grid md:grid-cols-3 gap-4">
-                            <OutcomeCard
-                                quote="I used to spend Sunday nights going through sent mail to figure out who to nudge. Now it's a short approval pass with coffee."
-                                metric="Sundays back"
-                                name="Freelance designer"
-                                role="Independent · 12 active clients"
-                            />
-                            <OutcomeCard
-                                quote="A client promised payment three times. Scotive caught every date and drafted a firmer follow-up. Paid in full the next week."
-                                metric="0 awkward emails"
-                                name="Agency ops lead"
-                                role="12-person agency"
-                            />
-                            <OutcomeCard
-                                quote="Seed curation found an invoice I'd completely forgotten. That one recovery covered a year of any tool I could buy."
-                                metric="Recovered cash"
-                                name="Services founder"
-                                role="B2B professional services"
-                            />
+                        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                            {[
+                                {
+                                    href: "/past-due-invoice-reminder",
+                                    icon: BellRing,
+                                    title: "Past due invoice reminder",
+                                    detail: "I'll pay Friday / promised and didn't / says paid / partial / after they replied.",
+                                },
+                                {
+                                    href: "/invoice-reminder-software",
+                                    icon: BookOpen,
+                                    title: "Invoice reminder software",
+                                    detail: "You already have QBO/Xero. Approved cadence, pause on reply/promise, pay link, from Gmail/Outlook.",
+                                },
+                                {
+                                    href: "/payment-reminder-email-template",
+                                    icon: Send,
+                                    title: "Payment reminder email template",
+                                    detail: "Softer / pre-due. Invoice #, amount, due date, and a payment link.",
+                                },
+                                {
+                                    href: "/how-to-chase-outstanding-invoices",
+                                    icon: AlertTriangle,
+                                    title: "How to chase outstanding invoices",
+                                    detail: "The buyer who already has QBO/Xero and is still in Gmail writing just checking in.",
+                                },
+                            ].map((item) => (
+                                <Link
+                                    key={item.href}
+                                    href={item.href}
+                                    className="surface-card p-5 hover:shadow-md transition-shadow block"
+                                >
+                                    <item.icon className="w-5 h-5 text-primary mb-3" strokeWidth={2} />
+                                    <h3 className="type-title text-base">{item.title}</h3>
+                                    <p className="type-body mt-1.5 text-sm">{item.detail}</p>
+                                </Link>
+                            ))}
                         </div>
                     </div>
                 </section>
 
-                <FaqSection items={HOME_FAQS} />
+                <FaqSection
+                    items={LANDING_FAQS}
+                    kicker={<SectionEyebrow index={6}>FAQ</SectionEyebrow>}
+                />
 
                 <section className="py-20 md:py-28" data-testid="landing-final-cta">
                     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -639,77 +504,28 @@ export default function LandingPage() {
                                     <img src="/scotive-icon.png" alt="Scotive" width={56} height={56} className="w-14 h-14 rounded-2xl" />
                                 </div>
                                 <h2 className="type-display text-3xl md:text-5xl">
-                                    Get paid without the awkward chase.
+                                    Get paid without the awkward follow-up.
                                 </h2>
                                 <p className="type-body mt-4 text-base md:text-lg opacity-80 max-w-xl mx-auto">
-                                    Connect email today. Add accounting when you&apos;re ready. Approve your first follow-up before your coffee gets cold.
+                                    It fetches invoices from invoicing tools like QuickBooks, Xero, or FreshBooks. For each one, it reads the Gmail or Outlook thread, tracks where it stands, and drafts a personalized follow-up in their words. {TRIAL_LABEL}. {PRICE_AFTER_TRIAL}
                                 </p>
                                 <div className="mt-9 flex flex-col sm:flex-row items-center justify-center gap-4">
                                     <Link
                                         href="/register"
-                                        className="inline-flex items-center gap-2.5 rounded-xl bg-background text-foreground px-7 py-3.5 font-semibold text-base hover:opacity-95 transition-opacity shadow-lg"
+                                        className="btn-pill-primary bg-background text-foreground hover:bg-background/90 px-7 py-3.5 text-base"
                                         data-testid="landing-cta-final"
                                     >
-                                        Start free
+                                        {TRIAL_CTA}
                                         <ArrowRight className="w-4 h-4" />
                                     </Link>
-                                </div>
-                                <div className="mt-6 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-xs opacity-70">
-                                    <span className="inline-flex items-center gap-1.5"><Check className="w-3.5 h-3.5" /> Free to start</span>
-                                    <span className="inline-flex items-center gap-1.5"><Check className="w-3.5 h-3.5" /> No card required</span>
-                                    <span className="inline-flex items-center gap-1.5"><Check className="w-3.5 h-3.5" /> Nothing auto-sent, ever</span>
+                                    <Link href="/pricing" className="btn-pill-outline border-background/30 text-background hover:bg-background/10 px-7 py-3.5 text-base">
+                                        View pricing
+                                    </Link>
                                 </div>
                             </div>
                         </div>
                     </div>
                 </section>
-            </main>
-
-            <footer className="border-t border-border mt-auto">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 grid gap-10 md:grid-cols-4">
-                    <div className="md:col-span-2">
-                        <BrandMark />
-                        <p className="type-body mt-3 text-sm max-w-xs">
-                            Invoice chasing for freelancers, agencies, and any team that bills clients — email + accounting, human-approved follow-ups.
-                        </p>
-                    </div>
-                    <div>
-                        <div className="type-title text-sm mb-3">Product</div>
-                        <ul className="space-y-2 text-sm text-muted-foreground">
-                            <li><Link href="/invoice-chasing-software" className="hover:text-foreground">Invoice chasing software</Link></li>
-                            <li><Link href="/chase-unpaid-invoices" className="hover:text-foreground">Unpaid invoices</Link></li>
-                            <li><Link href="/accounts-receivable-automation" className="hover:text-foreground">AR automation</Link></li>
-                            <li><Link href="/guides" className="hover:text-foreground">Guides</Link></li>
-                            <li><Link href="/integrations" className="hover:text-foreground">Integrations</Link></li>
-                            <li><Link href="/register" className="hover:text-foreground">Get started</Link></li>
-                        </ul>
-                    </div>
-                    <div>
-                        <div className="type-title text-sm mb-3">Legal</div>
-                        <ul className="space-y-2 text-sm text-muted-foreground">
-                            <li><Link href="/contact" className="hover:text-foreground">Contact</Link></li>
-                            <li><Link href="/terms" className="hover:text-foreground">Terms of Service</Link></li>
-                            <li><Link href="/privacy" className="hover:text-foreground">Privacy Policy</Link></li>
-                            <li>
-                                <a href="mailto:contact@scotive.com" className="hover:text-foreground">
-                                    contact@scotive.com
-                                </a>
-                            </li>
-                        </ul>
-                    </div>
-                </div>
-                <div className="border-t border-border">
-                    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5 flex flex-wrap justify-between items-center gap-3 text-xs text-muted-foreground">
-                        <span>© {new Date().getFullYear()} Scotive. All rights reserved.</span>
-                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                            <Link href="/contact" className="hover:text-foreground">Contact</Link>
-                            <Link href="/terms" className="hover:text-foreground">Terms</Link>
-                            <Link href="/privacy" className="hover:text-foreground">Privacy</Link>
-                            <span>Get paid faster · You approve every send</span>
-                        </div>
-                    </div>
-                </div>
-            </footer>
-        </div>
+        </MarketingShell>
     );
 }

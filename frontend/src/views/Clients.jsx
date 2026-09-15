@@ -41,10 +41,10 @@ export default function ClientsPage() {
                     <table className="w-full">
                         <thead>
                             <tr className="border-b border-border bg-muted/40 text-left">
-                                <th className="px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Client</th>
-                                <th className="px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider text-right">Open balance</th>
-                                <th className="px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider text-right">Invoices</th>
-                                <th className="px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Last activity</th>
+                                <th className="px-4 py-3 type-label text-muted-foreground">Client</th>
+                                <th className="px-4 py-3 type-label text-muted-foreground text-right">Open balance</th>
+                                <th className="px-4 py-3 type-label text-muted-foreground text-right">Invoices</th>
+                                <th className="px-4 py-3 type-label text-muted-foreground">Last activity</th>
                             </tr>
                         </thead>
                         <tbody>

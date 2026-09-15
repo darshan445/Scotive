@@ -1,40 +1,9 @@
-import Link from "next/link";
-import { BrandMark } from "@/components/BrandMark";
-import { AppFooter } from "@/components/AppFooter";
+import { MarketingShell } from "@/components/MarketingShell";
 
 export function LegalShell({ title, updated, children, testId }) {
     return (
-        <div className="min-h-screen bg-background text-foreground flex flex-col" data-testid={testId}>
-            <header className="border-b border-border/70 bg-background/80 backdrop-blur-md sticky top-0 z-30">
-                <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-                    <BrandMark />
-                    <nav className="flex items-center gap-4 text-sm">
-                        <Link href="/" className="text-muted-foreground hover:text-foreground transition-colors">
-                            Home
-                        </Link>
-                        <Link href="/integrations" className="text-muted-foreground hover:text-foreground transition-colors hidden sm:inline">
-                            Integrations
-                        </Link>
-                        <Link href="/contact" className="text-muted-foreground hover:text-foreground transition-colors hidden sm:inline">
-                            Contact
-                        </Link>
-                        <Link href="/terms" className="text-muted-foreground hover:text-foreground transition-colors">
-                            Terms
-                        </Link>
-                        <Link href="/privacy" className="text-muted-foreground hover:text-foreground transition-colors">
-                            Privacy
-                        </Link>
-                        <Link
-                            href="/login"
-                            className="font-medium text-muted-foreground hover:text-foreground transition-colors"
-                        >
-                            Log in
-                        </Link>
-                    </nav>
-                </div>
-            </header>
-
-            <main className="flex-1 w-full max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-10 md:py-14">
+        <MarketingShell testId={testId} activePath="">
+            <div className="w-full max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-10 md:py-14">
                 <div className="eyebrow mb-3">Legal</div>
                 <h1 className="type-display text-3xl md:text-4xl">
                     {title}
@@ -45,10 +14,8 @@ export function LegalShell({ title, updated, children, testId }) {
                 <article className="mt-10 legal-prose space-y-8 text-[15px] leading-relaxed text-foreground/90">
                     {children}
                 </article>
-            </main>
-
-            <AppFooter />
-        </div>
+            </div>
+        </MarketingShell>
     );
 }
 

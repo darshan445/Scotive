@@ -4,7 +4,7 @@ import { absoluteUrl } from "@/lib/seo";
 export const metadata = {
     title: "Terms of Service",
     description:
-        "Terms of Service for using Scotive invoice chasing software, including email and optional accounting integrations.",
+        "Terms of Service for Scotive. Not a new books app. You keep QBO/Xero. We run the chase.",
     alternates: { canonical: absoluteUrl("/terms") },
     openGraph: { url: absoluteUrl("/terms") },
 };

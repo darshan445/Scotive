@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Scotive">
   <title>Scotive mark</title>
-  <g fill="#114B3F">
+  <g fill="#1E4ED8">
     <rect x="112" y="292" width="96" height="96" rx="30"/>
     <rect x="208" y="208" width="96" height="96" rx="30"/>
     <rect x="304" y="124" width="96" height="96" rx="30"/>

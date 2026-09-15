@@ -1,21 +1,14 @@
 import {
-    Bricolage_Grotesque,
     Inter,
     JetBrains_Mono,
 } from "next/font/google";
 import "./globals.css";
 import { Providers } from "@/components/Providers";
-import { SITE_URL } from "@/lib/seo";
+import { DEFAULT_DESCRIPTION, DEFAULT_TITLE, PRIMARY_KEYWORDS, SITE_URL } from "@/lib/seo";
 
 const inter = Inter({
     subsets: ["latin"],
     variable: "--font-sans",
-    display: "swap",
-});
-
-const bricolage = Bricolage_Grotesque({
-    subsets: ["latin"],
-    variable: "--font-heading",
     display: "swap",
 });
 
@@ -28,24 +21,12 @@ const jetbrains = JetBrains_Mono({
 export const metadata = {
     metadataBase: new URL(SITE_URL),
     title: {
-        default: "Scotive — Invoice Chasing Software to Get Paid Faster",
+        default: DEFAULT_TITLE,
         template: "%s · Scotive",
     },
-    description:
-        "Scotive is invoice chasing software that tracks unpaid invoices from your email and accounting tools — reads client replies for promises and disputes, and drafts follow-ups you approve before send. Gmail and QuickBooks Online today; Outlook, Zoho Books, and FreshBooks next.",
+    description: DEFAULT_DESCRIPTION,
     applicationName: "Scotive",
-    keywords: [
-        "invoice chasing software",
-        "chase unpaid invoices",
-        "accounts receivable automation",
-        "overdue invoice tracker",
-        "payment follow-up software",
-        "invoice tracking tool",
-        "QuickBooks invoice chasing",
-        "Gmail invoice tracker",
-        "Outlook invoice chasing",
-        "AR collections",
-    ],
+    keywords: PRIMARY_KEYWORDS,
     authors: [{ name: "Scotive" }],
     creator: "Scotive",
     publisher: "Scotive",
@@ -58,9 +39,8 @@ export const metadata = {
         locale: "en_US",
         url: SITE_URL,
         siteName: "Scotive",
-        title: "Scotive — Invoice Chasing Software to Get Paid Faster",
-        description:
-            "Track unpaid invoices from email and accounting. Draft follow-ups you approve. Gmail + QuickBooks Online now; Outlook, Zoho, FreshBooks next.",
+        title: DEFAULT_TITLE,
+        description: DEFAULT_DESCRIPTION,
         images: [
             {
                 url: "/logo512.png",
@@ -72,9 +52,8 @@ export const metadata = {
     },
     twitter: {
         card: "summary",
-        title: "Scotive — Invoice Chasing Software to Get Paid Faster",
-        description:
-            "Chase unpaid invoices with human-approved drafts. Email + accounting integrations.",
+        title: DEFAULT_TITLE,
+        description: DEFAULT_DESCRIPTION,
         images: ["/logo512.png"],
     },
     robots: {
@@ -99,7 +78,7 @@ export const metadata = {
 };
 
 export const viewport = {
-    themeColor: "#114B3F",
+    themeColor: "#1E4ED8",
     width: "device-width",
     initialScale: 1,
     maximumScale: 5,
@@ -109,7 +88,7 @@ export default function RootLayout({ children, modal }) {
     return (
         <html
             lang="en"
-            className={`${inter.variable} ${bricolage.variable} ${jetbrains.variable}`}
+            className={`${inter.variable} ${jetbrains.variable}`}
         >
             <body className="min-h-screen bg-background text-foreground antialiased font-sans">
                 <Providers>

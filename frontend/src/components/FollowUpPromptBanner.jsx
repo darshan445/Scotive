@@ -79,7 +79,7 @@ export function FollowUpPromptBanner({ prompt, onDismiss, onChanged, onReview })
                     type="button"
                     onClick={skip}
                     disabled={busy}
-                    className="inline-flex items-center gap-1 text-[11px] font-mono uppercase tracking-widest text-violet-800 hover:text-violet-950 flex-shrink-0"
+                    className="inline-flex items-center gap-1 text-sm font-medium text-violet-800 hover:text-violet-950 flex-shrink-0"
                     data-testid="followup-prompt-dismiss">
                     <X className="w-3.5 h-3.5" />
                 </button>

@@ -141,7 +141,7 @@ export default function SettingsPage() {
                             </AlertDialogDescription>
                         </AlertDialogHeader>
                         <div className="space-y-2">
-                            <Label htmlFor="confirm-email" className="text-xs font-mono uppercase tracking-widest text-muted-foreground">
+                            <Label htmlFor="confirm-email">
                                 Type your email to confirm
                             </Label>
                             <Input
@@ -237,9 +237,9 @@ export default function SettingsPage() {
 function GmailAccountSection({ status }) {
     return (
         <section data-testid="settings-gmail-account">
-            <h2 className="type-title text-xl">Gmail account</h2>
+            <h2 className="type-title text-xl">Email mailbox</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-                Connect read + send access so Scotive can scan sent invoices and draft chasers from your inbox.
+                Connect Gmail or Outlook so Scotive can scan sent invoices and draft chasers from your inbox.
             </p>
             <Separator className="my-4" />
             <ConnectionPanel status={status} />
@@ -252,7 +252,7 @@ function QboAccountSection({ status }) {
         <section data-testid="settings-qbo-account">
             <h2 className="type-title text-xl">QuickBooks Online</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-                Optional — connect to import open invoices. Status and chasing stay in Scotive; Gmail still reads client replies.
+                Optional — connect to import open invoices. Status and chasing stay in Scotive; your mailbox still reads client replies.
             </p>
             <Separator className="my-4" />
             <QboConnectionPanel status={status} />
@@ -292,7 +292,7 @@ function ChasingTimingSection({ settings, saving, onSave }) {
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                     {ESCALATION_LABELS.map((label, i) => (
                         <div key={label} className="space-y-1.5">
-                            <div className="text-[11px] font-mono uppercase tracking-widest text-muted-foreground">
+                            <div className="type-label text-muted-foreground">
                                 {label}
                             </div>
                             <div className="flex items-baseline gap-1.5">
@@ -567,7 +567,7 @@ function DailyDigestSection({ settings, saving, onSave, timezones }) {
                 testid="save-digest"
             />
             <div className="mt-5 pt-4 border-t border-border flex items-center justify-end gap-3">
-                <span className="text-[11px] font-mono uppercase tracking-widest text-muted-foreground">
+                <span className="type-label text-muted-foreground">
                     Preview
                 </span>
                 <Button variant="outline" size="sm" onClick={sendNow} disabled={sending} data-testid="digest-send-now">
@@ -666,7 +666,7 @@ function SectionFooter({ dirty, saving, onSave, testid }) {
     if (!dirty) return null;
     return (
         <div className="mt-5 pt-4 border-t border-border flex items-center justify-end gap-3">
-            <span className="text-[11px] font-mono uppercase tracking-widest text-muted-foreground">
+            <span className="type-label text-muted-foreground">
                 Unsaved changes
             </span>
             <Button onClick={onSave} disabled={saving} data-testid={testid}>

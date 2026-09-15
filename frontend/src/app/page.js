@@ -3,21 +3,30 @@ import { GuestRoute } from "@/components/ProtectedRoute";
 import { JsonLd } from "@/components/JsonLd";
 import { DEFAULT_DESCRIPTION, DEFAULT_TITLE, SITE_URL } from "@/lib/seo";
 
+const TITLE = DEFAULT_TITLE;
+const DESCRIPTION = DEFAULT_DESCRIPTION;
+
 export const metadata = {
     title: {
-        absolute: DEFAULT_TITLE,
+        absolute: TITLE,
     },
-    description: DEFAULT_DESCRIPTION,
+    description: DESCRIPTION,
+    keywords: [
+        "invoice reminder software",
+        "past due invoice reminder",
+        "payment reminder software",
+        "quickbooks invoice reminders",
+        "xero invoice reminders",
+    ],
     alternates: { canonical: SITE_URL },
     openGraph: {
         url: SITE_URL,
-        title: DEFAULT_TITLE,
-        description: DEFAULT_DESCRIPTION,
+        title: TITLE,
+        description: DESCRIPTION,
     },
     twitter: {
-        title: DEFAULT_TITLE,
-        description:
-            "Invoice chasing software for email + accounting. Approve every follow-up before it sends.",
+        title: TITLE,
+        description: DESCRIPTION,
     },
 };
 

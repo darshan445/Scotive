@@ -291,15 +291,15 @@ export function LedgerCard({ ledger, onChanged, variant = "open" }) {
                     <table className="w-full">
                         <thead>
                             <tr className="border-b border-border bg-muted/40 text-left">
-                                <th className="px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Client</th>
-                                <th className="px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Invoice</th>
-                                <th className="px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider text-right">Amount</th>
-                                <th className="px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Status</th>
-                                <th className="px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                                <th className="px-4 py-3 type-label text-muted-foreground">Client</th>
+                                <th className="px-4 py-3 type-label text-muted-foreground">Invoice</th>
+                                <th className="px-4 py-3 type-label text-muted-foreground text-right">Amount</th>
+                                <th className="px-4 py-3 type-label text-muted-foreground">Status</th>
+                                <th className="px-4 py-3 type-label text-muted-foreground">
                                     {isHistory ? "Closed" : isPaused ? "Status" : "Due / Promise"}
                                 </th>
                                 {isPaused ? (
-                                    <th className="px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                                    <th className="px-4 py-3 type-label text-muted-foreground">
                                         <span className="sr-only">Resume</span>
                                     </th>
                                 ) : null}

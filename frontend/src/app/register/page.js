@@ -5,7 +5,7 @@ import { absoluteUrl } from "@/lib/seo";
 export const metadata = {
     title: "Create account",
     description:
-        "Start free with Scotive — invoice chasing software for email and accounting. Approve every follow-up before it sends.",
+        "Create a Scotive account. Start a 30-day free trial — no card required.",
     alternates: { canonical: absoluteUrl("/register") },
     openGraph: { url: absoluteUrl("/register") },
 };

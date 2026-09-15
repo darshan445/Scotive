@@ -1,91 +1,104 @@
 import Link from "next/link";
-import { Check, Clock } from "lucide-react";
-import { MarketingCta, MarketingHero, MarketingShell } from "@/components/MarketingShell";
-import { pageMetadata } from "@/lib/seo";
+import { Inbox, MessageSquareQuote, PenLine, Receipt } from "lucide-react";
+import {
+    MarketingCta,
+    MarketingHero,
+    MarketingHeroCtas,
+    MarketingShell,
+} from "@/components/MarketingShell";
+import {
+    ACCOUNTING_INTEGRATIONS,
+    EMAIL_INTEGRATIONS,
+    PRICE_AFTER_TRIAL,
+} from "@/lib/site";
+import { absoluteUrl } from "@/lib/seo";
 
-export const metadata = pageMetadata({
-    title: "Integrations — Email & Accounting for Invoice Chasing | Scotive",
-    description:
-        "Scotive integrations: Gmail and QuickBooks Online available now. Outlook, Zoho Books, and FreshBooks on the roadmap. Invoice chasing that meets you in the tools you already use.",
-    path: "/integrations",
-    keywords: [
-        "Gmail QuickBooks integration",
-        "Outlook invoice chasing",
-        "Zoho Books collections",
-        "FreshBooks payment follow up",
-    ],
-});
+const PATH = "/integrations";
+const TITLE = "Integrations · Scotive";
+const DESCRIPTION =
+    "Connect Gmail or Outlook and QuickBooks, Xero, or FreshBooks. Scotive matches each open invoice to the thread, tracks the state from invoiced to paid, and drafts the next follow-up in that client’s own language.";
 
-const EMAIL = [
+export const metadata = {
+    title: { absolute: TITLE },
+    description: DESCRIPTION,
+    keywords: [],
+    alternates: { canonical: absoluteUrl(PATH) },
+    robots: { index: true, follow: true },
+    openGraph: {
+        url: absoluteUrl(PATH),
+        title: TITLE,
+        description: DESCRIPTION,
+        type: "website",
+        siteName: "Scotive",
+    },
+    twitter: {
+        card: "summary_large_image",
+        title: TITLE,
+        description: DESCRIPTION,
+    },
+};
+
+const CONNECT_JOBS = [
     {
-        name: "Gmail",
-        status: "Available",
-        detail: "Detect invoices in sent mail, read replies, send approved follow-ups from your address.",
-        available: true,
+        icon: Receipt,
+        title: "Open invoices, pulled in",
+        body: "Amount, due date, and paid status from QuickBooks, Xero, or FreshBooks — the invoicing tools you already use.",
     },
     {
-        name: "Outlook / Microsoft 365",
-        status: "Coming soon",
-        detail: "Same conversation-aware chasing for teams on Outlook — on the roadmap.",
-        available: false,
-        href: "/outlook-invoice-chasing",
+        icon: Inbox,
+        title: "The thread, matched",
+        body: "Each invoice is tied to the Gmail or Outlook conversation. Follow-ups send from your address, on that thread.",
+    },
+    {
+        icon: MessageSquareQuote,
+        title: "States from the conversation",
+        body: "From invoiced to paid — unpaid, overdue, promised, replied, disputed, says-paid. The state comes from what they said, not a due-date calendar.",
+    },
+    {
+        icon: PenLine,
+        title: "The next email, in their words",
+        body: "Scotive drafts the next follow-up from that client’s own messages and language. Highly personal — not a reminder template. A pay link sits in the draft.",
     },
 ];
 
-const ACCOUNTING = [
+const STACK = [
     {
-        name: "QuickBooks Online",
-        status: "Available",
-        detail: "Import open invoices, sync paid status, and keep Scotive aligned when QBO changes.",
-        available: true,
-        href: "/quickbooks-invoice-chasing",
+        step: "01",
+        title: "You invoice",
+        body: "QuickBooks, Xero, or FreshBooks stays the ledger — create the invoice, due date, paid or not.",
     },
     {
-        name: "Zoho Books",
-        status: "Coming soon",
-        detail: "Pull unpaid invoices and paid signals from Zoho Books into the same Scotive ledger.",
-        available: false,
-        href: "/zoho-books-invoice-chasing",
+        step: "02",
+        title: "You talk",
+        body: "The real conversation lives in Gmail or Outlook. That is where they reply, promise, or say they paid.",
     },
     {
-        name: "FreshBooks",
-        status: "Coming soon",
-        detail: "Chase FreshBooks invoices with the same reply intelligence and approval-first sends.",
-        available: false,
-        href: "/freshbooks-invoice-chasing",
+        step: "03",
+        title: "Scotive chases",
+        body: "Match thread to invoice, track the state from that conversation, draft the next follow-up in their language, put a pay link in the draft.",
     },
 ];
 
-function IntegrationCard({ name, status, detail, available, href }) {
-    const body = (
-        <div className="surface-card p-6 h-full flex flex-col gap-3">
-            <div className="flex items-center justify-between gap-3">
-                <h3 className="type-title text-lg">{name}</h3>
-                <span
-                    className={`inline-flex items-center gap-1 text-[11px] font-medium rounded-full px-2.5 py-1 ${
-                        available
-                            ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                            : "bg-muted text-muted-foreground border border-border"
-                    }`}
-                >
-                    {available ? <Check className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
-                    {status}
-                </span>
+function CatalogTile({ item }) {
+    return (
+        <Link href={item.href} className="integration-logo-tile-page">
+            <img src={item.logo} alt="" className="h-10 w-auto max-h-10 max-w-[180px] object-contain" />
+            <span className="text-sm font-medium text-foreground">{item.name}</span>
+        </Link>
+    );
+}
+
+function CatalogGroup({ id, title, items, columns = 3 }) {
+    return (
+        <div id={id} className="scroll-mt-28">
+            <h3 className="text-sm font-medium text-muted-foreground mb-3">{title}</h3>
+            <div className={`grid gap-3 ${columns === 2 ? "sm:grid-cols-2 max-w-xl" : "sm:grid-cols-2 lg:grid-cols-3"}`}>
+                {items.map((item) => (
+                    <CatalogTile key={item.name} item={item} />
+                ))}
             </div>
-            <p className="type-body text-sm text-muted-foreground flex-1">{detail}</p>
-            {href ? (
-                <span className="text-sm font-medium text-primary">Learn more →</span>
-            ) : null}
         </div>
     );
-    if (href) {
-        return (
-            <Link href={href} className="block hover:opacity-95 transition-opacity">
-                {body}
-            </Link>
-        );
-    }
-    return body;
 }
 
 export default function IntegrationsPage() {
@@ -93,40 +106,82 @@ export default function IntegrationsPage() {
         <MarketingShell testId="seo-integrations" activePath="/integrations">
             <MarketingHero
                 eyebrow="Integrations"
-                title="Email + accounting — not locked to one stack"
-                description="Scotive is built as payment ops across the tools you already use. Start with what’s live; more connectors ship without changing how you chase."
-            />
+                title="Connect inbox and invoicing. Scotive reads the conversation."
+                description="Keep QuickBooks, Xero, or FreshBooks as the ledger. Chase from Gmail or Outlook. Matching the thread is how Scotive tracks each invoice from invoiced to paid — and drafts the next follow-up in that client’s own words."
+            >
+                <MarketingHeroCtas
+                    primaryLabel="Start 30-day free trial"
+                    secondaryHref="/pricing"
+                    secondaryLabel="View pricing"
+                />
+            </MarketingHero>
 
-            <section className="py-12 md:py-16 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-14">
-                <div>
-                    <h2 className="type-title text-2xl md:text-3xl mb-6">Email &amp; conversations</h2>
-                    <div className="grid md:grid-cols-2 gap-4">
-                        {EMAIL.map((item) => (
-                            <IntegrationCard key={item.name} {...item} />
+            <section className="py-16 md:py-20">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                    <div className="max-w-2xl mb-10">
+                        <h2 className="type-title text-2xl md:text-3xl">What connecting does</h2>
+                        <p className="type-body mt-3 text-muted-foreground">
+                            Two connections. Then Scotive can see the state of each invoice from the thread, and write the next follow-up in their language.
+                        </p>
+                    </div>
+                    <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                        {CONNECT_JOBS.map((job) => (
+                            <article key={job.title} className="surface-card p-6 flex flex-col gap-3">
+                                <span className="inline-flex items-center justify-center w-10 h-10 rounded-xl bg-primary/5 text-primary">
+                                    <job.icon className="w-5 h-5" strokeWidth={2} />
+                                </span>
+                                <h3 className="type-title text-lg">{job.title}</h3>
+                                <p className="type-body text-sm text-muted-foreground">{job.body}</p>
+                            </article>
                         ))}
                     </div>
                 </div>
-                <div>
-                    <h2 className="type-title text-2xl md:text-3xl mb-6">Accounting &amp; invoices</h2>
-                    <div className="grid md:grid-cols-3 gap-4">
-                        {ACCOUNTING.map((item) => (
-                            <IntegrationCard key={item.name} {...item} />
-                        ))}
-                    </div>
-                </div>
-                <p className="type-body text-sm text-muted-foreground max-w-2xl">
-                    Want a connector sooner? Email{" "}
-                    <a href="mailto:support@scotive.com" className="text-foreground underline underline-offset-2">
-                        support@scotive.com
-                    </a>
-                    . Meanwhile,{" "}
-                    <Link href="/invoice-chasing-software" className="text-foreground underline underline-offset-2">
-                        invoice chasing software overview
-                    </Link>
-                    .
-                </p>
             </section>
-            <MarketingCta />
+
+            <section className="pb-16 md:pb-20">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                    <div className="max-w-2xl mb-8">
+                        <h2 className="type-title text-2xl md:text-3xl">Available integrations</h2>
+                        <p className="type-body mt-3 text-muted-foreground">
+                            Accounting first — that is the ledger. Email second — that is the conversation.
+                        </p>
+                    </div>
+                    <div className="rounded-2xl bg-muted/40 border border-border/70 p-4 sm:p-6 space-y-8">
+                        <CatalogGroup id="accounting" title="Accounting" items={ACCOUNTING_INTEGRATIONS} />
+                        <CatalogGroup id="email" title="Email" items={EMAIL_INTEGRATIONS} columns={2} />
+                    </div>
+                </div>
+            </section>
+
+            <section className="pb-8 md:pb-12">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                    <div className="max-w-2xl mb-10">
+                        <h2 className="type-title text-2xl md:text-3xl">How they work together</h2>
+                        <p className="type-body mt-3 text-muted-foreground">
+                            Scotive sits on top of the stack you already pay for. It does not replace your invoicing tools.
+                        </p>
+                    </div>
+                    <div className="grid md:grid-cols-3 gap-4">
+                        {STACK.map((item) => (
+                            <article key={item.step} className="surface-card p-6">
+                                <div className="eyebrow mb-3">
+                                    Step {item.step}
+                                </div>
+                                <h3 className="type-title text-lg">{item.title}</h3>
+                                <p className="type-body mt-2 text-sm text-muted-foreground">{item.body}</p>
+                            </article>
+                        ))}
+                    </div>
+                    <p className="type-body mt-8 text-sm text-muted-foreground">
+                        {PRICE_AFTER_TRIAL}
+                    </p>
+                </div>
+            </section>
+
+            <MarketingCta
+                title="Connect once. Then you see the state — and the next email in their words."
+                description="Gmail or Outlook, plus the invoicing tool you already use. Conversation states from invoiced to paid. The next follow-up drafted from what they said."
+            />
         </MarketingShell>
     );
 }
