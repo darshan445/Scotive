@@ -153,6 +153,13 @@
     .btn-pill-primary {
         @apply inline-flex items-center justify-center gap-2 rounded-full bg-primary text-primary-foreground px-6 py-2.5 font-semibold hover:bg-primary/90 transition-colors;
     }
+    @keyframes progress-indeterminate {
+        0% { transform: translateX(-120%); }
+        100% { transform: translateX(380%); }
+    }
+    .animate-progress-indeterminate {
+        animation: progress-indeterminate 1.15s ease-in-out infinite;
+    }
 }
 
 @layer base {

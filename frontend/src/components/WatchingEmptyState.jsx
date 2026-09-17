@@ -14,7 +14,7 @@ export function WatchingEmptyState({ onChanged }) {
                 Scotive is watching
             </h2>
             <p className="mt-3 text-muted-foreground max-w-md mx-auto leading-relaxed">
-                Send your next invoice like you always do — Scotive checks your sent mail every minute or so and tracks it automatically.
+                No open invoices in QuickBooks right now. When you send the next one there, Scotive imports it and matches the conversation in Gmail or Outlook.
             </p>
             <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3">
                 <button
@@ -27,7 +27,7 @@ export function WatchingEmptyState({ onChanged }) {
             </div>
             <p className="mt-6 text-xs text-muted-foreground flex items-center justify-center gap-1.5">
                 <Forward className="w-3.5 h-3.5" />
-                Tip: forward any invoice email to yourself to see it tracked instantly.
+                Tip: invoices enter Scotive from QuickBooks, not from a forwarded PDF.
             </p>
             <ManualInvoiceDialog open={manualOpen} onOpenChange={setManualOpen} onCreated={() => onChanged?.()} />
         </div>

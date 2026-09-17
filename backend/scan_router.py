@@ -1,7 +1,6 @@
 """Scan + ledger endpoints."""
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -10,17 +9,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from scan_pipeline import reconcile_receipts
-from gmail_sync import INCREMENTAL_LOOKBACK, ack_detections, ack_due_date_prompts, run_onboarding_sync
+from gmail_sync import INCREMENTAL_LOOKBACK, ack_detections, ack_due_date_prompts
 from post_chase import ack_followup_prompts, mark_chase_sent
 from incremental_sync import run_incremental_sync
 from seed_scan import (
-    SEED_DAYS,
-    confirm_seed_curation,
     continue_onboarding,
-    discard_seed_review,
     get_onboarding_state,
-    list_seed_candidates,
-    run_seed_scan,
 )
 from invoice_lifecycle import (
     apply_stale_transitions,
@@ -42,6 +36,7 @@ from ledger_reconcile import (
     sort_by_email_date,
     sort_by_due_promise_date,
 )
+from cadence import DEFAULT_OFFSETS, ensure_pay_link, invoice_pay_url, pay_link_prompt_lines
 from escalation_scheduler import run_escalation_tick, generate_draft as _gen_escalation_draft
 from draft_tone import resolve_draft_tone, tone_instruction
 from gmail_oauth import ensure_gmail_account_name
@@ -57,15 +52,9 @@ from client_merge import (
 logger = logging.getLogger("scotive.scan_router")
 
 
-class SeedConfirmInput(BaseModel):
-    candidate_ids: list[str] = Field(default_factory=list)
-    track_none: bool = False
-    due_dates: dict[str, str | None] = Field(default_factory=dict)
-
-
 class OnboardingQboStepInput(BaseModel):
-    """Path B: resolve optional QuickBooks step before/around seed."""
-    action: str  # pending | skip | connected
+    """Mark QuickBooks as connected during onboarding. Skip is not allowed."""
+    action: str  # pending | connected
 
 
 class DetectionAckInput(BaseModel):
@@ -268,14 +257,14 @@ def build_router(db, get_current_user):
     @router.post("/onboarding/qbo-step")
     async def onboarding_qbo_step(payload: OnboardingQboStepInput, user: dict = Depends(get_current_user)):
         action = (payload.action or "").strip().lower()
-        if action not in ("pending", "skip", "connected"):
-            raise HTTPException(status_code=400, detail="action must be pending, skip, or connected")
+        if action not in ("pending", "connected"):
+            raise HTTPException(status_code=400, detail="action must be pending or connected")
         now_iso = datetime.now(timezone.utc).isoformat()
         await db.gmail_sync_state.update_one(
             {"user_id": user["_id"]},
             {"$set": {
                 "onboarding_qbo_step": action,
-                "awaiting_curation": True,
+                "awaiting_curation": False,
                 "updated_at": now_iso,
             }},
             upsert=True,
@@ -284,83 +273,9 @@ def build_router(db, get_current_user):
 
     @router.post("/onboarding/continue")
     async def onboarding_continue(user: dict = Depends(get_current_user)):
-        """Next on connections screen → curation (Gmail-only) or dashboard (with QBO)."""
+        """Next on connections screen → dashboard. Requires mailbox + QuickBooks."""
         try:
             result = await continue_onboarding(db, user["_id"])
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        return result
-
-    @router.post("/seed/start")
-    async def seed_start(user: dict = Depends(get_current_user)):
-        conn = await db.gmail_connections.find_one({"user_id": user["_id"]})
-        if not conn or conn.get("status") == "revoked":
-            raise HTTPException(status_code=400, detail="Connect Gmail before seed scan.")
-        existing = await db.seed_jobs.find_one(
-            {"user_id": user["_id"], "status": {"$in": ["queued", "running"]}}
-        )
-        if existing:
-            return {"job_id": str(existing["_id"]), "status": existing.get("status")}
-        now_iso = datetime.now(timezone.utc).isoformat()
-        res = await db.seed_jobs.insert_one({
-            "user_id": user["_id"],
-            "status": "queued",
-            "phase": "queued",
-            "days": SEED_DAYS,
-            "counts": {"candidates": 0},
-            "started_at": now_iso,
-            "updated_at": now_iso,
-        })
-        job_id = res.inserted_id
-        await db.gmail_sync_state.update_one(
-            {"user_id": user["_id"]},
-            {"$set": {"awaiting_curation": True, "updated_at": now_iso}},
-            upsert=True,
-        )
-        asyncio.create_task(run_seed_scan(db, user["_id"], job_id))
-        return {"job_id": str(job_id), "status": "queued"}
-
-    @router.get("/seed/status")
-    async def seed_status(user: dict = Depends(get_current_user)):
-        job = await db.seed_jobs.find_one(
-            {"user_id": user["_id"]}, sort=[("started_at", -1)]
-        )
-        if not job:
-            return {"has_job": False}
-        return {
-            "has_job": True,
-            "job_id": str(job["_id"]),
-            "status": job.get("status"),
-            "phase": job.get("phase"),
-            "counts": job.get("counts", {}),
-            "days": job.get("days", SEED_DAYS),
-            "error": job.get("error"),
-        }
-
-    @router.get("/seed/candidates")
-    async def seed_candidates(user: dict = Depends(get_current_user)):
-        rows = await list_seed_candidates(db, user["_id"])
-        return {"candidates": [_serialize(r) for r in rows], "count": len(rows)}
-
-    @router.post("/seed/confirm")
-    async def seed_confirm(payload: SeedConfirmInput, user: dict = Depends(get_current_user)):
-        try:
-            result = await confirm_seed_curation(
-                db,
-                user["_id"],
-                payload.candidate_ids,
-                track_none=payload.track_none,
-                due_dates=payload.due_dates,
-            )
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        return {"ok": True, **result}
-
-    @router.post("/seed/review/discard")
-    async def seed_review_discard(user: dict = Depends(get_current_user)):
-        """Dismiss deferred Gmail seed review on the dashboard (track none)."""
-        try:
-            result = await discard_seed_review(db, user["_id"])
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         return result
@@ -417,7 +332,6 @@ def build_router(db, get_current_user):
             "pending_due_date_prompts": state.get("pending_due_date_prompts") or [],
             "pending_followup_prompts": state.get("pending_followup_prompts") or [],
             "sync_lookback": INCREMENTAL_LOOKBACK,
-            "seed_lookback_days": SEED_DAYS,
             "sync_running": bool(state.get("sync_running")),
         }
         return out
@@ -577,7 +491,7 @@ def build_router(db, get_current_user):
             _html_to_visible_text,
             get_access_token,
             get_message,
-            get_thread_messages,
+            list_thread_full,
             parse_email_addresses,
         )
         from ledger_reconcile import parse_email_date, strip_quoted_history
@@ -623,12 +537,19 @@ def build_router(db, get_current_user):
 
         messages: list[dict] = []
         gmail_error = None
-        thread_id = inv.get("source_thread_id")
+        thread_ids = []
+        for tid in [inv.get("source_thread_id"), *(inv.get("conversation_thread_ids") or [])]:
+            if tid and tid not in thread_ids:
+                thread_ids.append(tid)
         try:
             access = await get_access_token(db, user["_id"])
-            if thread_id:
-                messages = await get_thread_messages(access, thread_id, body_limit=50000)
-            seen = {m.get("id") for m in messages if m.get("id")}
+            seen: set[str] = set()
+            for tid in thread_ids:
+                for m in await list_thread_full(access, tid, body_limit=50000):
+                    mid = m.get("id")
+                    if mid and mid not in seen:
+                        seen.add(mid)
+                        messages.append(m)
             for mid in linked_mids:
                 if mid in seen:
                     continue
@@ -637,7 +558,7 @@ def build_router(db, get_current_user):
                     messages.append(extra)
                     seen.add(mid)
             origin = inv.get("source_message_id")
-            if origin and origin not in seen:
+            if origin and origin not in seen and not str(origin).startswith(("qbo:", "xero:", "freshbooks:")):
                 extra = await get_message(access, origin)
                 if extra:
                     messages.append(extra)
@@ -667,7 +588,7 @@ def build_router(db, get_current_user):
             body = strip_quoted_history(body)
             out_msgs.append({
                 "id": mid,
-                "thread_id": m.get("thread_id") or thread_id,
+                "thread_id": m.get("thread_id") or (thread_ids[0] if thread_ids else None),
                 "subject": m.get("subject") or "",
                 "from": m.get("from") or "",
                 "to": m.get("to") or "",
@@ -682,7 +603,7 @@ def build_router(db, get_current_user):
         return {
             "invoice": _serialize(inv),
             "messages": out_msgs,
-            "thread_id": thread_id,
+            "thread_id": thread_ids[0] if thread_ids else None,
             "client_ever_replied": client_replied,
             "gmail_error": gmail_error,
             "my_email": my_email or None,
@@ -1206,7 +1127,7 @@ def build_router(db, get_current_user):
             raise HTTPException(status_code=404, detail="Invoice not found")
 
         settings = await db.user_settings.find_one({"user_id": user["_id"]}) or {}
-        offsets = settings.get("escalation_offsets") or [-3, 0, 3, 10]
+        offsets = settings.get("escalation_offsets") or DEFAULT_OFFSETS
         dispute_rounds = await db.invoice_events.count_documents({
             "user_id": user["_id"],
             "invoice_id": inv["_id"],
@@ -1244,10 +1165,12 @@ def build_router(db, get_current_user):
             if signer_name
             else "Always end the body with a short professional sign-off and the sender's name. "
         )
+        facts_rule, pay_line = pay_link_prompt_lines(inv)
         sys = (
             "You draft short, professional payment follow-up emails for a small business owner. "
             "Under 120 words. No 'hope this finds you well'. "
-            "Always include invoice ref (if any), amount, due date. On a broken promise, quote the client's own stated date verbatim. "
+            + facts_rule
+            + "On a broken promise, quote the client's own stated date verbatim. "
             + tone_instruction(tone) + " "
             + sign_rule
             + (
@@ -1287,6 +1210,7 @@ def build_router(db, get_current_user):
             f"Confirmed paid amount: {confirmed_paid if confirmed_paid > 0.005 else 'n/a'}\n"
             f"Balance remaining: {inv.get('balance_remaining')}\n"
             f"Due date: {inv.get('due_date') or 'n/a'}\n"
+            f"{pay_line}\n"
             f"Promise date: {inv.get('promise_date') or 'n/a'}\n"
             f"Status: {inv.get('status')}\n"
             f"Ladder step: {tone_info.get('step_label') or 'n/a'}\n"
@@ -1321,7 +1245,7 @@ def build_router(db, get_current_user):
             draft = json.loads(content)
         return {
             "subject": draft.get("subject", ""),
-            "body": draft.get("body", ""),
+            "body": ensure_pay_link(draft.get("body") or "", invoice_pay_url(inv)),
             "tone": tone,
             "tone_label": tone_label,
             "is_reply": bool(tone_info.get("is_reply")),
@@ -1355,13 +1279,14 @@ def build_router(db, get_current_user):
         )
         to_addr = inv.get("counterparty_email")
         from_addr = conn.get("email")
+        send_body = ensure_pay_link(payload.body, invoice_pay_url(inv))
         try:
             sent = await send_gmail_reply(
                 access,
                 from_addr=from_addr,
                 to_addr=to_addr,
                 subject=payload.subject,
-                body=payload.body,
+                body=send_body,
                 thread_id=inv.get("source_thread_id"),
                 reply_to_message_id=inv.get("source_message_id"),
             )
@@ -1371,7 +1296,7 @@ def build_router(db, get_current_user):
         await db.chase_sends.insert_one({
             "user_id": user["_id"], "invoice_id": inv["_id"], "to": to_addr,
             "subject": sent.get("subject") or payload.subject,
-            "body": payload.body, "sent_at": now_iso,
+            "body": send_body, "sent_at": now_iso,
             "gmail_thread_id": sent.get("thread_id"),
         })
         await mark_chase_sent(db, user["_id"], inv["_id"], step_index=None, now_iso=now_iso)
@@ -1389,7 +1314,7 @@ def build_router(db, get_current_user):
                 access=access,
                 my_email=from_addr or "",
                 subject=sent.get("subject") or payload.subject,
-                body=payload.body,
+                body=send_body,
                 gmail_message_id=sent.get("gmail_message_id"),
                 thread_id=sent.get("thread_id") or inv.get("source_thread_id"),
             )
@@ -1417,10 +1342,13 @@ def build_router(db, get_current_user):
         )
         sys = ("Expand the user's rough intent into a polished professional email under 120 words. "
                "Honor every point the user made. Add nothing substantive they didn't say. No fluff. "
+               "Always include invoice ref, amount, due date, and the payment URL if one is given. "
                + sign_rule
                + "Output STRICT JSON: {\"subject\": string, \"body\": string}.")
+        _, pay_line = pay_link_prompt_lines(inv)
         user_msg = (f"Client: {inv.get('counterparty_name') or inv.get('counterparty_email')}\n"
                     f"Invoice: {inv.get('invoice_ref') or 'n/a'} · {inv.get('amount')} {inv.get('currency','USD')}\n"
+                    f"{pay_line}\n"
                     f"Sign emails as: {signer_name or 'n/a'}\n"
                     f"User rough intent: {payload.intent}")
         api_key = openai_api_key()
@@ -1445,7 +1373,8 @@ def build_router(db, get_current_user):
                 raise HTTPException(status_code=502, detail="AI draft failed")
             content = openai_message_content(r.json())
             draft = json.loads(content)
-        return {"subject": draft.get("subject",""), "body": draft.get("body",""),
+        return {"subject": draft.get("subject",""),
+                "body": ensure_pay_link(draft.get("body") or "", invoice_pay_url(inv)),
                 "to": inv.get("counterparty_email"), "invoice_id": payload.invoice_id}
 
     # ---- Escalation ladder scheduler (Feature 9b) ------------------------
@@ -1508,9 +1437,6 @@ def build_router(db, get_current_user):
 
     @router.post("/escalation/run")
     async def escalation_run(user: dict = Depends(get_current_user)):
-        from feature_flags import chasing_timing_enabled
-        if not chasing_timing_enabled():
-            return {"ok": True, "disabled": True, "drafts_generated": 0}
         counts = await run_escalation_tick(db, user["_id"])
         return {"ok": True, **counts}
 
@@ -1617,13 +1543,14 @@ def build_router(db, get_current_user):
         )
         to_addr = draft.get("to")
         from_addr = conn.get("email")
+        send_body = ensure_pay_link(draft.get("body") or "", invoice_pay_url(inv or {}))
         try:
             sent = await send_gmail_reply(
                 access,
                 from_addr=from_addr,
                 to_addr=to_addr,
                 subject=draft.get("subject", ""),
-                body=draft.get("body", ""),
+                body=send_body,
                 thread_id=draft.get("thread_id") or (inv or {}).get("source_thread_id"),
                 reply_to_message_id=(inv or {}).get("source_message_id"),
             )
@@ -1637,7 +1564,7 @@ def build_router(db, get_current_user):
             "user_id": user["_id"], "invoice_id": draft.get("invoice_id"),
             "to": to_addr,
             "subject": sent.get("subject") or draft.get("subject", ""),
-            "body": draft.get("body", ""),
+            "body": send_body,
             "sent_at": now_iso, "chase_draft_id": draft["_id"],
             "gmail_thread_id": sent.get("thread_id"),
         })
@@ -1665,7 +1592,7 @@ def build_router(db, get_current_user):
                     access=access,
                     my_email=from_addr or "",
                     subject=sent.get("subject") or draft.get("subject", ""),
-                    body=draft.get("body", ""),
+                    body=send_body,
                     gmail_message_id=sent.get("gmail_message_id"),
                     thread_id=sent.get("thread_id")
                         or draft.get("thread_id")

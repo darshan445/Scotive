@@ -1,19 +1,16 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, ArrowUpRight, CalendarClock, Loader2, Wallet } from "lucide-react";
+import { AlertTriangle, ArrowUpRight, CalendarClock, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/AppShell";
 import { ConnectMailboxButton } from "@/components/ConnectGmailButton";
 import { LedgerCard } from "@/components/LedgerCard";
 import { TodayCard } from "@/components/TodayCard";
 import { SyncStatusBar } from "@/components/SyncStatusBar";
-import { CurationScreen } from "@/components/CurationScreen";
 import { WatchingEmptyState } from "@/components/WatchingEmptyState";
 import { OnboardingConnections } from "@/components/OnboardingConnections";
-import { SeedReviewBanner } from "@/components/SeedReviewBanner";
-import { QboPipelineProgress } from "@/components/QboPipelineProgress";
-import { finishQboOnboardingImport } from "@/components/QboOnboardingStep";
+import { finishQboOnboardingImport, toastQboImportComplete } from "@/components/QboOnboardingStep";
 import { InvoiceDetectedBanner } from "@/components/InvoiceDetectedBanner";
 import { DueDatePromptBanner } from "@/components/DueDatePromptBanner";
 import { FollowUpPromptBanner } from "@/components/FollowUpPromptBanner";
@@ -145,7 +142,7 @@ function GmailIssueBanner({ status }) {
                             </>
                         ) : (
                             <>
-                                Ledger still builds from <span className="font-mono">{status.email}</span>, but one-tap chasers need send permission.
+                                Conversations still match from <span className="font-mono">{status.email}</span>, but one-tap chasers need send permission.
                             </>
                         )}
                     </div>
@@ -172,11 +169,6 @@ export default function DashboardPage() {
     const gmailConnected = Boolean(status?.connected);
     const {
         state: onboarding,
-        candidates,
-        startSeed,
-        confirmCuration,
-        discardSeedReview,
-        fetchCandidates,
         refresh: refreshOnboarding,
     } = useOnboarding({ enabled: true });
 
@@ -185,19 +177,7 @@ export default function DashboardPage() {
     const showConnections =
         !pastOnboarding &&
         (onboarding?.phase === "connections" || onboarding?.phase == null);
-    const showPreparing = onboarding?.phase === "preparing";
-    const showCuration = onboarding?.phase === "curating";
     const bootstrapping = status === null || !onboardingReady;
-    const seedReview = onboarding?.seed_review;
-    const qboPipeline = onboarding?.qbo_pipeline;
-    const showSeedReviewBanner =
-        pastOnboarding &&
-        Boolean(seedReview) &&
-        !seedReview.seed_running &&
-        (seedReview.pending_count || 0) > 0;
-    const showQboPipeline =
-        pastOnboarding &&
-        (qboPipeline?.status === "queued" || qboPipeline?.status === "running");
 
     const { data: ledger, refresh: refreshLedger } = useLedger(pastOnboarding);
     const { refreshAll: refreshWorkspace } = useWorkspaceRefresh({
@@ -210,38 +190,18 @@ export default function DashboardPage() {
         setFollowUpPrompt(null);
         setDueDatePrompt(null);
     }, [refreshWorkspace]);
-    const autoSeedRef = useRef(false);
     const qboImportRef = useRef(false);
-    const [confirmBusy, setConfirmBusy] = useState(false);
     const [chaseInvoice, setChaseInvoice] = useState(null);
     const [latestDetection, setLatestDetection] = useState(null);
     const [dueDatePrompt, setDueDatePrompt] = useState(null);
     const [followUpPrompt, setFollowUpPrompt] = useState(null);
-    const [reviewingSeed, setReviewingSeed] = useState(false);
-    const [seedReviewBusy, setSeedReviewBusy] = useState(false);
-
-    const beginSeed = useCallback(async () => {
-        if (autoSeedRef.current) return;
-        autoSeedRef.current = true;
-        try {
-            await startSeed();
-        } catch {
-            autoSeedRef.current = false;
-        }
-        await refreshOnboarding();
-    }, [startSeed, refreshOnboarding]);
 
     const runQboImport = useCallback(async () => {
         if (qboImportRef.current) return;
         qboImportRef.current = true;
         try {
             const counts = await finishQboOnboardingImport();
-            const n = (counts.created || 0) + (counts.updated || 0) + (counts.merged || 0);
-            if (n > 0) {
-                toast.success(`Imported ${n} open invoice${n === 1 ? "" : "s"} from QuickBooks`);
-            } else {
-                toast.success("QuickBooks connected");
-            }
+            toastQboImportComplete(counts);
             await refreshOnboarding();
             await refreshQbo();
         } catch (e) {
@@ -303,11 +263,9 @@ export default function DashboardPage() {
         useCallback(async (result) => {
             await refresh();
             if (result === "connected" || result === "send_missing") {
-                // Silent 90d seed — no progress UI on the connections screen.
-                await beginSeed();
                 await refreshOnboarding();
             }
-        }, [refresh, beginSeed, refreshOnboarding]),
+        }, [refresh, refreshOnboarding]),
     );
 
     useQboCallbackToast(
@@ -323,64 +281,12 @@ export default function DashboardPage() {
         refreshOnboarding();
     }, [status?.connected, qboStatus?.connected, refreshOnboarding]);
 
-    // Gmail connected on connections screen → start silent seed.
-    useEffect(() => {
-        if (!gmailConnected) return;
-        if (pastOnboarding) return;
-        if (onboarding?.phase !== "connections" && onboarding?.phase !== "preparing") return;
-        void beginSeed();
-    }, [gmailConnected, pastOnboarding, onboarding?.phase, beginSeed]);
-
-    const qboPipelineStatusRef = useRef(null);
-    useEffect(() => {
-        const prev = qboPipelineStatusRef.current;
-        const next = qboPipeline?.status || null;
-        qboPipelineStatusRef.current = next;
-        if (prev && (prev === "queued" || prev === "running") && next === "complete") {
-            void refreshAll();
-            toast.success("QuickBooks conversations updated");
-        }
-    }, [qboPipeline?.status, refreshAll]);
-
-    async function handleConfirm(ids, trackNone, dueDates = {}) {
-        setConfirmBusy(true);
-        const res = await confirmCuration(ids, trackNone, dueDates);
-        setConfirmBusy(false);
-        if (res?.ok) {
-            setReviewingSeed(false);
-            await refreshAll();
-        }
-        return res;
-    }
-
-    async function handleSeedReviewOpen() {
-        setReviewingSeed(true);
-        setSeedReviewBusy(true);
-        await fetchCandidates();
-        setSeedReviewBusy(false);
-    }
-
-    async function handleSeedReviewDiscard() {
-        setSeedReviewBusy(true);
-        const res = await discardSeedReview();
-        setSeedReviewBusy(false);
-        setReviewingSeed(false);
-        if (res?.ok) {
-            toast.success("Gmail invoices dismissed");
-            await refreshAll();
-        } else {
-            toast.error(res?.error || "Could not discard");
-        }
-    }
-
     async function handleConnectionsContinue(data) {
         await refreshOnboarding();
         if (data?.next === "dashboard") {
             await refreshAll();
             toast.success("You're set", {
-                description: data?.qbo_connected
-                    ? "QuickBooks invoices are on your ledger."
-                    : undefined,
+                description: "QuickBooks invoices are on your ledger.",
             });
         }
     }
@@ -408,10 +314,19 @@ export default function DashboardPage() {
                         qboConnected={qboIsConnected}
                         mailProvider={status?.provider || null}
                         connections={status?.connections || []}
+                        qboStatus={qboStatus}
+                        onboarding={onboarding}
                         onContinue={handleConnectionsContinue}
+                        onConnectionsChange={() => {
+                            qboImportRef.current = false;
+                            void refresh();
+                            void refreshQbo();
+                            void refreshOnboarding();
+                        }}
                         onQboImported={() => {
                             qboImportRef.current = true;
                             void refreshQbo();
+                            void refreshOnboarding();
                         }}
                     />
                 </div>
@@ -428,13 +343,9 @@ export default function DashboardPage() {
                                 {pastOnboarding ? greeting() : "Let's find what you're still owed"}
                             </h1>
                             <p className="type-body mt-1.5 text-base">
-                                {showPreparing
-                                    ? "Preparing invoices from Gmail…"
-                                    : showCuration
-                                      ? "You know your last 90 days — pick what's still unpaid."
-                                      : pastOnboarding
-                                        ? "Open invoices sorted by what's due next."
-                                        : "Forward-tracking from here — not inbox archaeology."}
+                                {pastOnboarding
+                                    ? "Open invoices from QuickBooks, sorted by what's due next."
+                                    : "Connect QuickBooks and your mailbox to start tracking."}
                             </p>
                         </div>
                         {pastOnboarding ? (
@@ -450,39 +361,6 @@ export default function DashboardPage() {
                         ) : null}
                     </div>
 
-                    {showPreparing ? (
-                        <div
-                            className="surface-card p-8 flex items-center gap-3 text-sm text-muted-foreground justify-center"
-                            data-testid="onboarding-preparing"
-                        >
-                            <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
-                            Almost ready…
-                        </div>
-                    ) : null}
-
-                    {showCuration ? (
-                        candidates?.length ? (
-                            <CurationScreen
-                                candidates={candidates}
-                                busy={confirmBusy}
-                                onConfirm={handleConfirm}
-                                scanning={false}
-                                qboAware={false}
-                            />
-                        ) : candidates === null ? (
-                            <div className="flex items-center gap-2 text-sm text-muted-foreground py-8 justify-center">
-                                <Loader2 className="w-4 h-4 animate-spin" /> Loading invoices…
-                            </div>
-                        ) : (
-                            <CurationScreen
-                                candidates={candidates || []}
-                                busy={confirmBusy}
-                                onConfirm={handleConfirm}
-                                qboAware={false}
-                            />
-                        )
-                    ) : null}
-
                     {pastOnboarding && (status?.status === "revoked" || status?.status === "send_missing") ? (
                         <GmailIssueBanner status={status} />
                     ) : null}
@@ -492,36 +370,6 @@ export default function DashboardPage() {
                             <DashboardContentSkeleton />
                         ) : (
                             <>
-                                {showQboPipeline ? (
-                                    <QboPipelineProgress pipeline={qboPipeline} />
-                                ) : null}
-
-                                {showSeedReviewBanner ? (
-                                    <SeedReviewBanner
-                                        pendingCount={seedReview?.pending_count || 0}
-                                        reviewing={reviewingSeed}
-                                        busy={seedReviewBusy || confirmBusy}
-                                        onReview={handleSeedReviewOpen}
-                                        onDiscard={handleSeedReviewDiscard}
-                                    />
-                                ) : null}
-
-                                {reviewingSeed ? (
-                                    seedReviewBusy || candidates === null ? (
-                                        <div className="flex items-center gap-2 text-sm text-muted-foreground py-8 justify-center">
-                                            <Loader2 className="w-4 h-4 animate-spin" /> Loading invoices…
-                                        </div>
-                                    ) : (
-                                        <CurationScreen
-                                            candidates={candidates || []}
-                                            busy={confirmBusy}
-                                            onConfirm={handleConfirm}
-                                            scanning={false}
-                                            qboAware
-                                        />
-                                    )
-                                ) : (
-                                    <>
                                 <InvoiceDetectedBanner detection={latestDetection} onDismiss={dismissDetection} />
 
                                 <DueDatePromptBanner
@@ -577,8 +425,6 @@ export default function DashboardPage() {
                                         <LedgerCard ledger={ledger} onChanged={refreshAll} variant="open" />
                                     </TabsContent>
                                 </Tabs>
-                                    </>
-                                )}
                             </>
                         )
                     ) : null}

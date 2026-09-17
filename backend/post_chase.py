@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 from bson import ObjectId
 
+from cadence import last_friendly_index
 from escalation_scheduler import (
     STEP_LABELS,
     _step_label,
@@ -152,6 +153,17 @@ async def run_post_chase_tick(db, user_id) -> dict[str, Any]:
             continue
 
         next_step = await _next_step_index(inv)
+        settings_offsets = list(settings.get("escalation_offsets") or [-3, 0, 7, 9])
+        current_step = inv.get("current_escalation_step")
+        # Auto Friendly steps are due-date cadence. After the owner sends Firm
+        # (or a manual Follow-up with no step), post-chase drafts resume.
+        if current_step is not None:
+            try:
+                if int(current_step) <= last_friendly_index(settings_offsets):
+                    counts["skipped"] += 1
+                    continue
+            except (TypeError, ValueError):
+                pass
         if next_step >= len(STEP_LABELS):
             await db.invoices.update_one(
                 {"_id": inv_id},

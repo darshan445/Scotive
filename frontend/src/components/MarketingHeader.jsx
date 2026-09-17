@@ -10,6 +10,7 @@ import {
     EMAIL_INTEGRATIONS,
     TRIAL_CTA,
 } from "@/lib/site";
+import { cn } from "@/lib/utils";
 
 const INTEGRATION_CATEGORIES = [
     { id: "accounting", label: "Accounting", items: ACCOUNTING_INTEGRATIONS },
@@ -192,7 +193,10 @@ export function MarketingHeader({ activePath = "", loginTestId, signupTestId }) 
                         </Link>
                         <Link
                             href="/register"
-                            className="hidden sm:inline-flex btn-pill-outline text-sm whitespace-nowrap"
+                            className={cn(
+                                "hidden sm:inline-flex btn-pill-outline text-sm whitespace-nowrap",
+                                "hover:bg-primary hover:text-primary-foreground hover:border-primary",
+                            )}
                             data-testid={signupTestId}
                         >
                             {TRIAL_CTA}
@@ -299,7 +303,10 @@ export function MarketingHeader({ activePath = "", loginTestId, signupTestId }) 
                     </Link>
                     <Link
                         href="/register"
-                        className="block mt-2 text-center btn-pill-solid text-sm py-2.5"
+                        className={cn(
+                            "block mt-2 text-center btn-pill-outline text-sm py-2.5",
+                            "hover:bg-primary hover:text-primary-foreground hover:border-primary",
+                        )}
                         onClick={() => setMobileOpen(false)}
                     >
                         {TRIAL_CTA}

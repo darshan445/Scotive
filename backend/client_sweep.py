@@ -149,10 +149,8 @@ EVENT_KIND_MAP = {
     "due_date_adjusted": "due_date_adjusted",
 }
 
-# partial_payment must run before promise on the same message (T7: partial + implicit promise).
-# dispute after partial so a disputed+partial invoice keeps disputed_claim_amount while
-# status stays disputed with payment_claim_pending (says-paid until user confirms).
-# Confirmed partials (user-stated / Received) keep partially_paid.
+# Same-message tiebreaker only. Across messages, apply in conversation time
+# (`sort_events_for_apply`) so a later promise is not wiped by an earlier correction.
 _EVENT_APPLY_ORDER = {
     "partial_payment": 0,
     "promise": 1,
@@ -163,6 +161,28 @@ _EVENT_APPLY_ORDER = {
     "due_date_adjusted": 6,
     "question": 7,
 }
+
+
+def sort_events_for_apply(
+    events: list[dict],
+    messages_by_id: dict[str, dict] | None = None,
+) -> list[dict]:
+    """Apply in conversation time. Type order is only a tiebreaker.
+
+    First-pass sees the whole thread in one batch. Type-priority used to run
+    promise then correction, and the correction wiped promised status.
+    """
+    by_id = messages_by_id or {}
+
+    def _key(ev: dict):
+        mid = (ev.get("message_id") or "").strip()
+        msg = by_id.get(mid) or {}
+        dt = parse_email_date(msg.get("date"))
+        ts = dt.timestamp() if dt else 0.0
+        return (ts, _EVENT_APPLY_ORDER.get(ev.get("type") or "", 99), mid)
+
+    return sorted(events, key=_key)
+
 
 # Client-only events must come from the client (Gmail From), not the user.
 _CLIENT_ONLY_EVENT_TYPES = frozenset({
@@ -995,9 +1015,9 @@ async def apply_client_result(
                 invoice_ids_by_ref[ref] = scoped["_id"]
             invoice_ids_by_ref[f"__{scoped['_id']}"] = scoped["_id"]
 
-    sorted_events = sorted(
+    sorted_events = sort_events_for_apply(
         dedupe_ai_events(result.get("events") or []),
-        key=lambda e: (_EVENT_APPLY_ORDER.get(e.get("type") or "", 99), e.get("message_id") or ""),
+        messages_by_id,
     )
     # Drop question events that share a message_id with a concrete signal
     # (dispute / partial / promise / payment_claimed) — TE-105.
@@ -1542,8 +1562,6 @@ async def run_client_sweep_sync(db, user_id, months: int = 12) -> dict:
     from live_detection import run_live_detection_tick
     live = await run_live_detection_tick(db, user_id)
     counts["live_detected"] = live.get("detected_count", 0)
-    if live.get("new_invoices"):
-        counts["new_invoices"] = live["new_invoices"]
 
     state = await db.gmail_sync_state.find_one({"user_id": user_id}) or {}
     candidates: dict[str, list[str]] = dict(state.get("anchor_map") or {})

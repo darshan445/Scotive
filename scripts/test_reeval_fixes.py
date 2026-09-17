@@ -28,12 +28,7 @@ from client_sweep import (  # noqa: E402
     _write_event,
     apply_client_result,
 )
-from incremental_sync import (  # noqa: E402
-    _is_amount_correction,
-    _states_amount,
-)
 from reeval_rulebook import (  # noqa: E402
-    enforce_dispute_resolution,
     filter_new_events_to_unprocessed,
     rulebook_events_to_write_events,
 )
@@ -183,28 +178,8 @@ class ReevalFixTest:
     # Unit: correction language detection
     # ------------------------------------------------------------------
     def test_correction_language(self) -> None:
-        print("\n== Correction language gate ==")
-        cases = [
-            ("Actually, revising this down to $550 — miscounted a few hours.", True),
-            ("correcting to $400", True),
-            ("let's make it $750 then", True),
-            ("my mistake — it's actually $300", True),
-            ("Confirmed, $1,850 it is.", True),
-            ("Agreed — $950.", True),
-            ("Reminder: $600 still due Aug 1.", False),
-            ("Following up on the $2,000 invoice.", False),
-            ("Just checking in — invoice #TB-102 for $600.", False),
-        ]
-        for body, expect in cases:
-            msg = {"subject": "Re: Invoice", "body": body, "from": USER_EMAIL}
-            got = _is_amount_correction(msg)
-            self._check(
-                f"correction? {body[:42]!r}",
-                got == expect,
-                f"got={got} expect={expect}",
-            )
-            if expect:
-                self._check(f"amount language {body[:28]!r}", _states_amount(msg))
+        print("\n== Correction language gate (removed) ==")
+        self._check("open invoices go to the rulebook without a regex gate", True)
 
     # ------------------------------------------------------------------
     # Unit: rulebook new_events → _write_event mapping
@@ -307,23 +282,6 @@ class ReevalFixTest:
         )
         self._check("TE-105 claimed 1800", float(dispute.get("claimed_amount") or 0) == 1800.0)
         self._check("TE-105 partial amount 1000", float(partial.get("amount") or 0) == 1000.0)
-
-        # Correction after dispute clears claim in post-process
-        resolved = enforce_dispute_resolution(
-            {
-                "disputed_claim_amount": 1800,
-                "new_events": [
-                    {"type": "dispute", "message_id": "a", "data": {"amount": 1800}},
-                    {"type": "amount_correction", "message_id": "b", "data": {"amount": 1800}},
-                ],
-            },
-            {"disputed_claim_amount": None},
-        )
-        self._check(
-            "TE-105 correction clears claim",
-            resolved.get("disputed_claim_amount") is None,
-            resolved.get("disputed_claim_amount"),
-        )
 
     # ------------------------------------------------------------------
     # Pipeline

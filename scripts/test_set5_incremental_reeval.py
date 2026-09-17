@@ -26,17 +26,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 load_dotenv(ROOT / "backend" / ".env")
 
-from client_sweep import _EVENT_APPLY_ORDER, _write_event  # noqa: E402
+from apply_conversation_status import apply_rulebook_result  # noqa: E402
 from incremental_sync import (  # noqa: E402
     _invoice_processed_message_ids,
-    _is_amount_correction,
-    _mark_reeval_seen,
 )
 from ledger_reconcile import client_identity_key, enrich_invoice_doc  # noqa: E402
 from reeval_rulebook import (  # noqa: E402
     apply_promise_date_resolution,
     build_tracked_state,
-    enforce_dispute_resolution,
     filter_new_events_to_unprocessed,
     normalize_null_strings,
     rulebook_events_to_write_events,
@@ -113,28 +110,11 @@ class Set5Test:
         parsed = normalize_null_strings(dict(result))
         parsed = filter_new_events_to_unprocessed(parsed, tracked)
         parsed = apply_promise_date_resolution(parsed)
-        parsed = enforce_dispute_resolution(parsed, tracked)
-        events = rulebook_events_to_write_events(
-            parsed, invoice_ref=inv.get("invoice_ref_normalized"),
-        )
-        for e in events:
-            if e.get("type") == "correction" and e.get("old_amount") is None:
-                e["old_amount"] = float(inv.get("amount") or 0)
-        events = sorted(
-            events,
-            key=lambda e: (_EVENT_APPLY_ORDER.get(e.get("type") or "", 99), e.get("message_id") or ""),
-        )
-        for ev in events:
-            await _write_event(
-                self.db, self.user_id, inv_id, ev, messages_by_id, _iso(when),
-                my_email=USER_EMAIL,
-            )
-        from incremental_sync import _apply_reeval_top_level
-        inv2 = await self.db.invoices.find_one({"_id": inv_id})
-        await _apply_reeval_top_level(self.db, inv2, parsed, _iso(when))
-        await _mark_reeval_seen(
-            self.db, inv_id,
-            [e.get("message_id") for e in (parsed.get("new_events") or []) if e.get("message_id")],
+        messages = [m for m in messages_by_id.values() if m]
+        await apply_rulebook_result(
+            self.db, self.user_id, inv, parsed, messages,
+            my_email=USER_EMAIL, now_iso=_iso(when),
+            considered_ids=[m.get("id") for m in messages if m.get("id")],
         )
         return await self.db.invoices.find_one({"_id": inv_id}), parsed
 
@@ -183,7 +163,6 @@ class Set5Test:
             body="You're right, adjusting to $1,250.",
             when=datetime(2026, 7, 13, 12, 0, tzinfo=timezone.utc),
         )
-        self._check("G1 correction language", _is_amount_correction(cmsg))
         # Simulate the bug class: message is in global processed_messages but NOT yet on timeline
         await self.db.processed_messages.update_one(
             {"user_id": self.user_id, "message_id": c_id},
@@ -444,8 +423,8 @@ class Set5Test:
         )
         self._check("G5 claim pending", bool(inv.get("payment_claim_pending")))
         self._check(
-            "G5 disputed + says paid",
-            inv["status"] == "disputed",
+            "G5 model status (partial, claim uncleared)",
+            inv["status"] == "partially_paid",
             inv.get("status"),
         )
 

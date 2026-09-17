@@ -1,9 +1,8 @@
-"""Unified Gmail sync — one job for onboarding (90d) and incremental (1h).
+"""Unified mailbox sync helpers.
 
-Used by:
-- POST /seed/start (onboarding, 90 days → curation candidates)
-- POST /scan/sync (manual, last hour → ledger)
-- Background loop every SYNC_INTERVAL_SECONDS (default 1h, last hour → ledger)
+Hourly / Sync now re-evaluates tracked invoices from Gmail/Outlook.
+New ledger rows come from the connected invoicing tool (QuickBooks), not
+from a 90-day sent-mail seed.
 """
 from __future__ import annotations
 
@@ -107,13 +106,12 @@ def sent_mail_queries(mode: SyncMode, window: str | None = None) -> list[str]:
 
 async def _onboarding_allows_incremental(db, user_id) -> bool:
     state = await db.gmail_sync_state.find_one({"user_id": user_id}) or {}
-    if state.get("curation_complete") or state.get("dashboard_unlocked") or state.get("watching_sent_mail"):
-        return True
-    # QBO import during Path B must not unlock incremental before dashboard unlock / curation.
-    if state.get("awaiting_curation"):
-        return False
-    n = await db.invoices.count_documents({"user_id": user_id})
-    return n > 0
+    return bool(
+        state.get("curation_complete")
+        or state.get("dashboard_unlocked")
+        or state.get("onboarding_completed_at")
+        or state.get("watching_sent_mail")
+    )
 
 
 async def fetch_filtered_sent_mail(
@@ -290,7 +288,10 @@ async def run_gmail_sync(
     job_id=None,
     confidence_min: float | None = None,
 ) -> dict[str, Any]:
-    """Single sync entrypoint. Onboarding → seed candidates; incremental → enriched ledger rows."""
+    """Mailbox helper. Onboarding seed is retired; incremental ledger writes are retired."""
+    if mode == "onboarding":
+        return await run_onboarding_sync(db, user_id, job_id)
+
     now_iso = datetime.now(timezone.utc).isoformat()
     counts: dict[str, Any] = {
         "mode": mode,
@@ -399,121 +400,18 @@ async def run_gmail_sync(
             logger.info("sync DONE user=%s mode=%s empty", user_id, mode)
             return counts
 
-        await _set_job_phase("enriching", counts)
-        ai_stats: dict[str, int] = {}
-
-        if mode == "onboarding":
-            if not job_id:
-                raise ValueError("onboarding sync requires job_id")
-            await db.seed_candidates.delete_many({"user_id": user_id, "job_id": job_id})
-
-        # Streaming write: each finalized invoice conversation lands in the DB
-        # immediately so the UI can show it while the scan keeps running.
-        collapse_index: dict = {}
-        stream = {"candidates": 0, "created": 0}
-        new_invoices: list[dict] = []
-        due_prompts: list[dict] = []
-
-        async def _write_unit(rows: list[dict]) -> None:
-            enrich_candidates_with_prior_chases(rows, messages, my_email)
-            rows = collapse_followups_incremental(collapse_index, rows)
-            if not rows:
-                return
-            if mode == "onboarding":
-                for c in rows:
-                    c["job_id"] = job_id
-                await db.seed_candidates.insert_many(rows)
-                stream["candidates"] += len(rows)
-                await db.seed_jobs.update_one(
-                    {"_id": job_id},
-                    {"$set": {
-                        "counts.candidates": stream["candidates"],
-                        "updated_at": datetime.now(timezone.utc).isoformat(),
-                    }},
-                )
-            else:
-                stream["candidates"] += len(rows)
-                created, unit_new, unit_prompts = await _candidates_to_ledger(
-                    db, user_id, rows, now_iso,
-                )
-                stream["created"] += created
-                new_invoices.extend(unit_new)
-                due_prompts.extend(unit_prompts)
-
-        if os.environ.get("OPENAI_API_KEY"):
-            await _set_job_phase("ai", counts)
-            # Onboarding (90d seed) + incremental new-invoice extract both use
-            # rulebook_seed_scan.txt + prepared JSON I/O.
-            _, ai_stats = await run_seed_ai_extraction(
-                access,
-                messages,
-                my_email,
-                user_id=user_id,
-                job_id=job_id or user_id,
-                now_iso=now_iso,
-                confidence_min=confidence_min,
-                on_unit=_write_unit,
-                use_seed_rulebook=True,
-            )
-        else:
-            logger.warning("sync FALLBACK mode=%s reason=no_openai_key", mode)
-            fallback = _regex_fallback_candidates(
-                messages, my_email,
-                user_id=user_id, job_id=job_id or user_id,
-                now_iso=now_iso,
-            )
-            if fallback:
-                await _write_unit(fallback)
-
-        counts.update(ai_stats)
-        counts["candidates"] = stream["candidates"]
-
-        if mode == "onboarding":
-            await db.seed_jobs.update_one(
-                {"_id": job_id},
-                {"$set": {
-                    "status": "complete",
-                    "phase": "curation",
-                    "counts": counts,
-                    "finished_at": now_iso,
-                    "updated_at": now_iso,
-                }},
-            )
-        else:
-            counts["invoices_created"] = stream["created"]
-            counts["new_invoices"] = new_invoices
-            counts["live_detected"] = stream["created"]
-
-            await dedupe_existing_invoices(db, user_id, now_iso)
-
-            existing_unread = list(state.get("unread_detections") or [])
-            seen_msg = {d.get("source_message_id") for d in existing_unread}
-            for det in new_invoices:
-                if det.get("source_message_id") not in seen_msg:
-                    existing_unread.append(det)
-                    seen_msg.add(det["source_message_id"])
-
-            existing_prompts = list(state.get("pending_due_date_prompts") or [])
-            seen_inv = {p.get("invoice_id") for p in existing_prompts}
-            for p in due_prompts:
-                if p.get("invoice_id") not in seen_inv:
-                    existing_prompts.append(p)
-                    seen_inv.add(p.get("invoice_id"))
-
+        # Sent mail is not a ledger source — skip AI extract / candidate writes.
+        logger.info("gmail_sync skip sent-mail ledger extract mode=%s user=%s", mode, user_id)
+        if mode == "incremental":
             await db.gmail_sync_state.update_one(
                 {"user_id": user_id},
                 {"$set": {
                     "last_synced_at": now_iso,
-                    "last_detected_at": now_iso,
                     "last_sync_status": "ok",
-                    "last_live_detection_count": created,
-                    "unread_detections": existing_unread,
-                    "pending_due_date_prompts": existing_prompts,
                     "watching_sent_mail": True,
                 }},
                 upsert=True,
             )
-
         logger.info("sync DONE user=%s mode=%s counts=%s", user_id, mode, counts)
         return counts
     finally:
@@ -526,7 +424,21 @@ async def run_gmail_sync(
 
 
 async def run_onboarding_sync(db, user_id, job_id) -> dict[str, Any]:
-    return await run_gmail_sync(db, user_id, "onboarding", job_id=job_id)
+    """Retired — invoices come from the invoicing tool, not a 90-day seed."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    if job_id:
+        await db.seed_jobs.update_one(
+            {"_id": job_id},
+            {"$set": {
+                "status": "complete",
+                "phase": "retired",
+                "counts": {"candidates": 0, "retired": True},
+                "finished_at": now_iso,
+                "updated_at": now_iso,
+            }},
+        )
+    logger.info("onboarding seed retired user=%s job=%s", user_id, job_id)
+    return {"mode": "onboarding", "retired": True, "candidates": 0}
 
 
 async def ack_detections(db, user_id, detection_ids: list[str] | None = None) -> dict:

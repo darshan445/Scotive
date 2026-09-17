@@ -3,7 +3,6 @@ from datetime import date
 
 from draft_tone import (
     LABEL_CLARIFYING,
-    LABEL_FINAL,
     LABEL_FIRM,
     LABEL_FRIENDLY,
     apply_note_tone_nudge,
@@ -28,10 +27,11 @@ def test_ladder_step_reached_thresholds():
 
 
 def test_tone_for_ladder_step():
-    assert tone_for_ladder_step(0) == "friendly"
-    assert tone_for_ladder_step(1) == "friendly"
-    assert tone_for_ladder_step(2) == "firm"
-    assert tone_for_ladder_step(3) == "final"
+    assert tone_for_ladder_step(0, OFFSETS) == "friendly"
+    assert tone_for_ladder_step(1, OFFSETS) == "friendly"
+    assert tone_for_ladder_step(2, OFFSETS) == "friendly"
+    assert tone_for_ladder_step(3, OFFSETS) == "firm"
+    assert tone_for_ladder_step(4, OFFSETS) == "final"
 
 
 def test_fresh_invoiced_friendly():
@@ -57,17 +57,17 @@ def test_due_date_reminder_friendly():
     assert r["step_index"] == 1
 
 
-def test_firm_followup_ladder():
-    inv = {"status": "overdue", "due_date": "2026-07-17"}  # 3 days past due
+def test_third_friendly_ladder():
+    inv = {"status": "overdue", "due_date": "2026-07-17"}  # 3 days past due → step 2
     r = derive_draft_tone(inv, offsets=OFFSETS, today=TODAY)
-    assert r["tone_label"] == LABEL_FIRM
+    assert r["tone_label"] == LABEL_FRIENDLY
     assert r["step_index"] == 2
 
 
-def test_final_notice_ladder():
-    inv = {"status": "overdue", "due_date": "2026-07-10"}  # 10 days past due
+def test_firm_when_last_offset_reached():
+    inv = {"status": "overdue", "due_date": "2026-07-10"}  # 10 days past due → step 3
     r = derive_draft_tone(inv, offsets=OFFSETS, today=TODAY)
-    assert r["tone_label"] == LABEL_FINAL
+    assert r["tone_label"] == LABEL_FIRM
     assert r["step_index"] == 3
 
 
@@ -138,12 +138,12 @@ def test_resolve_note_nudges_label_not_persisted_base():
 
 
 def test_current_escalation_step_advances():
-    # Calendar says pre-due, but post-chase has advanced to firm step
+    # Calendar says pre-due, but owner already advanced to Firm
     inv = {
         "status": "invoiced",
         "due_date": "2026-07-23",  # step 0 by calendar
-        "current_escalation_step": 2,
+        "current_escalation_step": 3,
     }
     r = derive_draft_tone(inv, offsets=OFFSETS, today=TODAY)
     assert r["tone_label"] == LABEL_FIRM
-    assert r["step_index"] == 2
+    assert r["step_index"] == 3

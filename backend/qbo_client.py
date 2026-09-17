@@ -40,6 +40,7 @@ async def qbo_query(
     sql: str,
     *,
     env: Optional[str] = None,
+    include: Optional[str] = None,
 ) -> dict[str, Any]:
     """Run a QBO query; returns parsed QueryResponse (or empty dict)."""
     base = api_base_url(env)
@@ -47,6 +48,8 @@ async def qbo_query(
         f"{base}/v3/company/{realm_id}/query"
         f"?query={quote(sql)}&minorversion={QBO_MINOR_VERSION}"
     )
+    if include:
+        url += f"&include={include}"
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Accept": "application/json",
@@ -72,9 +75,12 @@ async def qbo_get(
     path: str,
     *,
     env: Optional[str] = None,
+    include: Optional[str] = None,
 ) -> dict[str, Any]:
     base = api_base_url(env)
     url = f"{base}/v3/company/{realm_id}/{path.lstrip('/')}?minorversion={QBO_MINOR_VERSION}"
+    if include:
+        url += f"&include={include}"
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Accept": "application/json",
@@ -200,22 +206,28 @@ async def create_payment_against_invoice(
     return data.get("Payment") or data
 
 
-async def list_unpaid_invoices(
+async def list_invoices(
     access_token: str,
     realm_id: str,
     *,
     env: Optional[str] = None,
 ) -> list[dict[str, Any]]:
-    """All Invoice entities with Balance > 0 (paginated)."""
+    """All Invoice entities (any balance / status), paginated."""
     out: list[dict[str, Any]] = []
     start = 1
     while True:
         sql = (
-            "SELECT * FROM Invoice WHERE Balance > '0' "
+            "SELECT * FROM Invoice "
             f"ORDERBY MetaData.LastUpdatedTime "
             f"STARTPOSITION {start} MAXRESULTS {PAGE_SIZE}"
         )
-        qr = await qbo_query(access_token, realm_id, sql, env=env)
+        try:
+            qr = await qbo_query(
+                access_token, realm_id, sql, env=env, include="invoiceLink",
+            )
+        except Exception as e:
+            logger.warning("QBO list invoices with invoiceLink failed (%s); retrying without", e)
+            qr = await qbo_query(access_token, realm_id, sql, env=env)
         batch = qr.get("Invoice") or []
         if isinstance(batch, dict):
             batch = [batch]
@@ -224,6 +236,16 @@ async def list_unpaid_invoices(
             break
         start += PAGE_SIZE
     return out
+
+
+async def list_unpaid_invoices(
+    access_token: str,
+    realm_id: str,
+    *,
+    env: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """Compatibility alias — import now pulls every invoice, not only unpaid."""
+    return await list_invoices(access_token, realm_id, env=env)
 
 
 async def fetch_customers_by_ids(
@@ -291,7 +313,9 @@ async def fetch_invoices_by_ids(
         quoted = ", ".join(f"'{iid}'" for iid in chunk)
         sql = f"SELECT * FROM Invoice WHERE Id IN ({quoted})"
         try:
-            qr = await qbo_query(access_token, realm_id, sql, env=env)
+            qr = await qbo_query(
+                access_token, realm_id, sql, env=env, include="invoiceLink",
+            )
             rows = qr.get("Invoice") or []
             if isinstance(rows, dict):
                 rows = [rows]
@@ -307,6 +331,7 @@ async def fetch_invoices_by_ids(
                 try:
                     data = await qbo_get(
                         access_token, realm_id, f"invoice/{iid}", env=env,
+                        include="invoiceLink",
                     )
                     inv = data.get("Invoice") or data
                     if inv.get("Id"):

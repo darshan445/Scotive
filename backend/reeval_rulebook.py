@@ -14,6 +14,7 @@ from typing import Any, Optional
 import httpx
 
 from client_sweep import _extract_email_addr, preprocess_body
+from ledger_reconcile import parse_email_date
 from promise_dates import resolve_relative_date
 from seed_rulebook import (
     _msg_date_iso,
@@ -34,6 +35,7 @@ logger = logging.getLogger("scotive.reeval_rulebook")
 RULEBOOK_PATH = Path(__file__).resolve().parent / "prompts" / "rulebook_reeval.txt"
 
 _RULEBOOK_CACHE: str | None = None
+_RULEBOOK_MTIME: float | None = None
 
 # Rulebook event type → client_sweep / _write_event type
 _EVENT_TYPE_MAP = {
@@ -65,9 +67,14 @@ LLM_IO_LOG_PATH = Path(
 
 
 def load_reeval_rulebook() -> str:
-    global _RULEBOOK_CACHE
-    if _RULEBOOK_CACHE is None:
+    global _RULEBOOK_CACHE, _RULEBOOK_MTIME
+    try:
+        mtime = RULEBOOK_PATH.stat().st_mtime
+    except OSError:
+        mtime = None
+    if _RULEBOOK_CACHE is None or mtime != _RULEBOOK_MTIME:
         _RULEBOOK_CACHE = RULEBOOK_PATH.read_text(encoding="utf-8")
+        _RULEBOOK_MTIME = mtime
     return _RULEBOOK_CACHE
 
 
@@ -131,8 +138,20 @@ def build_tracked_state(
         "paid_amount": paid,
         "balance_remaining": bal_f,
         "disputed_claim_amount": claimed_f,
+        "as_of_date": datetime.now(timezone.utc).date().isoformat(),
         "processed_message_ids": list(processed_message_ids),
     }
+
+
+def sort_messages_oldest_first(messages: list[dict]) -> list[dict]:
+    """Rulebook payload order. Drawer newest-first is UI only."""
+    def _ts(m: dict) -> float:
+        dt = parse_email_date(m.get("date"))
+        if dt:
+            return dt.timestamp()
+        return 0.0
+
+    return sorted(messages, key=_ts)
 
 
 def build_reeval_input(
@@ -155,7 +174,7 @@ def build_reeval_input(
     if anchor_invoice_ref:
         payload["anchor_invoice_ref"] = anchor_invoice_ref
 
-    for m in messages:
+    for m in sort_messages_oldest_first(messages):
         mid = m.get("id")
         if not mid:
             continue
@@ -228,29 +247,11 @@ def apply_promise_date_resolution(parsed: dict) -> dict:
         data["date"] = resolved
         if resolved:
             latest_resolved = resolved
-    if latest_resolved:
+    # Chips get resolved dates. Top-level promise_date is the model's current
+    # state — only fill it when status is still promised. A later retract in
+    # the same thread must not keep a stale date from an earlier promise event.
+    if latest_resolved and normalize_reeval_status(parsed.get("status")) == "promised":
         parsed["promise_date"] = latest_resolved
-    return parsed
-
-
-def enforce_dispute_resolution(parsed: dict, tracked_state: dict) -> dict:
-    """Clear disputed_claim_amount when a correction resolves the dispute."""
-    events = parsed.get("new_events") or []
-    last_dispute_idx = None
-    last_correction_idx = None
-    for i, e in enumerate(events):
-        if e.get("type") == "dispute":
-            last_dispute_idx = i
-        if e.get("type") == "amount_correction":
-            last_correction_idx = i
-
-    if last_dispute_idx is not None:
-        if last_correction_idx is not None and last_correction_idx > last_dispute_idx:
-            parsed["disputed_claim_amount"] = None
-    elif last_correction_idx is not None:
-        parsed["disputed_claim_amount"] = None
-    elif tracked_state.get("disputed_claim_amount") is None:
-        parsed["disputed_claim_amount"] = None
     return parsed
 
 
@@ -375,15 +376,13 @@ async def extract_reeval_with_rulebook(
                 raise
             _write_llm_io("OUTPUT (raw from LLM)", client_email, raw_parsed)
 
-            # Post-process order matches the reference reeval harness:
-            # null-string scrub → drop already-processed events → promise dates
-            # → dispute claim safety net.
+            # Date math for promise chips lives here. Status / amount / claim
+            # come from the model — do not replay events to overwrite them.
             parsed = normalize_null_strings(dict(raw_parsed))
             parsed = filter_new_events_to_unprocessed(parsed, tracked_state)
             parsed = apply_promise_date_resolution(parsed)
-            parsed = enforce_dispute_resolution(parsed, tracked_state)
             _write_llm_io(
-                "OUTPUT (after null/filter/promise/dispute post-process)",
+                "OUTPUT (after null/filter/promise-date)",
                 client_email,
                 parsed,
             )

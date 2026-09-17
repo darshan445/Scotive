@@ -262,8 +262,8 @@ async def _counts_dict(fetched=0, filtered_in=0, ai_extracted=0, invoices_create
 
 
 async def run_historical_scan(db, user_id, job_id, months: int = 12):
-    """Deprecated — use onboarding seed (90d) via POST /seed/start."""
-    logger.warning("run_historical_scan deprecated user=%s job=%s months=%s", user_id, job_id, months)
+    """Retired — invoices come from the invoicing tool, not a mailbox seed."""
+    logger.warning("run_historical_scan retired user=%s job=%s months=%s", user_id, job_id, months)
     from gmail_sync import run_onboarding_sync
     await run_onboarding_sync(db, user_id, job_id)
 

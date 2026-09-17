@@ -103,15 +103,14 @@ async def detect_accounting_invoices(
 ) -> list[dict[str, Any]]:
     """Find accounting-tool invoice notifications and auto-track.
 
-    When QuickBooks is connected, skip Intuit/QuickBooks notification emails
-    (QBO API / webhooks are the source of truth — avoids duplicate ledger rows).
+    Retired: invoices enter the ledger from the invoicing-tool API (QBO),
+    not from notification emails.
     """
-    from live_detection import (
-        _flip_overdue_if_needed,
-        _ignored_message_ids,
-        _onboarding_allows_live,
-        _should_skip_message,
-    )
+    _ = (db, user_id, access, my_email)
+    return []
+
+
+# Remainder of this module is unused: invoices come from QBO, not notify mail.
 
     if not await _onboarding_allows_live(db, user_id):
         return []

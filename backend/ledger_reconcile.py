@@ -442,18 +442,21 @@ async def apply_invoice_correction(
     quote: str | None = None,
     record_event: bool = True,
 ) -> dict:
-    """The user revised an existing invoice (e.g. "corrected: $300").
+    """The user revised an existing invoice amount (e.g. "corrected: $300").
 
-    Updates amount/balance on the SAME row — never a second row — resets a
-    dispute back to normal tracking, and logs an invoice_corrected event.
+    Updates amount/balance on the SAME row — never a second row. Clears a
+    dispute claim. Conversation status is not this function's job: first-pass
+    and Sync now write status from the model. This path is seed merge of a
+    later send with a new amount.
     """
     paid = float(inv.get("paid_amount") or 0)
     new_amt = float(new_amount)
     new_bal = round(max(new_amt - paid, 0), 2)
     due = due_date or inv.get("due_date")
+    prev = inv.get("status") or "invoiced"
 
-    if inv.get("status") in ("paid", "written_off"):
-        status = inv["status"]
+    if prev in ("paid", "written_off"):
+        status = prev
     elif new_bal <= 0.005:
         status = "paid"
     else:
@@ -466,8 +469,8 @@ async def apply_invoice_correction(
         "amount": new_amt,
         "balance_remaining": new_bal,
         "status": status,
-        "promise_date": None,
         "disputed_claim_amount": None,
+        "promise_date": None,
         "chasing_paused": False,
         "status_updated_at": now_iso,
         "last_activity_at": now_iso,

@@ -1,4 +1,8 @@
-"""Import unpaid QuickBooks invoices into the Scotive ledger (Module 2)."""
+"""Import QuickBooks invoices into the Scotive ledger (Module 2).
+
+Every QBO invoice is fetched. Paid (Balance <= 0) rows land as status=paid
+and are not conversation-matched. Open rows keep the existing chase pipeline.
+"""
 from __future__ import annotations
 
 import logging
@@ -8,10 +12,19 @@ from typing import Any, Optional
 from client_merge import resolve_client_key_for_user
 from invoice_lifecycle import apply_past_due_transitions
 from ledger_reconcile import enrich_invoice_doc, find_invoice_by_key, normalize_invoice_ref
-from qbo_client import fetch_company_info, fetch_customers_by_ids, list_unpaid_invoices
+from cadence import extract_qbo_pay_url, invoice_pay_url
+from qbo_client import fetch_company_info, fetch_customers_by_ids, list_invoices
 from qbo_oauth import QboAuthError, get_qbo_access_token
 
 logger = logging.getLogger("scotive.qbo_import")
+
+
+async def set_import_progress(db, user_id, **fields) -> None:
+    now_iso = datetime.now(timezone.utc).isoformat()
+    patch = {f"import_progress.{k}": v for k, v in fields.items()}
+    patch["import_progress.updated_at"] = now_iso
+    patch["updated_at"] = now_iso
+    await db.qbo_connections.update_one({"user_id": user_id}, {"$set": patch})
 
 
 def _customer_email(customer: Optional[dict]) -> Optional[str]:
@@ -66,6 +79,7 @@ def map_qbo_invoice_to_doc(
     doc_number = (invoice.get("DocNumber") or "").strip() or None
     txn_date = _qbo_date(invoice.get("TxnDate"))
     due_date = _qbo_date(invoice.get("DueDate"))
+    qbo_paid = balance <= 0.005
 
     doc: dict[str, Any] = {
         "user_id": user_id,
@@ -75,8 +89,8 @@ def map_qbo_invoice_to_doc(
         "counterparty_email": email or "",
         "counterparty_name": _customer_name(customer, invoice),
         "amount": amount,
-        "balance_remaining": balance,
-        "paid_amount": paid,
+        "balance_remaining": 0.0 if qbo_paid else balance,
+        "paid_amount": float(amount) if qbo_paid else paid,
         "currency": currency,
         "invoice_ref": doc_number,
         "due_date": due_date,
@@ -87,13 +101,27 @@ def map_qbo_invoice_to_doc(
         "source_subject": f"QuickBooks invoice {doc_number}" if doc_number else "QuickBooks invoice",
         "source": "quickbooks",
         "kind": "invoice_sent",
-        "status": "invoiced",
+        "pay_url": extract_qbo_pay_url(invoice),
+        "status": "paid" if qbo_paid else "invoiced",
         "confidence": 1.0,
         "evidence_sentence": "Imported from QuickBooks",
         "created_at": now_iso,
         "last_activity_at": now_iso,
         "updated_at": now_iso,
     }
+    if qbo_paid:
+        paid_date = txn_date or now_iso[:10]
+        meta = invoice.get("MetaData") or {}
+        for key in ("LastUpdatedTime", "CreateTime"):
+            raw = meta.get(key)
+            if isinstance(raw, str) and len(raw) >= 10:
+                paid_date = raw[:10]
+                break
+        doc["paid_at"] = now_iso
+        doc["paid_via"] = "quickbooks"
+        doc["qbo_paid_date"] = paid_date
+        doc["chasing_paused"] = False
+        doc["evidence_sentence"] = f"Paid in QuickBooks · {paid_date}"
     enrich_invoice_doc(doc, email or "")
     if not email and qbo_customer_id:
         doc["client_identity_key"] = f"qbo:customer:{qbo_customer_id}"
@@ -157,11 +185,24 @@ async def upsert_qbo_ledger_invoice(
         "updated_at": now_iso,
         "last_activity_at": now_iso,
     }
+    pay_url = doc.get("pay_url") or invoice_pay_url(doc)
+    if pay_url:
+        money_fields["pay_url"] = pay_url
     if email:
         money_fields["counterparty_email"] = email
         money_fields["client_identity_key"] = doc["client_identity_key"]
     elif doc.get("client_identity_key"):
         money_fields["client_identity_key"] = doc["client_identity_key"]
+
+    if doc.get("status") == "paid":
+        money_fields["status"] = "paid"
+        money_fields["paid_at"] = doc.get("paid_at") or now_iso
+        money_fields["paid_via"] = "quickbooks"
+        money_fields["qbo_paid_date"] = doc.get("qbo_paid_date")
+        money_fields["chasing_paused"] = False
+        money_fields["tracking_paused"] = False
+        money_fields["watching_for_reply"] = False
+        money_fields["evidence_sentence"] = doc.get("evidence_sentence")
 
     if merge_target:
         if linking_gmail:
@@ -206,8 +247,8 @@ async def upsert_qbo_ledger_invoice(
     return "created", res.inserted_id
 
 
-async def import_unpaid_invoices(db, user_id) -> dict[str, Any]:
-    """Pull unpaid QBO invoices into the ledger. Idempotent by qbo_id."""
+async def import_unpaid_invoices(db, user_id, *, force: bool = True) -> dict[str, Any]:
+    """Pull all QBO invoices into the ledger. Paid rows skip Gmail matching."""
     conn = await db.qbo_connections.find_one({"user_id": user_id})
     if not conn or conn.get("status") != "connected":
         raise QboAuthError("No QuickBooks connection")
@@ -216,90 +257,138 @@ async def import_unpaid_invoices(db, user_id) -> dict[str, Any]:
     if not realm_id:
         raise QboAuthError("QuickBooks connection missing realm_id")
 
-    env = conn.get("env")
-    access = await get_qbo_access_token(db, user_id)
-    now_iso = datetime.now(timezone.utc).isoformat()
+    if not force and conn.get("last_invoice_import_at"):
+        existing = await db.invoices.count_documents({
+            "user_id": user_id,
+            "qbo_id": {"$type": "string"},
+        })
+        if existing:
+            await set_import_progress(
+                db, user_id,
+                status="complete", total=existing, imported=existing,
+            )
+            counts = {
+                "fetched": 0,
+                "created": 0,
+                "updated": 0,
+                "merged": 0,
+                "skipped": 0,
+                "paid": 0,
+                "past_due_flipped": 0,
+                "skipped_already_imported": existing,
+            }
+            try:
+                from qbo_conversation import enqueue_qbo_conversation_match
+                counts["conversation_match"] = await enqueue_qbo_conversation_match(db, user_id)
+            except Exception as e:
+                logger.exception("QBO conversation match enqueue failed: %s", e)
+                counts["conversation_match"] = {"errors": 1, "skipped": "exception"}
+            logger.info("QBO import skipped (already imported) user=%s counts=%s", user_id, counts)
+            return counts
 
-    # Company name backfill (best-effort)
-    if not (conn.get("company_name") or "").strip():
-        info = await fetch_company_info(access, realm_id, env=env)
-        name = None
-        if info:
-            name = (info.get("CompanyName") or info.get("LegalName") or "").strip() or None
-        if name:
-            await db.qbo_connections.update_one(
-                {"user_id": user_id},
-                {"$set": {"company_name": name, "updated_at": now_iso}},
+    env = conn.get("env")
+    await set_import_progress(db, user_id, status="running", total=0, imported=0)
+    try:
+        access = await get_qbo_access_token(db, user_id)
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        # Company name backfill (best-effort)
+        if not (conn.get("company_name") or "").strip():
+            info = await fetch_company_info(access, realm_id, env=env)
+            name = None
+            if info:
+                name = (info.get("CompanyName") or info.get("LegalName") or "").strip() or None
+            if name:
+                await db.qbo_connections.update_one(
+                    {"user_id": user_id},
+                    {"$set": {"company_name": name, "updated_at": now_iso}},
+                )
+
+        invoices = await list_invoices(access, realm_id, env=env)
+        await set_import_progress(db, user_id, status="running", total=len(invoices))
+        cust_ids = []
+        for inv in invoices:
+            cid = ((inv.get("CustomerRef") or {}).get("value"))
+            if cid:
+                cust_ids.append(str(cid))
+        customers = await fetch_customers_by_ids(access, realm_id, cust_ids, env=env)
+
+        counts = {
+            "fetched": len(invoices),
+            "created": 0,
+            "updated": 0,
+            "merged": 0,
+            "skipped": 0,
+            "paid": 0,
+            "past_due_flipped": 0,
+        }
+
+        processed = 0
+        for inv in invoices:
+            qbo_id = str(inv.get("Id") or "")
+            if not qbo_id:
+                counts["skipped"] += 1
+            else:
+                try:
+                    float(inv.get("Balance") or 0)
+                except (TypeError, ValueError):
+                    counts["skipped"] += 1
+                else:
+                    cid = str(((inv.get("CustomerRef") or {}).get("value")) or "")
+                    customer = customers.get(cid) if cid else None
+                    doc = map_qbo_invoice_to_doc(
+                        inv, customer, user_id=user_id, realm_id=realm_id, now_iso=now_iso,
+                    )
+                    if doc.get("status") == "paid":
+                        counts["paid"] += 1
+                    try:
+                        outcome, _ = await upsert_qbo_ledger_invoice(db, user_id, doc, now_iso=now_iso)
+                        counts[outcome] = counts.get(outcome, 0) + 1
+                    except Exception as e:
+                        logger.exception("QBO upsert failed qbo_id=%s: %s", qbo_id, e)
+                        counts["skipped"] += 1
+            processed += 1
+            await set_import_progress(
+                db, user_id,
+                status="running",
+                total=len(invoices),
+                imported=processed,
             )
 
-    invoices = await list_unpaid_invoices(access, realm_id, env=env)
-    cust_ids = []
-    for inv in invoices:
-        cid = ((inv.get("CustomerRef") or {}).get("value"))
-        if cid:
-            cust_ids.append(str(cid))
-    customers = await fetch_customers_by_ids(access, realm_id, cust_ids, env=env)
+        counts["past_due_flipped"] = await apply_past_due_transitions(db, user_id)
 
-    counts = {
-        "fetched": len(invoices),
-        "created": 0,
-        "updated": 0,
-        "merged": 0,
-        "skipped": 0,
-        "past_due_flipped": 0,
-    }
-
-    for inv in invoices:
-        qbo_id = str(inv.get("Id") or "")
-        if not qbo_id:
-            counts["skipped"] += 1
-            continue
+        # Module 5: any previously-open QBO rows that are now Balance=0 → Paid.
         try:
-            balance = float(inv.get("Balance") or 0)
-        except (TypeError, ValueError):
-            counts["skipped"] += 1
-            continue
-        if balance <= 0:
-            counts["skipped"] += 1
-            continue
-
-        cid = str(((inv.get("CustomerRef") or {}).get("value")) or "")
-        customer = customers.get(cid) if cid else None
-        doc = map_qbo_invoice_to_doc(
-            inv, customer, user_id=user_id, realm_id=realm_id, now_iso=now_iso,
-        )
-        try:
-            outcome, _ = await upsert_qbo_ledger_invoice(db, user_id, doc, now_iso=now_iso)
-            counts[outcome] = counts.get(outcome, 0) + 1
+            from qbo_paid_sync import sync_qbo_paid_status
+            counts["qbo_paid"] = await sync_qbo_paid_status(db, user_id)
         except Exception as e:
-            logger.exception("QBO upsert failed qbo_id=%s: %s", qbo_id, e)
-            counts["skipped"] += 1
+            logger.exception("QBO paid sync after import failed: %s", e)
+            counts["qbo_paid"] = {"errors": 1, "skipped": "exception"}
 
-    counts["past_due_flipped"] = await apply_past_due_transitions(db, user_id)
+        # Module 4: conversation match + status re-eval runs in the background
+        # so import / Next stay fast; dashboard shows pipeline progress.
+        try:
+            from qbo_conversation import enqueue_qbo_conversation_match
+            counts["conversation_match"] = await enqueue_qbo_conversation_match(db, user_id)
+        except Exception as e:
+            logger.exception("QBO conversation match enqueue failed: %s", e)
+            counts["conversation_match"] = {"errors": 1, "skipped": "exception"}
 
-    # Module 5: any previously-open QBO rows that are now Balance=0 → Paid.
-    try:
-        from qbo_paid_sync import sync_qbo_paid_status
-        counts["qbo_paid"] = await sync_qbo_paid_status(db, user_id)
-    except Exception as e:
-        logger.exception("QBO paid sync after import failed: %s", e)
-        counts["qbo_paid"] = {"errors": 1, "skipped": "exception"}
-
-    # Module 4: conversation match + status re-eval runs in the background
-    # so import / Next stay fast; dashboard shows pipeline progress.
-    try:
-        from qbo_conversation import enqueue_qbo_conversation_match
-        counts["conversation_match"] = await enqueue_qbo_conversation_match(db, user_id)
-    except Exception as e:
-        logger.exception("QBO conversation match enqueue failed: %s", e)
-        counts["conversation_match"] = {"errors": 1, "skipped": "exception"}
-
-    await db.qbo_connections.update_one(
-        {"user_id": user_id},
-        {"$set": {"last_invoice_import_at": now_iso, "updated_at": now_iso}},
-    )
-    logger.info("QBO import user=%s counts=%s", user_id, counts)
-    return counts
+        await db.qbo_connections.update_one(
+            {"user_id": user_id},
+            {"$set": {"last_invoice_import_at": now_iso, "updated_at": now_iso}},
+        )
+        await set_import_progress(
+            db, user_id,
+            status="complete",
+            total=max(counts.get("fetched", 0), processed),
+            imported=processed,
+        )
+        logger.info("QBO import user=%s counts=%s", user_id, counts)
+        return counts
+    except Exception:
+        await set_import_progress(db, user_id, status="error")
+        raise
 
 
 async def _purge_invoice_satellites(db, user_id, invoice_id) -> None:

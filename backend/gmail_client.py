@@ -141,7 +141,15 @@ async def mailbox_tokens_for_user(db, user_id) -> list[tuple[dict, str]]:
 # ---------------------------------------------------------------------------
 # Gmail search query → Unipile list params
 # ---------------------------------------------------------------------------
-_RE_AFTER_EPOCH = re.compile(r"\bafter:(\d+)\b", re.I)
+# Date forms first — `after:2025/09/16` must not be parsed as unix epoch 2025
+# (which becomes 1970-01-01 and full-history crawls the mailbox).
+_RE_AFTER_YMD = re.compile(r"\bafter:(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b", re.I)
+_RE_AFTER_ISO = re.compile(
+    r"\bafter:(\d{4}-\d{2}-\d{2}T[\d:.]+Z?)\b",
+    re.I,
+)
+# Unix seconds are 9+ digits (2001+). Years like 2025 must not match.
+_RE_AFTER_EPOCH = re.compile(r"\bafter:(\d{9,})\b", re.I)
 _RE_NEWER_THAN_D = re.compile(r"\bnewer_than:(\d+)d\b", re.I)
 _RE_IN_SENT = re.compile(r"\bin:sent\b", re.I)
 _RE_HAS_ATTACH = re.compile(r"\bhas:attachment\b", re.I)
@@ -164,11 +172,23 @@ _RE_STRIP_GROUP_OPS = re.compile(
 )
 
 
-def _epoch_to_unipile_after(epoch: int) -> str:
-    dt = datetime.fromtimestamp(epoch, tz=timezone.utc)
+def _dt_to_unipile_after(dt: datetime) -> str:
+    """Unipile `after` is exclusive ISO-8601 UTC (YYYY-MM-DDTHH:MM:SS.sssZ)."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
     # exclusive "after" — nudge 1ms earlier so boundary messages are kept
     dt = dt - timedelta(milliseconds=1)
     return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+
+
+def _epoch_to_unipile_after(epoch: int) -> str:
+    return _dt_to_unipile_after(datetime.fromtimestamp(epoch, tz=timezone.utc))
+
+
+def _ymd_to_unipile_after(year: int, month: int, day: int) -> str:
+    return _dt_to_unipile_after(datetime(year, month, day, tzinfo=timezone.utc))
 
 
 def _days_ago_unipile_after(days: int) -> str:
@@ -199,13 +219,27 @@ def parse_gmail_query(query: str) -> dict:
     any_emails: list[str] = []
     search_bits: list[str] = []
 
-    m = _RE_AFTER_EPOCH.search(q)
+    m = _RE_AFTER_YMD.search(q)
     if m:
-        after = _epoch_to_unipile_after(int(m.group(1)))
+        after = _ymd_to_unipile_after(int(m.group(1)), int(m.group(2)), int(m.group(3)))
     else:
-        m = _RE_NEWER_THAN_D.search(q)
+        m = _RE_AFTER_ISO.search(q)
         if m:
-            after = _days_ago_unipile_after(int(m.group(1)))
+            raw = m.group(1)
+            if not raw.endswith("Z"):
+                raw = raw + "Z"
+            try:
+                after = _dt_to_unipile_after(datetime.fromisoformat(raw.replace("Z", "+00:00")))
+            except ValueError:
+                after = raw if raw.endswith("Z") else raw + "Z"
+        else:
+            m = _RE_AFTER_EPOCH.search(q)
+            if m:
+                after = _epoch_to_unipile_after(int(m.group(1)))
+            else:
+                m = _RE_NEWER_THAN_D.search(q)
+                if m:
+                    after = _days_ago_unipile_after(int(m.group(1)))
 
     if _RE_IN_SENT.search(q):
         flags["sent_only"] = True
@@ -314,7 +348,7 @@ def _attendee_header(attendees) -> str:
     for a in attendees:
         if not isinstance(a, dict):
             continue
-        ident = (a.get("identifier") or "").strip()
+        ident = (a.get("identifier") or a.get("email") or "").strip()
         name = (a.get("display_name") or "").strip()
         if name and ident:
             parts.append(f"{name} <{ident}>")
@@ -325,9 +359,19 @@ def _attendee_header(attendees) -> str:
     return ", ".join(parts)
 
 
+_HREF_RE = re.compile(r'''(?i)href\s*=\s*["']([^"']+)["']''')
+
+
+def _html_hrefs(html: str) -> list[str]:
+    if not html:
+        return []
+    return [u for u in _HREF_RE.findall(html) if u]
+
+
 def _html_to_visible_text(html: str) -> str:
     if not html:
         return ""
+    hrefs = _html_hrefs(html)
     text = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", html)
     text = re.sub(r"(?i)<br\s*/?>", "\n", text)
     text = re.sub(r"(?i)</p>", "\n", text)
@@ -335,7 +379,11 @@ def _html_to_visible_text(html: str) -> str:
     text = unescape(text)
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
-    return re.sub(r"[ \t]{2,}", " ", text).strip()
+    text = re.sub(r"[ \t]{2,}", " ", text).strip()
+    missing = [h for h in hrefs if h not in text]
+    if missing:
+        text = f"{text} {' '.join(missing)}".strip()
+    return text
 
 
 def _format_date(raw_date) -> str:
@@ -376,13 +424,28 @@ def _parse_unipile_email(raw: dict, *, body_limit: int = 8000) -> Optional[dict]
     if not eid:
         return None
     headers = _header_map(raw)
-    from_h = _attendee_header(raw.get("from_attendee")) or headers.get("from", "")
-    to_h = _attendee_header(raw.get("to_attendees")) or headers.get("to", "")
-    cc_h = _attendee_header(raw.get("cc_attendees")) or headers.get("cc", "")
+    from_h = (
+        _attendee_header(raw.get("from_attendee") or raw.get("from"))
+        or headers.get("from", "")
+    )
+    to_h = (
+        _attendee_header(raw.get("to_attendees") or raw.get("to"))
+        or headers.get("to", "")
+    )
+    cc_h = (
+        _attendee_header(raw.get("cc_attendees") or raw.get("cc"))
+        or headers.get("cc", "")
+    )
     subject = raw.get("subject") or headers.get("subject", "") or ""
+    html_raw = str(raw.get("body") or "")
     body = (raw.get("body_plain") or "").strip()
-    if not body and raw.get("body"):
-        body = _html_to_visible_text(str(raw.get("body")))
+    if not body and html_raw:
+        body = _html_to_visible_text(html_raw)
+    else:
+        # body_plain omits <a href> — still need InvoiceLink tokens for matching.
+        for href in _html_hrefs(html_raw):
+            if href not in body:
+                body = f"{body} {href}".strip()
     if body_limit and body_limit > 0:
         body = body[:body_limit]
     atts = raw.get("attachments") or []
@@ -415,7 +478,7 @@ def _parse_unipile_email(raw: dict, *, body_limit: int = 8000) -> Optional[dict]
             elif isinstance(f, dict) and f.get("name"):
                 label_ids.append(str(f["name"]))
     date_s = _format_date(raw.get("date") or headers.get("date"))
-    snippet = (body or subject)[:160]
+    snippet = (raw.get("snippet") or body or subject)[:160]
     return {
         "id": eid,
         "thread_id": raw.get("thread_id") or "",
@@ -442,15 +505,12 @@ def _parse_unipile_email(raw: dict, *, body_limit: int = 8000) -> Optional[dict]
     }
 
 
-async def list_message_ids(access_token: str, query: str, max_pages: int = 20) -> list[str]:
-    """List Unipile email IDs matching a Gmail-style query (best-effort translation)."""
-    account_id = access_token
+async def _unipile_list_call_specs(account_id: str, query: str) -> tuple[list[dict], dict]:
     parsed = parse_gmail_query(query)
     folder = None
     if parsed["flags"]["sent_only"]:
         folder = await _sent_folder_id(account_id)
 
-    # Build one or more Unipile list calls (OR of many from: → any_email / multiple)
     call_specs: list[dict] = []
     base = {
         "after": parsed["after"],
@@ -466,7 +526,6 @@ async def list_message_ids(access_token: str, query: str, max_pages: int = 20) -
     elif from_addrs and to_addrs and set(from_addrs) == set(to_addrs):
         call_specs.append({**base, "any_email": ",".join(from_addrs)})
     elif len(from_addrs) > 1 and not to_addrs:
-        # Unipile `from` is singular — use any_email for multi-from client mail
         call_specs.append({**base, "any_email": ",".join(from_addrs)})
     elif len(from_addrs) == 1 and not to_addrs:
         call_specs.append({**base, "from_addr": from_addrs[0]})
@@ -476,11 +535,26 @@ async def list_message_ids(access_token: str, query: str, max_pages: int = 20) -
         if from_addrs:
             call_specs.append({**base, "any_email": ",".join(from_addrs + to_addrs)})
         else:
-            call_specs.append({**base, "to": to_addrs[0] if len(to_addrs) == 1 else None, "any_email": ",".join(to_addrs) if len(to_addrs) > 1 else None})
+            call_specs.append({
+                **base,
+                "to": to_addrs[0] if len(to_addrs) == 1 else None,
+                "any_email": ",".join(to_addrs) if len(to_addrs) > 1 else None,
+            })
     else:
         call_specs.append(base)
+    return call_specs, parsed
 
-    ids: list[str] = []
+
+async def _list_unipile_raw_items(
+    account_id: str,
+    query: str,
+    *,
+    max_pages: int = 20,
+    meta_only: bool = True,
+) -> list[dict]:
+    """Paginate Unipile list. Returns raw items, newest first."""
+    call_specs, parsed = await _unipile_list_call_specs(account_id, query)
+    items_out: list[dict] = []
     seen: set[str] = set()
     require_att = parsed["flags"]["require_attachment"]
 
@@ -492,7 +566,7 @@ async def list_message_ids(access_token: str, query: str, max_pages: int = 20) -
                     account_id,
                     limit=LIST_PAGE_SIZE,
                     cursor=cursor,
-                    meta_only=True,
+                    meta_only=meta_only,
                     after=spec.get("after"),
                     search=spec.get("search"),
                     from_addr=spec.get("from_addr"),
@@ -522,16 +596,120 @@ async def list_message_ids(access_token: str, query: str, max_pages: int = 20) -
                         if isinstance(a, dict)
                     )
                 ):
-                    # meta_only may omit attachments — keep and let full fetch filter later
-                    # Prefer keeping if has_attachments unknown
                     if item.get("has_attachments") is False:
                         continue
                 seen.add(eid)
-                ids.append(eid)
+                items_out.append(item)
             cursor = (data or {}).get("cursor")
             if not cursor or not items:
                 break
-    return ids
+    return items_out
+
+
+async def list_message_ids(access_token: str, query: str, max_pages: int = 20) -> list[str]:
+    """List Unipile email IDs matching a Gmail-style query (best-effort translation)."""
+    items = await _list_unipile_raw_items(access_token, query, max_pages=max_pages)
+    return [item["id"] for item in items if item.get("id")]
+
+
+async def list_messages_meta(
+    access_token: str,
+    query: str,
+    *,
+    max_pages: int = 4,
+    max_msgs: int = 80,
+) -> list[dict]:
+    """List + parse Unipile meta_only rows. No per-id GET (those 404 on stale list ids)."""
+    items = await _list_unipile_raw_items(access_token, query, max_pages=max_pages)
+    out: list[dict] = []
+    for item in items[:max_msgs]:
+        parsed = _parse_unipile_email(item, body_limit=0)
+        if parsed:
+            out.append(parsed)
+    return out
+
+
+async def list_messages(
+    access_token: str,
+    query: str,
+    *,
+    max_pages: int = 4,
+    max_msgs: int = 80,
+    body_limit: int = 12000,
+) -> list[dict]:
+    """List with bodies (no GET-by-id). Used to match invoice chrome in the send."""
+    items = await _list_unipile_raw_items(
+        access_token, query, max_pages=max_pages, meta_only=False,
+    )
+    out: list[dict] = []
+    for item in items[:max_msgs]:
+        parsed = _parse_unipile_email(item, body_limit=body_limit)
+        if parsed:
+            out.append(parsed)
+    return out
+
+
+async def list_thread_meta(
+    access_token: str,
+    thread_id: str,
+    *,
+    max_pages: int = 5,
+) -> list[dict]:
+    """meta_only messages in a thread (newest first from Unipile; we return chronological)."""
+    if not thread_id:
+        return []
+    account_id = access_token
+    raw: list[dict] = []
+    cursor = None
+    for _ in range(max_pages):
+        data = await unipile.list_emails(
+            account_id,
+            limit=LIST_PAGE_SIZE,
+            cursor=cursor,
+            meta_only=True,
+            thread_id=thread_id,
+        )
+        page = (data or {}).get("items") or []
+        raw.extend(page)
+        cursor = (data or {}).get("cursor")
+        if not cursor or not page:
+            break
+    parsed = [_parse_unipile_email(item, body_limit=0) for item in raw]
+    msgs = [m for m in parsed if m]
+    msgs.reverse()
+    return msgs
+
+
+async def list_thread_full(
+    access_token: str,
+    thread_id: str,
+    *,
+    max_pages: int = 5,
+    body_limit: int = 12000,
+) -> list[dict]:
+    """Full thread list (bodies). Avoids GET /emails/{unipile_id} 404s."""
+    if not thread_id:
+        return []
+    account_id = access_token
+    raw: list[dict] = []
+    cursor = None
+    for _ in range(max_pages):
+        data = await unipile.list_emails(
+            account_id,
+            limit=LIST_PAGE_SIZE,
+            cursor=cursor,
+            meta_only=False,
+            thread_id=thread_id,
+        )
+        page = (data or {}).get("items") or []
+        raw.extend(page)
+        cursor = (data or {}).get("cursor")
+        if not cursor or not page:
+            break
+    parsed = [_parse_unipile_email(item, body_limit=body_limit) for item in raw]
+    msgs = [m for m in parsed if m]
+    msgs.reverse()
+    return msgs
 
 
 async def get_message(

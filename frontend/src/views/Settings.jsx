@@ -34,7 +34,12 @@ import { useGmailConnection } from "@/hooks/useGmailConnection";
 import { useQboConnection } from "@/hooks/useQboConnection";
 import { QboConnectionPanel } from "@/components/QboConnectionPanel";
 
-const ESCALATION_LABELS = ["Pre-due nudge", "Due-date reminder", "Firm follow-up", "Final notice"];
+const ESCALATION_LABELS = [
+    "Before due (Friendly)",
+    "On due date (Friendly)",
+    "~7 days late (Friendly)",
+    "Your turn (Firm)",
+];
 
 export default function SettingsPage() {
     const { user, logout } = useAuth();
@@ -180,9 +185,7 @@ export default function SettingsPage() {
                         Settings
                     </h1>
                     <p className="type-body mt-2 text-sm">
-                        {settings.chasing_timing_enabled
-                            ? "Fine-tune when Scotive drafts each chase step. Due dates come from your invoices only."
-                            : "Gmail connection, digests, and account controls."}
+                        Mailbox, QuickBooks, and when Friendly reminders send.
                     </p>
                 </div>
 
@@ -190,13 +193,11 @@ export default function SettingsPage() {
 
                 <QboAccountSection status={qboStatus} />
 
-                {settings.chasing_timing_enabled ? (
-                    <ChasingTimingSection
-                        settings={settings}
-                        saving={saving}
-                        onSave={persist}
-                    />
-                ) : null}
+                <ChasingTimingSection
+                    settings={settings}
+                    saving={saving}
+                    onSave={persist}
+                />
 
                 {/* Late fees hidden for MVP — flip to true to restore. */}
                 {false ? (
@@ -239,7 +240,7 @@ function GmailAccountSection({ status }) {
         <section data-testid="settings-gmail-account">
             <h2 className="type-title text-xl">Email mailbox</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-                Connect Gmail or Outlook so Scotive can scan sent invoices and draft chasers from your inbox.
+                Connect Gmail or Outlook so Scotive can match invoice conversations and send follow-ups from your address.
             </p>
             <Separator className="my-4" />
             <ConnectionPanel status={status} />
@@ -252,7 +253,7 @@ function QboAccountSection({ status }) {
         <section data-testid="settings-qbo-account">
             <h2 className="type-title text-xl">QuickBooks Online</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-                Optional — connect to import open invoices. Status and chasing stay in Scotive; your mailbox still reads client replies.
+                Required — invoices are imported from QuickBooks. Status and chasing stay in Scotive; your mailbox matches client replies.
             </p>
             <Separator className="my-4" />
             <QboConnectionPanel status={status} />
@@ -263,15 +264,26 @@ function QboAccountSection({ status }) {
 // ---------------------------------------------------------------------------
 // Chasing timing
 // ---------------------------------------------------------------------------
-function ChasingTimingSection({ settings, saving, onSave }) {
-    const [offsets, setOffsets] = useState(settings.escalation_offsets);
-    const [followUpDays, setFollowUpDays] = useState(settings.follow_up_interval_days ?? 3);
-    useEffect(() => { setOffsets(settings.escalation_offsets); }, [settings.escalation_offsets]);
-    useEffect(() => { setFollowUpDays(settings.follow_up_interval_days ?? 3); }, [settings.follow_up_interval_days]);
+function padOffsets(arr) {
+    const base = Array.isArray(arr) && arr.length ? [...arr] : [-3, 0, 7, 9];
+    const defaults = [-3, 0, 7, 9];
+    while (base.length < 4) base.push(defaults[base.length] ?? 0);
+    return base.slice(0, 4);
+}
 
+function ChasingTimingSection({ settings, saving, onSave }) {
+    const [offsets, setOffsets] = useState(() => padOffsets(settings.escalation_offsets));
+    const [followUpDays, setFollowUpDays] = useState(settings.follow_up_interval_days ?? 3);
+    const [autoSend, setAutoSend] = useState(settings.friendly_auto_send !== false);
+    useEffect(() => { setOffsets(padOffsets(settings.escalation_offsets)); }, [settings.escalation_offsets]);
+    useEffect(() => { setFollowUpDays(settings.follow_up_interval_days ?? 3); }, [settings.follow_up_interval_days]);
+    useEffect(() => { setAutoSend(settings.friendly_auto_send !== false); }, [settings.friendly_auto_send]);
+
+    const paddedSaved = padOffsets(settings.escalation_offsets);
     const dirty =
-        JSON.stringify(offsets) !== JSON.stringify(settings.escalation_offsets)
-        || followUpDays !== (settings.follow_up_interval_days ?? 3);
+        JSON.stringify(offsets) !== JSON.stringify(paddedSaved)
+        || followUpDays !== (settings.follow_up_interval_days ?? 3)
+        || autoSend !== (settings.friendly_auto_send !== false);
 
     function updateOffset(i, value) {
         const v = parseInt(value, 10);
@@ -282,8 +294,21 @@ function ChasingTimingSection({ settings, saving, onSave }) {
 
     return (
         <Section
-            title="Chasing timing"
-            subtitle="When to draft each chase step relative to the due date. Past-due flips happen automatically on the next hourly sync — no grace buffer.">
+            title="Friendly cadence"
+            subtitle="While a client ignores an unpaid invoice, Scotive sends Friendly reminders from your mailbox on these days. After the last Friendly, you write and send Firm yourself. Cadence pauses if they reply, promise, dispute, or pay.">
+            <div className="flex items-center justify-between gap-4 max-w-lg mb-4">
+                <div>
+                    <div className="font-medium">Send Friendly reminders automatically</div>
+                    <div className="text-xs text-muted-foreground">
+                        Off = draft only, you still click send. Firm is never auto-sent.
+                    </div>
+                </div>
+                <Switch
+                    checked={autoSend}
+                    onCheckedChange={setAutoSend}
+                    data-testid="toggle-friendly-auto-send"
+                />
+            </div>
             <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground mb-4 max-w-lg">
                 Invoices move to <strong>Past due</strong> the day after their due date during the hourly sync (or Sync now).
             </div>
@@ -313,7 +338,8 @@ function ChasingTimingSection({ settings, saving, onSave }) {
                     ))}
                 </div>
                 <p className="text-[11px] text-muted-foreground">
-                    Negative values chase before due; positives chase after. Nothing is ever auto-sent — Scotive drafts on these days for your review.
+                    Negative values send before due; positives send after. The first three steps are Friendly.
+                    The last step is Firm — you review and send.
                 </p>
             </div>
 
@@ -333,7 +359,7 @@ function ChasingTimingSection({ settings, saving, onSave }) {
                     <span className="text-xs text-muted-foreground">days with no client reply before the next escalation draft</span>
                 </div>
                 <p className="text-[11px] text-muted-foreground">
-                    Applies after you send a follow-up. Scotive drafts the next step for your review — never auto-sends.
+                    After you send Firm yourself. Scotive drafts the next step for your review — it does not auto-send.
                 </p>
             </div>
 
@@ -343,7 +369,8 @@ function ChasingTimingSection({ settings, saving, onSave }) {
                 onSave={() => onSave({
                     escalation_offsets: offsets,
                     follow_up_interval_days: followUpDays,
-                }, "Chasing timing saved")}
+                    friendly_auto_send: autoSend,
+                }, "Cadence saved")}
                 testid="save-chasing-timing"
             />
         </Section>
@@ -406,22 +433,20 @@ function LateFeeSection({ settings, saving, onSave }) {
 // Gmail sync (read-only info)
 // ---------------------------------------------------------------------------
 function ScanWindowSection({ settings }) {
-    const seedDays = settings.seed_lookback_days ?? 90;
-    const syncLookback = settings.sync_lookback ?? "1h";
 
     return (
         <Section
-            title="Gmail sync"
-            subtitle="One job handles onboarding, hourly background sync, and Sync now.">
+            title="Mailbox sync"
+            subtitle="Sync now and the hourly job refresh QuickBooks invoices and match conversations.">
             <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground max-w-lg space-y-1">
                 <p>
-                    <strong>First setup:</strong> last <strong>{seedDays} days</strong> of sent mail → you pick what to track.
+                    <strong>Invoices:</strong> imported from QuickBooks. New and paid invoices sync on the hour (and when you hit Sync now).
                 </p>
                 <p>
-                    <strong>After that:</strong> sync runs every hour and checks the last <strong>{syncLookback}</strong> of sent mail (same as Sync now).
+                    <strong>Conversations:</strong> Scotive matches each open invoice to the Gmail or Outlook thread, then watches replies.
                 </p>
                 <p>
-                    <strong>Due dates:</strong> taken only from the invoice email or PDF. If none is found, you add it manually — Scotive never guesses.
+                    <strong>Due dates:</strong> taken from QuickBooks. If none is set, you add it manually — Scotive never guesses.
                 </p>
             </div>
         </Section>

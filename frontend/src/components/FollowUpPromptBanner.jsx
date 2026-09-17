@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 const STEP_LABEL_UI = {
     pre_due_nudge: "Pre-due nudge",
     due_reminder: "Due-date reminder",
+    friendly_followup: "Friendly reminder",
     firm_followup: "Firm follow-up",
     final_notice: "Final notice",
     promise_broken: "Broken promise",

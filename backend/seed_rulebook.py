@@ -40,6 +40,7 @@ logger = logging.getLogger("scotive.seed_rulebook")
 RULEBOOK_PATH = Path(__file__).resolve().parent / "prompts" / "rulebook_seed_scan.txt"
 
 _RULEBOOK_CACHE: str | None = None
+_RULEBOOK_MTIME: float | None = None
 
 # Rulebook status → ledger enriched_status (rulebook uses overdue, not past_due)
 _STATUS_MAP = {
@@ -55,9 +56,14 @@ _STATUS_MAP = {
 
 
 def load_seed_scan_rulebook() -> str:
-    global _RULEBOOK_CACHE
-    if _RULEBOOK_CACHE is None:
+    global _RULEBOOK_CACHE, _RULEBOOK_MTIME
+    try:
+        mtime = RULEBOOK_PATH.stat().st_mtime
+    except OSError:
+        mtime = None
+    if _RULEBOOK_CACHE is None or mtime != _RULEBOOK_MTIME:
         _RULEBOOK_CACHE = RULEBOOK_PATH.read_text(encoding="utf-8")
+        _RULEBOOK_MTIME = mtime
     return _RULEBOOK_CACHE
 
 

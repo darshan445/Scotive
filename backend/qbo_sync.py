@@ -1,8 +1,7 @@
 """Module 6 — Incremental QBO sync (CDC poll backup for webhooks).
 
-Pulls Invoice/Payment changes since last CDC cursor, upserts unpaid invoices,
-runs paid sync, enqueues conversation match. Same ledger + Gmail pipeline —
-no separate status/amount path.
+Pulls Invoice/Payment changes since last CDC cursor, upserts every invoice
+(paid and unpaid), runs paid sync, enqueues conversation match for open rows.
 """
 from __future__ import annotations
 
@@ -90,7 +89,7 @@ async def sync_qbo_cdc(db, user_id) -> dict[str, Any]:
         )
     except Exception as e:
         logger.exception("qbo.cdc fetch fail user=%s: %s", user_id, e)
-        # Fallback: full unpaid import once if CDC fails
+        # Fallback: full invoice import once if CDC fails
         try:
             from qbo_import import import_unpaid_invoices
             fallback = await import_unpaid_invoices(db, user_id)
@@ -106,7 +105,7 @@ async def sync_qbo_cdc(db, user_id) -> dict[str, Any]:
     counts["invoices_seen"] = len(invoices)
     counts["payments_seen"] = len(payments)
 
-    unpaid_rows = []
+    upsert_rows = []
     deleted_qbo_ids: list[str] = []
     for inv in invoices:
         if (inv.get("status") or "").lower() == "deleted":
@@ -115,12 +114,11 @@ async def sync_qbo_cdc(db, user_id) -> dict[str, Any]:
                 deleted_qbo_ids.append(qid)
             continue
         try:
-            bal = float(inv.get("Balance") or 0)
+            float(inv.get("Balance") or 0)
         except (TypeError, ValueError):
             counts["skipped"] += 1
             continue
-        if bal > 0.005:
-            unpaid_rows.append(inv)
+        upsert_rows.append(inv)
 
     if deleted_qbo_ids:
         try:
@@ -132,13 +130,14 @@ async def sync_qbo_cdc(db, user_id) -> dict[str, Any]:
             counts["delete_errors"] = 1
 
     cust_ids = []
-    for inv in unpaid_rows:
+    for inv in upsert_rows:
         cid = ((inv.get("CustomerRef") or {}).get("value"))
         if cid:
             cust_ids.append(str(cid))
     customers = await fetch_customers_by_ids(access, realm_id, cust_ids, env=env)
 
-    for inv in unpaid_rows:
+    open_upserted = 0
+    for inv in upsert_rows:
         qbo_id = str(inv.get("Id") or "")
         if not qbo_id:
             counts["skipped"] += 1
@@ -151,6 +150,8 @@ async def sync_qbo_cdc(db, user_id) -> dict[str, Any]:
         try:
             outcome, _ = await upsert_qbo_ledger_invoice(db, user_id, doc, now_iso=now_iso)
             counts[outcome] = counts.get(outcome, 0) + 1
+            if doc.get("status") != "paid":
+                open_upserted += 1
         except Exception as e:
             logger.exception("qbo.cdc upsert fail qbo_id=%s: %s", qbo_id, e)
             counts["skipped"] += 1
@@ -166,7 +167,7 @@ async def sync_qbo_cdc(db, user_id) -> dict[str, Any]:
             logger.exception("qbo.cdc paid sync fail: %s", e)
             counts["qbo_paid"] = {"errors": 1}
 
-    if unpaid_rows:
+    if open_upserted:
         try:
             from qbo_conversation import enqueue_qbo_conversation_match
             counts["conversation_match"] = await enqueue_qbo_conversation_match(db, user_id)

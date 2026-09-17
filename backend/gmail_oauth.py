@@ -352,6 +352,11 @@ def build_router(db, get_current_user):
         if status_val not in ("CREATION_SUCCESS", "RECONNECTED") or not account_id or user_id is None:
             return JSONResponse({"ok": True, "ignored": True})
         await _enrich_from_unipile_account(db, user_id, account_id)
+        try:
+            from qbo_conversation import enqueue_qbo_conversation_match
+            await enqueue_qbo_conversation_match(db, user_id)
+        except Exception:
+            logger.exception("conversation match enqueue after mailbox connect failed")
         return {"ok": True}
 
     @router.post("/unipile/account-status")

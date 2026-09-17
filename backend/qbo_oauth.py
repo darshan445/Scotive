@@ -13,7 +13,7 @@ from typing import Optional
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
@@ -74,6 +74,8 @@ class QboStatus(BaseModel):
     company_name: Optional[str] = None
     env: Optional[str] = None
     connected_at: Optional[datetime] = None
+    last_invoice_import_at: Optional[str] = None
+    import_progress: Optional[dict] = None
 
 
 class OAuthStartResponse(BaseModel):
@@ -155,23 +157,21 @@ def _make_status(conn: Optional[dict]) -> QboStatus:
     if isinstance(connected_at, str):
         connected_at = datetime.fromisoformat(connected_at)
     company_name = (conn.get("company_name") or "").strip() or None
+    progress = conn.get("import_progress") if isinstance(conn.get("import_progress"), dict) else None
+    last_import = conn.get("last_invoice_import_at")
+    if isinstance(last_import, datetime):
+        last_import = last_import.isoformat()
+    extra = {
+        "realm_id": conn.get("realm_id"),
+        "company_name": company_name,
+        "env": conn.get("env"),
+        "connected_at": connected_at,
+        "last_invoice_import_at": last_import,
+        "import_progress": progress,
+    }
     if status_val == "revoked":
-        return QboStatus(
-            connected=False,
-            status="revoked",
-            realm_id=conn.get("realm_id"),
-            company_name=company_name,
-            env=conn.get("env"),
-            connected_at=connected_at,
-        )
-    return QboStatus(
-        connected=True,
-        status="connected",
-        realm_id=conn.get("realm_id"),
-        company_name=company_name,
-        env=conn.get("env"),
-        connected_at=connected_at,
-    )
+        return QboStatus(connected=False, status="revoked", **extra)
+    return QboStatus(connected=True, status="connected", **extra)
 
 
 # ---------------------------------------------------------------------------
@@ -363,15 +363,18 @@ def build_router(db, get_current_user):
         return {"ok": True}
 
     @router.post("/import")
-    async def import_invoices(user: dict = Depends(get_current_user)):
-        """Pull unpaid QuickBooks invoices into the ledger (Module 2)."""
+    async def import_invoices(
+        user: dict = Depends(get_current_user),
+        force: bool = Query(True, description="If false, skip Intuit when ledger already has QBO rows"),
+    ):
+        """Pull QuickBooks invoices into the ledger (paid and unpaid)."""
         from qbo_import import import_unpaid_invoices
 
         conn = await db.qbo_connections.find_one({"user_id": user["_id"]})
         if not conn or conn.get("status") != "connected":
             raise HTTPException(status_code=400, detail="Connect QuickBooks first.")
         try:
-            counts = await import_unpaid_invoices(db, user["_id"])
+            counts = await import_unpaid_invoices(db, user["_id"], force=force)
         except QboAuthError as e:
             raise HTTPException(status_code=401, detail=str(e) or "QuickBooks auth failed.") from e
         except httpx.HTTPStatusError as e:

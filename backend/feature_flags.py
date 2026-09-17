@@ -10,9 +10,8 @@ def _env_truthy(name: str, default: str = "false") -> bool:
 
 
 def chasing_timing_enabled() -> bool:
-    """Auto escalation ladder + post-chase follow-up drafts/banners.
+    """Cadence scheduler + post-chase Firm drafts.
 
-    Off by default for MVP (manual draft-from-invoice still works).
-    Set ENABLE_CHASING_TIMING=true to turn back on.
+    On by default. Set ENABLE_CHASING_TIMING=false to pause the loop.
     """
-    return _env_truthy("ENABLE_CHASING_TIMING", "false")
+    return _env_truthy("ENABLE_CHASING_TIMING", "true")

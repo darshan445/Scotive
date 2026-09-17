@@ -1,11 +1,13 @@
 import { ArrowRight } from "lucide-react";
 import { SiQuickbooks } from "react-icons/si";
 import { useQboConnection } from "@/hooks/useQboConnection";
+import { Button } from "@/components/ui/button";
 
 export function ConnectQboButton({
     testId = "connect-qbo-button",
     label = "Connect QuickBooks",
     variant = "primary",
+    compact = false,
 }) {
     const { startConnect, error } = useQboConnection();
 
@@ -18,18 +20,32 @@ export function ConnectQboButton({
 
     return (
         <div className="flex flex-col items-start gap-1">
-            <button
-                type="button"
-                onClick={startConnect}
-                className={`${base} ${styles}`}
-                data-testid={testId}
-            >
-                <span className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-background border border-border">
-                    <SiQuickbooks className="w-5 h-5 text-[#2CA01C]" />
-                </span>
-                {label}
-                <ArrowRight className="w-4 h-4 opacity-70 transition-transform group-hover:translate-x-0.5" />
-            </button>
+            {compact ? (
+                <Button
+                    type="button"
+                    size="sm"
+                    variant={variant === "secondary" ? "outline" : "default"}
+                    className="rounded-full"
+                    onClick={startConnect}
+                    data-testid={testId}
+                >
+                    Connect
+                    <ArrowRight className="w-3.5 h-3.5" />
+                </Button>
+            ) : (
+                <button
+                    type="button"
+                    onClick={startConnect}
+                    className={`${base} ${styles}`}
+                    data-testid={testId}
+                >
+                    <span className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-background border border-border">
+                        <SiQuickbooks className="w-5 h-5 text-[#2CA01C]" />
+                    </span>
+                    {label}
+                    <ArrowRight className="w-4 h-4 opacity-70 transition-transform group-hover:translate-x-0.5" />
+                </button>
+            )}
             {error ? (
                 <p className="text-xs text-red-600 max-w-xs" data-testid="connect-qbo-error">{error}</p>
             ) : null}

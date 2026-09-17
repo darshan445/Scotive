@@ -1,7 +1,8 @@
-"""90-day sent-only seed scan for onboarding curation.
+"""Onboarding state + ledger helpers.
 
-Finds invoice candidates from sent mail — does NOT write to the ledger until
-the user confirms via POST /seed/confirm.
+Invoices enter the ledger from the connected invoicing tool (QuickBooks today).
+Gmail/Outlook is used to match conversations to those invoices — not as a
+90-day sent-mail seed.
 """
 from __future__ import annotations
 
@@ -303,100 +304,44 @@ def _collapse_seed_followups(candidates: list[dict]) -> list[dict]:
 
 
 async def run_seed_scan(db, user_id, job_id) -> None:
-    """Onboarding: 90-day sent-mail scan → curation candidates."""
-    from gmail_sync import run_onboarding_sync
-    await run_onboarding_sync(db, user_id, job_id)
-
-
-async def _seed_review_payload(db, user_id, job, state: dict) -> dict[str, Any] | None:
-    """Deferred Gmail seed review for the QBO→dashboard path."""
-    if state.get("curation_complete") or state.get("seed_review_dismissed"):
-        return None
-    if not job:
-        return {"status": "waiting", "pending_count": 0, "seed_running": False}
-    if job.get("status") in ("queued", "running"):
-        pending = await _pending_gmail_only_candidate_count(db, user_id, job["_id"])
-        return {
-            "status": "scanning",
-            "pending_count": pending,
-            "seed_running": True,
-            "job_id": str(job["_id"]),
-        }
-    if job.get("status") == "error":
-        return None
-    if job.get("status") != "complete":
-        return None
-    pending = await _pending_gmail_only_candidate_count(db, user_id, job["_id"])
-    if pending == 0:
-        await _auto_complete_empty_curation(db, user_id, job["_id"])
-        return None
-    return {
-        "status": "ready",
-        "pending_count": pending,
-        "seed_running": False,
-        "job_id": str(job["_id"]),
-    }
+    """Retired — invoices come from the invoicing tool, not a 90-day sent-mail seed."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.seed_jobs.update_one(
+        {"_id": job_id},
+        {"$set": {
+            "status": "complete",
+            "phase": "retired",
+            "counts": {"candidates": 0, "retired": True},
+            "finished_at": now_iso,
+            "updated_at": now_iso,
+        }},
+    )
+    logger.info("seed scan retired user=%s job=%s", user_id, job_id)
 
 
 async def unlock_qbo_dashboard(db, user_id) -> None:
-    """Land on dashboard after Next with QBO; keep Gmail seed candidates for later review."""
+    """Unlock the dashboard after mailbox + invoicing tool are connected."""
     now_iso = datetime.now(timezone.utc).isoformat()
     await db.gmail_sync_state.update_one(
         {"user_id": user_id},
         {"$set": {
             "dashboard_unlocked": True,
             "awaiting_curation": False,
+            "curation_complete": True,
             "onboarding_completed_at": now_iso,
             "watching_sent_mail": True,
             "updated_at": now_iso,
         }},
         upsert=True,
     )
-    job = await db.seed_jobs.find_one({"user_id": user_id}, sort=[("started_at", -1)])
-    if job:
-        await _ignore_qbo_duplicate_candidates(db, user_id, job["_id"])
-        if job.get("status") == "complete":
-            pending = await _pending_gmail_only_candidate_count(db, user_id, job["_id"])
-            if pending == 0:
-                await _auto_complete_empty_curation(db, user_id, job["_id"])
-
-
-async def discard_seed_review(db, user_id) -> dict[str, Any]:
-    """Dismiss deferred Gmail seed review without tracking any candidates."""
-    job = await db.seed_jobs.find_one(
-        {"user_id": user_id, "status": "complete"},
-        sort=[("finished_at", -1)],
-    )
-    if not job:
-        now_iso = datetime.now(timezone.utc).isoformat()
-        await db.gmail_sync_state.update_one(
-            {"user_id": user_id},
-            {"$set": {
-                "curation_complete": True,
-                "curation_skipped": True,
-                "seed_review_dismissed": True,
-                "awaiting_curation": False,
-                "updated_at": now_iso,
-            }},
-            upsert=True,
-        )
-        return {"ok": True, "ignored": 0}
-    result = await confirm_seed_curation(db, user_id, [], track_none=True)
-    await db.gmail_sync_state.update_one(
-        {"user_id": user_id},
-        {"$set": {"seed_review_dismissed": True, "updated_at": datetime.now(timezone.utc).isoformat()}},
-    )
-    return {"ok": True, **result}
 
 
 async def get_onboarding_state(db, user_id) -> dict[str, Any]:
-    """Onboarding phases for Path B dual-connect UX.
+    """Onboarding phases.
 
     phases:
-      connections — Gmail (+ optional QBO) connect screen; seed may run silently
-      preparing   — user hit Next (Gmail-only); waiting for silent seed to finish
-      curating    — Gmail-only leftovers curation (blocking, Path A)
-      complete / watching — dashboard; may include deferred seed_review (Path B)
+      connections — mailbox + QuickBooks required; Next imports QBO invoices
+      complete / watching — dashboard; conversation match runs in the background
     """
     state = await db.gmail_sync_state.find_one({"user_id": user_id}) or {}
     open_statuses = ("invoiced", "overdue", "promised", "partially_paid", "promise_broken", "disputed")
@@ -410,16 +355,29 @@ async def get_onboarding_state(db, user_id) -> dict[str, Any]:
     )
     qbo_conn = await db.qbo_connections.find_one({"user_id": user_id, "status": "connected"})
     qbo_connected = bool(qbo_conn)
+    last_import = (qbo_conn or {}).get("last_invoice_import_at")
+    if isinstance(last_import, datetime):
+        last_import = last_import.isoformat()
+    qbo_progress = (qbo_conn or {}).get("import_progress")
+    if not isinstance(qbo_progress, dict):
+        qbo_progress = None
     continued = bool(state.get("onboarding_continued_at"))
     qbo_step = state.get("onboarding_qbo_step")
-    dashboard_unlocked = bool(state.get("dashboard_unlocked") or state.get("onboarding_completed_at"))
+    dashboard_unlocked = bool(
+        state.get("dashboard_unlocked")
+        or state.get("onboarding_completed_at")
+        or state.get("curation_complete")
+    )
 
     base = {
         "gmail_connected": gmail_connected,
         "qbo_connected": qbo_connected,
+        "last_invoice_import_at": last_import,
+        "qbo_import_progress": qbo_progress,
         "onboarding_qbo_step": qbo_step,
         "onboarding_continued": continued,
         "dashboard_unlocked": dashboard_unlocked,
+        "seed_review": None,
     }
     try:
         from qbo_conversation import get_qbo_pipeline_status
@@ -427,466 +385,70 @@ async def get_onboarding_state(db, user_id) -> dict[str, Any]:
     except Exception:
         base["qbo_pipeline"] = None
 
-    job = await db.seed_jobs.find_one({"user_id": user_id}, sort=[("started_at", -1)])
-    seed_running = bool(job and job.get("status") in ("queued", "running"))
-    seed_complete = bool(job and job.get("status") == "complete")
-    seed_error = bool(job and job.get("status") == "error")
-
-    if state.get("curation_complete"):
+    # Already past onboarding (including legacy Gmail-curation accounts).
+    if dashboard_unlocked:
         return {
             **base,
             "phase": "watching" if open_count == 0 else "complete",
             "curation_complete": True,
-            "seed_review": None,
+            "via_qbo": qbo_connected,
         }
 
-    # Path B: QBO dashboard unlocked — stay on dashboard; expose deferred seed review.
-    if continued and qbo_connected and (
-        state.get("dashboard_unlocked") or state.get("onboarding_completed_at")
-    ):
-        if not state.get("dashboard_unlocked"):
-            await unlock_qbo_dashboard(db, user_id)
-            state = await db.gmail_sync_state.find_one({"user_id": user_id}) or state
-        seed_review = await _seed_review_payload(db, user_id, job, state)
-        if state.get("curation_complete"):
-            open_count = await db.invoices.count_documents({
-                "user_id": user_id,
-                "status": {"$in": list(open_statuses)},
-            })
-            return {
-                **base,
-                "phase": "watching" if open_count == 0 else "complete",
-                "curation_complete": True,
-                "via_qbo": True,
-                "seed_review": None,
-            }
-        open_count = await db.invoices.count_documents({
-            "user_id": user_id,
-            "status": {"$in": list(open_statuses)},
-        })
-        return {
-            **base,
-            "phase": "watching" if open_count == 0 else "complete",
-            "curation_complete": False,
-            "via_qbo": True,
-            "seed_review": seed_review,
-        }
-
-    # Legacy: had Gmail-sourced ledger before this onboarding model.
-    inv_count = await db.invoices.count_documents({"user_id": user_id})
-    if inv_count > 0 and not state.get("awaiting_curation") and continued:
-        non_qbo = await db.invoices.count_documents({
-            "user_id": user_id,
-            "$or": [
-                {"qbo_id": {"$exists": False}},
-                {"qbo_id": None},
-                {"source": {"$in": ["gmail", "manual", "both"]}},
-            ],
-        })
-        if non_qbo > 0 and state.get("onboarding_completed_at"):
-            return {
-                **base,
-                "phase": "watching" if open_count == 0 else "complete",
-                "curation_complete": True,
-                "legacy": True,
-                "seed_review": None,
-            }
-
-    # Until user clicks Next, stay on the dual-connect screen (seed silent in background).
-    if not continued:
+    import_done = bool(last_import) or (qbo_progress or {}).get("status") == "complete"
+    can_continue = gmail_connected and qbo_connected and import_done
+    if not continued or not can_continue:
         return {
             **base,
             "phase": "connections",
             "curation_complete": False,
-            "seed_running": seed_running,
-            "seed_complete": seed_complete,
-            "can_continue": gmail_connected,
+            "can_continue": can_continue,
         }
 
-    # Continued with QBO but unlock not applied yet (race) → unlock and dashboard.
-    if qbo_connected:
-        await unlock_qbo_dashboard(db, user_id)
-        state = await db.gmail_sync_state.find_one({"user_id": user_id}) or {}
-        seed_review = await _seed_review_payload(db, user_id, job, state)
-        open_count = await db.invoices.count_documents({
-            "user_id": user_id,
-            "status": {"$in": list(open_statuses)},
-        })
-        return {
-            **base,
-            "phase": "watching" if open_count == 0 else "complete",
-            "curation_complete": bool(state.get("curation_complete")),
-            "via_qbo": True,
-            "seed_review": None if state.get("curation_complete") else seed_review,
-        }
-
-    # Continued, Gmail only → curation after silent seed finishes.
-    if seed_error:
-        return {
-            **base,
-            "phase": "error",
-            "curation_complete": False,
-            "error": (job or {}).get("error"),
-        }
-
-    if seed_running or not job:
-        return {
-            **base,
-            "phase": "preparing",
-            "curation_complete": False,
-            "seed_running": True,
-            "job_id": str(job["_id"]) if job else None,
-        }
-
-    if seed_complete and not state.get("curation_complete"):
-        pending = await _pending_gmail_only_candidate_count(db, user_id, job["_id"])
-        if pending == 0:
-            await _auto_complete_empty_curation(db, user_id, job["_id"])
-            open_count = await db.invoices.count_documents({
-                "user_id": user_id,
-                "status": {"$in": list(open_statuses)},
-            })
-            return {
-                **base,
-                "phase": "watching" if open_count == 0 else "complete",
-                "curation_complete": True,
-                "auto_completed": True,
-            }
-        return {
-            **base,
-            "phase": "curating",
-            "curation_complete": False,
-            "job_id": str(job["_id"]),
-            "candidate_count": pending,
-            "qbo_aware_curation": False,
-        }
-
+    await unlock_qbo_dashboard(db, user_id)
+    open_count = await db.invoices.count_documents({
+        "user_id": user_id,
+        "status": {"$in": list(open_statuses)},
+    })
     return {
         **base,
-        "phase": "preparing",
-        "curation_complete": False,
-        "seed_running": seed_running,
+        "dashboard_unlocked": True,
+        "phase": "watching" if open_count == 0 else "complete",
+        "curation_complete": True,
+        "via_qbo": True,
     }
 
 
 async def continue_onboarding(db, user_id) -> dict[str, Any]:
-    """User clicked Next on the connections screen. Requires Gmail."""
+    """User clicked Next. Requires a mailbox and QuickBooks (invoice source)."""
     gmail_conn = await db.gmail_connections.find_one({"user_id": user_id})
     if not gmail_conn or gmail_conn.get("status") in (None, "revoked", "disconnected"):
-        raise ValueError("Connect Gmail before continuing.")
+        raise ValueError("Connect Gmail or Outlook before continuing.")
 
     qbo_conn = await db.qbo_connections.find_one({"user_id": user_id, "status": "connected"})
-    qbo_connected = bool(qbo_conn)
+    if not qbo_conn:
+        raise ValueError("Connect QuickBooks Online — invoices come from your invoicing tool.")
+    progress = qbo_conn.get("import_progress") if isinstance(qbo_conn.get("import_progress"), dict) else {}
+    if not qbo_conn.get("last_invoice_import_at") and progress.get("status") != "complete":
+        raise ValueError("Wait until QuickBooks invoices are imported.")
+
     now_iso = datetime.now(timezone.utc).isoformat()
-
-    patch = {
-        "onboarding_continued_at": now_iso,
-        "updated_at": now_iso,
-    }
-    if qbo_connected:
-        patch["onboarding_qbo_step"] = "connected"
-        patch["awaiting_curation"] = False
-    else:
-        patch["onboarding_qbo_step"] = "skip"
-        patch["awaiting_curation"] = True
-
-    await db.gmail_sync_state.update_one(
-        {"user_id": user_id},
-        {"$set": patch},
-        upsert=True,
-    )
-
-    if qbo_connected:
-        await unlock_qbo_dashboard(db, user_id)
-        return {"ok": True, "next": "dashboard", "qbo_connected": True}
-
-    return {"ok": True, "next": "curation", "qbo_connected": False}
-
-
-async def _ignore_qbo_duplicate_candidates(db, user_id, job_id) -> int:
-    """Mark pending seed candidates that match QBO invoice refs as ignored."""
-    qbo_refs = await _qbo_invoice_refs(db, user_id)
-    if not qbo_refs:
-        return 0
-    now_iso = datetime.now(timezone.utc).isoformat()
-    n = 0
-    async for doc in db.seed_candidates.find({
-        "user_id": user_id, "job_id": job_id, "status": "pending",
-    }):
-        norm = doc.get("invoice_ref_normalized") or normalize_invoice_ref(
-            doc.get("invoice_ref"), doc.get("source_subject"),
-        )
-        if not norm or norm not in qbo_refs:
-            continue
-        await db.seed_candidates.update_one(
-            {"_id": doc["_id"]},
-            {"$set": {
-                "status": "ignored",
-                "ignore_reason": "qbo_duplicate",
-                "updated_at": now_iso,
-            }},
-        )
-        n += 1
-    return n
-
-
-async def _qbo_invoice_refs(db, user_id) -> set[str]:
-    refs: set[str] = set()
-    cursor = db.invoices.find(
-        {"user_id": user_id, "qbo_id": {"$type": "string"}},
-        {"invoice_ref_normalized": 1, "invoice_ref": 1},
-    )
-    async for inv in cursor:
-        norm = inv.get("invoice_ref_normalized") or normalize_invoice_ref(inv.get("invoice_ref"), None)
-        if norm:
-            refs.add(norm)
-    return refs
-
-
-async def _pending_gmail_only_candidate_count(db, user_id, job_id) -> int:
-    """Count pending seed candidates that are not already covered by QBO imports."""
-    qbo_refs = await _qbo_invoice_refs(db, user_id)
-    if not qbo_refs:
-        return await db.seed_candidates.count_documents({
-            "user_id": user_id, "job_id": job_id, "status": "pending",
-        })
-    n = 0
-    async for doc in db.seed_candidates.find({
-        "user_id": user_id, "job_id": job_id, "status": "pending",
-    }):
-        norm = doc.get("invoice_ref_normalized") or normalize_invoice_ref(
-            doc.get("invoice_ref"), doc.get("source_subject"),
-        )
-        if norm and norm in qbo_refs:
-            continue
-        n += 1
-    return n
-
-
-async def _auto_complete_empty_curation(db, user_id, job_id) -> None:
-    """Mark onboarding done when seed finished with zero Gmail-only leftovers."""
-    now_iso = datetime.now(timezone.utc).isoformat()
-    qbo_refs = await _qbo_invoice_refs(db, user_id)
-    ignored_ids: list[str] = []
-    async for doc in db.seed_candidates.find({
-        "user_id": user_id, "job_id": job_id, "status": "pending",
-    }):
-        mid = doc.get("message_id")
-        norm = doc.get("invoice_ref_normalized") or normalize_invoice_ref(
-            doc.get("invoice_ref"), doc.get("source_subject"),
-        )
-        if mid:
-            ignored_ids.append(mid)
-        reason = "qbo_duplicate" if (norm and norm in qbo_refs) else "empty_leftovers"
-        await db.seed_candidates.update_one(
-            {"_id": doc["_id"]},
-            {"$set": {"status": "ignored", "ignore_reason": reason, "updated_at": now_iso}},
-        )
-
-    state = await db.gmail_sync_state.find_one({"user_id": user_id}) or {}
-    existing_ignored = list(state.get("seed_ignored_message_ids") or [])
-    merged_ignored = list(dict.fromkeys(existing_ignored + ignored_ids))
     await db.gmail_sync_state.update_one(
         {"user_id": user_id},
         {"$set": {
-            "curation_complete": True,
-            "curation_skipped": True,
+            "onboarding_continued_at": now_iso,
+            "onboarding_qbo_step": "connected",
             "awaiting_curation": False,
-            "seed_ignored_message_ids": merged_ignored,
-            "onboarding_completed_at": now_iso,
-            "watching_sent_mail": True,
             "updated_at": now_iso,
         }},
         upsert=True,
     )
-    from invoice_lifecycle import apply_past_due_transitions
-    await apply_past_due_transitions(db, user_id)
-
-
-async def list_seed_candidates(db, user_id) -> list[dict]:
-    # Prefer a running job's partial results (streamed per invoice) so the UI
-    # fills in live; otherwise the latest completed scan.
-    job = await db.seed_jobs.find_one(
-        {"user_id": user_id, "status": {"$in": ["queued", "running"]}},
-        sort=[("started_at", -1)],
-    )
-    if not job:
-        job = await db.seed_jobs.find_one(
-            {"user_id": user_id, "status": "complete"},
-            sort=[("finished_at", -1)],
-        )
-    if not job:
-        return []
-    qbo_refs = await _qbo_invoice_refs(db, user_id)
-    cursor = db.seed_candidates.find({
-        "user_id": user_id,
-        "job_id": job["_id"],
-        "status": "pending",
-    }).sort("source_date", -1)
-    rows = []
-    now_iso = datetime.now(timezone.utc).isoformat()
-    async for doc in cursor:
-        norm = doc.get("invoice_ref_normalized") or normalize_invoice_ref(
-            doc.get("invoice_ref"), doc.get("source_subject"),
-        )
-        if norm and norm in qbo_refs:
-            # Hide from curation; mark ignored so confirm/auto-complete stay consistent.
-            await db.seed_candidates.update_one(
-                {"_id": doc["_id"]},
-                {"$set": {
-                    "status": "ignored",
-                    "ignore_reason": "qbo_duplicate",
-                    "updated_at": now_iso,
-                }},
-            )
-            continue
-        doc["_id"] = str(doc["_id"])
-        doc["job_id"] = str(doc["job_id"])
-        rows.append(doc)
-    return rows
-
-
-async def confirm_seed_curation(
-    db,
-    user_id,
-    candidate_ids: list[str],
-    *,
-    track_none: bool = False,
-    due_dates: dict[str, str | None] | None = None,
-) -> dict[str, Any]:
-    """Track selected candidates; ignore all others forever."""
-    from bson import ObjectId
-    from invoice_lifecycle import _parse_date, apply_past_due_transitions
-
-    now_iso = datetime.now(timezone.utc).isoformat()
-    today = datetime.now(timezone.utc).date()
-    due_overrides = due_dates or {}
-    job = await db.seed_jobs.find_one(
-        {"user_id": user_id, "status": "complete"},
-        sort=[("finished_at", -1)],
-    )
-    if not job:
-        raise ValueError("No seed job found")
-
-    pending = []
-    async for doc in db.seed_candidates.find({
-        "user_id": user_id,
-        "job_id": job["_id"],
-        "status": "pending",
-    }):
-        pending.append(doc)
-
-    selected_set = set(candidate_ids) if not track_none else set()
-    tracked = 0
-    ignored_ids: list[str] = []
-    tracked_invoice_ids: list[Any] = []
-
-    state = await db.gmail_sync_state.find_one({"user_id": user_id}) or {}
-    anchor_map: dict[str, list[str]] = dict(state.get("anchor_map") or {})
-    domains: set[str] = set(state.get("client_domains") or [])
-    email_to_primary: dict[str, str] = dict(state.get("email_to_primary") or {})
-    qbo_refs = await _qbo_invoice_refs(db, user_id)
-
-    for doc in pending:
-        cid = str(doc["_id"])
-        mid = doc["message_id"]
-        norm = doc.get("invoice_ref_normalized") or normalize_invoice_ref(
-            doc.get("invoice_ref"), doc.get("source_subject"),
-        )
-        # Never create a duplicate Gmail row for an invoice already imported from QBO.
-        if norm and norm in qbo_refs:
-            ignored_ids.append(mid)
-            await db.seed_candidates.update_one(
-                {"_id": doc["_id"]},
-                {"$set": {
-                    "status": "ignored",
-                    "ignore_reason": "qbo_duplicate",
-                    "updated_at": now_iso,
-                }},
-            )
-            continue
-        if cid in selected_set:
-            if cid in due_overrides:
-                due_date = due_overrides[cid] or None
-            else:
-                due_date = doc.get("due_date")
-
-            inv_doc = build_ledger_invoice_from_candidate(
-                doc,
-                user_id=user_id,
-                now_iso=now_iso,
-                today=today,
-                due_date=due_date,
-            )
-            outcome, inv_id = await upsert_sweep_invoice(db, user_id, inv_doc, now_iso=now_iso)
-            if inv_id:
-                tracked_invoice_ids.append(inv_id)
-                # Persist rulebook evidence trail when present on the candidate
-                seed_events = doc.get("seed_events") or []
-                if seed_events and doc.get("seed_rulebook"):
-                    from seed_rulebook import write_seed_events_for_invoice
-                    await write_seed_events_for_invoice(
-                        db, user_id, inv_id, seed_events, now_iso=now_iso,
-                    )
-            if outcome == "created":
-                tracked += 1
-
-            email = (doc.get("counterparty_email") or "").lower()
-            if email and mid and mid not in (anchor_map.get(email) or []):
-                anchor_map.setdefault(email, []).append(mid)
-            dom = _sender_domain(email) if email else None
-            if dom and dom not in CONSUMER_DOMAINS:
-                domains.add(dom)
-            await db.seed_candidates.update_one(
-                {"_id": doc["_id"]},
-                {"$set": {"status": "tracked", "updated_at": now_iso}},
-            )
-        else:
-            ignored_ids.append(mid)
-            await db.seed_candidates.update_one(
-                {"_id": doc["_id"]},
-                {"$set": {"status": "ignored", "updated_at": now_iso}},
-            )
-
-    anchor_map, email_to_primary = merge_candidates_by_domain(anchor_map)
-    await persist_client_state(db, user_id, anchor_map, domains, email_to_primary)
-
-    existing_ignored = list(state.get("seed_ignored_message_ids") or [])
-    merged_ignored = list(dict.fromkeys(existing_ignored + ignored_ids))
-
-    await db.gmail_sync_state.update_one(
-        {"user_id": user_id},
-        {"$set": {
-            "curation_complete": True,
-            "curation_skipped": track_none or len(selected_set) == 0,
-            "awaiting_curation": False,
-            "seed_ignored_message_ids": merged_ignored,
-            "onboarding_completed_at": now_iso,
-            "watching_sent_mail": True,
-            "updated_at": now_iso,
-        }},
-        upsert=True,
-    )
-
-    # Safety pass — any invoiced rows with past due dates flip immediately
-    past_due_flipped = await apply_past_due_transitions(db, user_id)
-
-    from post_track_enrichment import delete_staging_for_job
-    await delete_staging_for_job(db, user_id, job["_id"])
-
-    return {
-        "tracked": tracked,
-        "ignored": len(ignored_ids),
-        "past_due_flipped": past_due_flipped,
-        "watching": track_none or len(selected_set) == 0,
-    }
-
-
-async def run_post_curation_enrichment(
-    db,
-    user_id,
-    tracked_invoice_ids: list[Any] | None = None,
-) -> dict[str, Any]:
-    """Legacy hook — enrichment now runs before curation. No-op on confirm."""
-    _ = (db, user_id, tracked_invoice_ids)
-    return {"skipped": "enrichment_runs_before_curation"}
+    await unlock_qbo_dashboard(db, user_id)
+    # Connect page already started matching; don't start a second job on Next.
+    try:
+        from qbo_conversation import enqueue_qbo_conversation_match, get_qbo_pipeline_status
+        pipe = await get_qbo_pipeline_status(db, user_id)
+        if not pipe or pipe.get("status") in (None, "error", "idle"):
+            await enqueue_qbo_conversation_match(db, user_id)
+    except Exception:
+        logger.exception("conversation match enqueue after continue failed")
+    return {"ok": True, "next": "dashboard", "qbo_connected": True}

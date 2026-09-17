@@ -1,33 +1,28 @@
-"""Escalation ladder scheduler (F9b).
+"""Friendly cadence scheduler.
 
-Reads user_settings.escalation_offsets and generates chase drafts on the right
-day for every open invoice with a due_date. Drafts land in `chase_drafts` and
-are NEVER auto-sent — the user must approve each one.
-
-Design:
-  offsets = [-3, 0, 3, 10]  # days relative to due_date
-  For each open invoice with a due_date:
-    d = today - due_date         # negative before due, positive after
-    step_index = index of matching offset (exact match)
-    If no draft exists for (invoice_id, step_index) → generate + store.
-  Bonus step: promise_broken with promise_date in the past → firm-tone draft
-  quoting the client's own words. Uses a dedicated step_index = "promise_broken".
-
-The generator uses the same OpenAI model as the manual draft endpoint,
-plus optional late-fee wording on the final step when `late_fee_enabled`.
+Sends Friendly reminders on the due-date ladder while the client is silent.
+Queues Firm for the owner to edit and send. Never auto-sends Firm/Final.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
-from bson import ObjectId
 
+from cadence import (
+    DEFAULT_OFFSETS,
+    client_is_silent,
+    ensure_pay_link,
+    invoice_pay_url,
+    owner_took_over,
+    pay_link_prompt_lines,
+    pick_cadence_action,
+    sent_steps_from_invoice,
+)
+from draft_tone import STEP_LABELS, tone_for_ladder_step
 from llm_client import (
     OPENAI_URL,
     openai_api_key,
@@ -38,11 +33,7 @@ from llm_client import (
 
 logger = logging.getLogger("scotive.escalation")
 
-# Open statuses that are still worth chasing
 CHASEABLE_STATUSES = ("invoiced", "overdue", "promise_broken", "partially_paid")
-
-# How the 4-slot ladder maps to labels (index-aligned with default offsets)
-STEP_LABELS = ["pre_due_nudge", "due_reminder", "firm_followup", "final_notice"]
 
 
 def _parse_date(v):
@@ -61,27 +52,18 @@ def _parse_date(v):
     return None
 
 
-def _tone_for_step(step_index, status):
-    """Tone based on step position, with escalation. `step_index` can also be
-    the string "promise_broken" for the special broken-promise draft.
-    """
+def _tone_for_step(step_index, status, offsets=None):
     if step_index == "promise_broken":
         return "firm"
     if status == "promise_broken":
         return "firm"
-    if step_index == 0:
-        return "friendly"
-    if step_index == 1:
-        return "friendly"
-    if step_index == 2:
-        return "firm"
-    return "final"
+    return tone_for_ladder_step(step_index, offsets=offsets)
 
 
 def _step_label(step_index):
     if step_index == "promise_broken":
         return "promise_broken"
-    if 0 <= step_index < len(STEP_LABELS):
+    if isinstance(step_index, int) and 0 <= step_index < len(STEP_LABELS):
         return STEP_LABELS[step_index]
     return f"step_{step_index}"
 
@@ -94,10 +76,7 @@ async def generate_draft(
     note: str = "",
     signer_name: Optional[str] = None,
 ) -> Optional[dict]:
-    """Ask the LLM for a short professional chase email. Returns {subject, body}.
-
-    Never raises — returns None on failure so the scheduler can skip and retry.
-    """
+    """Ask the LLM for a short professional chase email. Returns {subject, body}."""
     api_key = openai_api_key()
     if not api_key:
         return None
@@ -108,11 +87,12 @@ async def generate_draft(
         if signer_name
         else "Always end the body with a short professional sign-off and the sender's name. "
     )
+    facts_rule, pay_line = pay_link_prompt_lines(inv)
     system = (
         "You draft short, professional payment follow-up emails for a small business owner. "
         "Under 120 words. Plain professional tone. No 'hope this finds you well'. "
-        "Always include invoice ref (if any), amount, due date. "
-        "On a broken promise, quote the client's own stated date verbatim. "
+        + facts_rule
+        + "On a broken promise, quote the client's own stated date verbatim. "
         + sign_rule
         + "Never sound templated or AI-written. "
         "Output STRICT JSON: {\"subject\": string, \"body\": string}."
@@ -127,6 +107,7 @@ async def generate_draft(
         f"Invoice ref: {inv.get('invoice_ref') or 'n/a'}",
         f"Amount owed: {balance} {inv.get('currency', 'USD')}",
         f"Due date: {inv.get('due_date') or 'n/a'}",
+        pay_line,
         f"Promise date: {inv.get('promise_date') or 'n/a'}",
         f"Status: {inv.get('status')}",
         f"Step: {step_label}",
@@ -168,10 +149,17 @@ async def generate_draft(
                 logger.warning("Escalation draft AI failed: %s %s", r.status_code, r.text[:200])
                 return None
             content = openai_message_content(r.json())
-            return json.loads(content)
+            draft = json.loads(content)
     except Exception as e:  # pragma: no cover
         logger.warning("Escalation draft error: %s", e)
         return None
+
+    if not isinstance(draft, dict):
+        return None
+    pay_url = invoice_pay_url(inv)
+    draft["body"] = ensure_pay_link(draft.get("body") or "", pay_url)
+    draft["subject"] = draft.get("subject") or ""
+    return draft
 
 
 async def _draft_exists(db, user_id, invoice_id, step_key) -> bool:
@@ -183,19 +171,145 @@ async def _draft_exists(db, user_id, invoice_id, step_key) -> bool:
     return doc is not None
 
 
+def _draft_doc(user_id, inv, *, step_key, step_index, label, tone, draft, offset_days, status, extra=None):
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "user_id": user_id,
+        "invoice_id": inv["_id"],
+        "step_key": step_key,
+        "step_index": step_index if step_index != "promise_broken" else None,
+        "step_label": label,
+        "offset_days": offset_days,
+        "tone": tone,
+        "subject": draft.get("subject", ""),
+        "body": draft.get("body", ""),
+        "to": inv.get("counterparty_email"),
+        "thread_id": inv.get("source_thread_id"),
+        "counterparty_name": inv.get("counterparty_name"),
+        "invoice_ref": inv.get("invoice_ref"),
+        "amount": inv.get("balance_remaining") or inv.get("amount"),
+        "currency": inv.get("currency") or "USD",
+        "due_date": inv.get("due_date"),
+        "pay_url": invoice_pay_url(inv),
+        "status": status,
+        "generated_at": now_iso,
+    }
+    if extra:
+        doc.update(extra)
+    if status == "sent":
+        doc["sent_at"] = now_iso
+        doc["auto_sent"] = True
+    return doc
+
+
+async def _record_sent_step(db, inv, step_index: int):
+    steps = sent_steps_from_invoice(inv)
+    steps.add(int(step_index))
+    await db.invoices.update_one(
+        {"_id": inv["_id"]},
+        {"$set": {"cadence_sent_steps": sorted(steps)}},
+    )
+    inv["cadence_sent_steps"] = sorted(steps)
+
+
+async def _queue_followup_prompt(db, user_id, inv, draft_id, label: str):
+    state = await db.gmail_sync_state.find_one({"user_id": user_id}) or {}
+    pending = list(state.get("pending_followup_prompts") or [])
+    inv_id_str = str(inv["_id"])
+    if any(p.get("invoice_id") == inv_id_str for p in pending):
+        return
+    pending.append({
+        "invoice_id": inv_id_str,
+        "draft_id": str(draft_id),
+        "counterparty_name": inv.get("counterparty_name"),
+        "counterparty_email": inv.get("counterparty_email"),
+        "amount": inv.get("amount"),
+        "currency": inv.get("currency") or "USD",
+        "step_label": label,
+        "prompted_at": datetime.now(timezone.utc).isoformat(),
+    })
+    await db.gmail_sync_state.update_one(
+        {"user_id": user_id},
+        {"$set": {"pending_followup_prompts": pending}},
+        upsert=True,
+    )
+
+
+async def _apply_action(
+    db, user_id, inv, *, action, step_index, offsets, late_fee_text, signer_name,
+) -> str:
+    """send_friendly | queue_friendly | queue_firm. Returns a counts key or empty."""
+    from chase_send import deliver_chase_email
+
+    step_key = f"offset_{step_index}"
+    if await _draft_exists(db, user_id, inv["_id"], step_key):
+        return "skipped_existing"
+
+    tone = _tone_for_step(step_index, inv.get("status"), offsets=offsets)
+    label = _step_label(step_index)
+    off = offsets[step_index] if 0 <= step_index < len(offsets) else None
+    draft = await generate_draft(inv, tone, label, late_fee_text, signer_name=signer_name)
+    if not draft:
+        return ""
+
+    if action == "send_friendly":
+        sent = await deliver_chase_email(
+            db, user_id, inv,
+            subject=draft.get("subject", ""),
+            body=draft.get("body", ""),
+            step_index=step_index,
+        )
+        if not sent.get("ok"):
+            logger.info(
+                "cadence auto-send skipped inv=%s reason=%s",
+                inv.get("_id"), sent.get("reason"),
+            )
+            # Fall back to a queued draft so the owner can still send.
+            ins = await db.chase_drafts.insert_one(_draft_doc(
+                user_id, inv, step_key=step_key, step_index=step_index,
+                label=label, tone=tone, draft=draft, offset_days=off, status="queued",
+                extra={"auto_send_failed": sent.get("reason")},
+            ))
+            await _record_sent_step(db, inv, step_index)
+            await _queue_followup_prompt(db, user_id, inv, ins.inserted_id, label)
+            return "queued_fallback"
+        await db.chase_drafts.insert_one(_draft_doc(
+            user_id, inv, step_key=step_key, step_index=step_index,
+            label=label, tone=tone, draft=draft, offset_days=off, status="sent",
+        ))
+        await _record_sent_step(db, inv, step_index)
+        return "friendly_sent"
+
+    ins = await db.chase_drafts.insert_one(_draft_doc(
+        user_id, inv, step_key=step_key, step_index=step_index,
+        label=label, tone=tone, draft=draft, offset_days=off, status="queued",
+    ))
+    await _record_sent_step(db, inv, step_index)
+    if action == "queue_firm":
+        await _queue_followup_prompt(db, user_id, inv, ins.inserted_id, label)
+        return "firm_queued"
+    return "drafts_generated"
+
+
 async def run_escalation_tick(db, user_id) -> dict:
-    """Generate any missing chase drafts for this user based on today's date + config."""
-    from feature_flags import chasing_timing_enabled
+    """Generate / auto-send cadence steps for this user based on due dates."""
     from invoice_lifecycle import apply_stale_transitions
 
-    counts = {"drafts_generated": 0, "skipped_existing": 0, "invoices_scanned": 0, "stale": 0}
-    if not chasing_timing_enabled():
-        counts["disabled"] = True
-        return counts
+    counts = {
+        "drafts_generated": 0,
+        "friendly_sent": 0,
+        "firm_queued": 0,
+        "queued_fallback": 0,
+        "skipped_existing": 0,
+        "invoices_scanned": 0,
+        "stale": 0,
+        "paused": 0,
+    }
     counts["stale"] = await apply_stale_transitions(db, user_id)
 
     settings = await db.user_settings.find_one({"user_id": user_id}) or {}
-    offsets = settings.get("escalation_offsets", [-3, 0, 3, 10])
+    offsets = list(settings.get("escalation_offsets") or DEFAULT_OFFSETS)
+    auto_send = bool(settings.get("friendly_auto_send", True))
     late_fee_enabled = bool(settings.get("late_fee_enabled"))
     late_fee_text = settings.get("late_fee_text") if late_fee_enabled else None
 
@@ -212,54 +326,6 @@ async def run_escalation_tick(db, user_id) -> dict:
     }):
         counts["invoices_scanned"] += 1
 
-        # Post-chase ladder handles follow-ups after the user has sent one.
-        if inv.get("watching_for_reply") or inv.get("last_chase_at") or inv.get("ladder_exhausted"):
-            continue
-
-        # ---- Regular offset-driven ladder --------------------------------
-        due = _parse_date(inv.get("due_date"))
-        if due:
-            days_since_due = (today - due).days
-            for i, off in enumerate(offsets):
-                if days_since_due != off:
-                    continue
-                floor = int(inv.get("escalation_step_floor") or 0)
-                if i < floor:
-                    continue
-                step_key = f"offset_{i}"
-                if await _draft_exists(db, user_id, inv["_id"], step_key):
-                    counts["skipped_existing"] += 1
-                    continue
-                tone = _tone_for_step(i, inv.get("status"))
-                label = _step_label(i)
-                draft = await generate_draft(
-                    inv, tone, label, late_fee_text, signer_name=signer_name,
-                )
-                if not draft:
-                    continue
-                await db.chase_drafts.insert_one({
-                    "user_id": user_id,
-                    "invoice_id": inv["_id"],
-                    "step_key": step_key,
-                    "step_index": i,
-                    "step_label": label,
-                    "offset_days": off,
-                    "tone": tone,
-                    "subject": draft.get("subject", ""),
-                    "body": draft.get("body", ""),
-                    "to": inv.get("counterparty_email"),
-                    "thread_id": inv.get("source_thread_id"),
-                    "counterparty_name": inv.get("counterparty_name"),
-                    "invoice_ref": inv.get("invoice_ref"),
-                    "amount": inv.get("balance_remaining") or inv.get("amount"),
-                    "currency": inv.get("currency") or "USD",
-                    "due_date": inv.get("due_date"),
-                    "status": "queued",
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
-                })
-                counts["drafts_generated"] += 1
-
-        # ---- Broken-promise ladder step ----------------------------------
         if inv.get("status") == "promise_broken":
             step_key = "promise_broken"
             if await _draft_exists(db, user_id, inv["_id"], step_key):
@@ -267,44 +333,59 @@ async def run_escalation_tick(db, user_id) -> dict:
                 continue
             promise = _parse_date(inv.get("promise_date"))
             if promise and promise > today:
-                continue  # promise still in the future — nothing to escalate
+                continue
             draft = await generate_draft(
                 inv, "firm", "promise_broken", None, signer_name=signer_name,
             )
             if not draft:
                 continue
-            await db.chase_drafts.insert_one({
-                "user_id": user_id,
-                "invoice_id": inv["_id"],
-                "step_key": step_key,
-                "step_index": None,
-                "step_label": "promise_broken",
-                "offset_days": None,
-                "tone": "firm",
-                "subject": draft.get("subject", ""),
-                "body": draft.get("body", ""),
-                "to": inv.get("counterparty_email"),
-                "thread_id": inv.get("source_thread_id"),
-                "counterparty_name": inv.get("counterparty_name"),
-                "invoice_ref": inv.get("invoice_ref"),
-                "amount": inv.get("balance_remaining") or inv.get("amount"),
-                "currency": inv.get("currency") or "USD",
-                "due_date": inv.get("due_date"),
-                "status": "queued",
-                "generated_at": datetime.now(timezone.utc).isoformat(),
-            })
+            ins = await db.chase_drafts.insert_one(_draft_doc(
+                user_id, inv, step_key=step_key, step_index="promise_broken",
+                label="promise_broken", tone="firm", draft=draft,
+                offset_days=None, status="queued",
+            ))
+            await _queue_followup_prompt(db, user_id, inv, ins.inserted_id, "promise_broken")
+            counts["firm_queued"] += 1
+            continue
+
+        silent = client_is_silent(inv)
+        if not silent:
+            counts["paused"] += 1
+            continue
+
+        due = _parse_date(inv.get("due_date"))
+        if not due:
+            continue
+        days_since_due = (today - due).days
+        sent = sent_steps_from_invoice(inv)
+        action, step_index = pick_cadence_action(
+            days_since_due,
+            offsets,
+            sent,
+            silent=True,
+            auto_send=auto_send,
+            owner_took_over_chase=owner_took_over(inv, offsets),
+        )
+        if action == "skip" or step_index is None:
+            continue
+        key = await _apply_action(
+            db, user_id, inv,
+            action=action,
+            step_index=step_index,
+            offsets=offsets,
+            late_fee_text=late_fee_text,
+            signer_name=signer_name,
+        )
+        if key and key in counts:
+            counts[key] += 1
+        elif key == "drafts_generated":
             counts["drafts_generated"] += 1
 
     return counts
 
 
 async def escalate_all_users(db) -> dict:
-    from feature_flags import chasing_timing_enabled
-
-    totals = {"users": 0, "drafts_generated": 0}
-    if not chasing_timing_enabled():
-        totals["disabled"] = True
-        return totals
+    totals = {"users": 0, "drafts_generated": 0, "friendly_sent": 0, "firm_queued": 0}
     seen_users: set = set()
     async for conn in db.gmail_connections.find({"status": "connected"}):
         uid = conn.get("user_id")
@@ -315,6 +396,8 @@ async def escalate_all_users(db) -> dict:
             c = await run_escalation_tick(db, uid)
             totals["users"] += 1
             totals["drafts_generated"] += c.get("drafts_generated", 0)
+            totals["friendly_sent"] += c.get("friendly_sent", 0)
+            totals["firm_queued"] += c.get("firm_queued", 0)
         except Exception as e:
             logger.exception("Escalation failed for user %s: %s", uid, e)
     return totals

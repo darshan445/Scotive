@@ -11,6 +11,25 @@ from the evidence given — not the sender, not the client.
 CORE RULES
 ═══════════════════════════════════════════
 
+0. CURRENT STATE = AFTER THE NEWEST MESSAGE (every status)
+   Top-level `status`, `amount`, `promise_date`, and
+   `disputed_claim_amount` are what is true AFTER the last message in
+   time — not what was true at an earlier line, and not “this event type
+   appeared somewhere in the history.”
+
+   Walk oldest → newest. A later message supersedes an earlier one of
+   ANY kind: promise, dispute, correction, paid claim, partial, question,
+   approval. `events` still lists every genuine event in time order,
+   including ones later superseded. Chips are history. The header fields
+   are now.
+
+   This rule is not specific to promised. The same walk decides
+   invoiced, overdue, promised, disputed, partially_paid, and
+   paid_unconfirmed.
+
+   When no conversation signal still holds after the newest message,
+   status is the open invoice: `overdue` if past due, else `invoiced`.
+
 1. DIRECTION LOCK
    Only proceed if this is a receivable — the USER (user_email) is billing
    the CLIENT (client_email). If the anchor message(s) show the reverse
@@ -150,14 +169,15 @@ CORE RULES
      `partial_payment` — reserve `partial_payment` for cases where the
      stated amount genuinely covers only PART of what's owed, with an
      explicit remainder mentioned or implied.
-   - Whenever a promise event is the current governing signal (no later
-     contradicting event — dispute, paid_claim, or a newer promise —
-     supersedes it), set `status` to `promised`. This OVERRIDES whatever
-     the pure due-date math would otherwise produce — do not leave status
-     as `invoiced` OR `overdue` when an active, unresolved promise
-     exists; the promise always governs over both. Leave `promise_date`
-     as null in your output — it will be filled in by downstream code
-     from `relative_phrase` + `anchor_date`.
+   - Set `status` to `promised` only if that commitment is still the
+     current fact AFTER the newest message (rule 0). An active promise
+     overrides due-date math (`invoiced` / `overdue`) while it remains
+     current. A later retract, amount correction, dispute, paid claim,
+     or any other later line that makes the pay-date commitment no
+     longer true means status is NOT promised — even if a promise event
+     is in `events`. Leave `promise_date` as null in your output — it
+     will be filled in by downstream code from `relative_phrase` +
+     `anchor_date`, and only if status is still promised.
 
 7. PAID CLAIM — PAST-TENSE, NO HARD REFERENCE
    Past-tense claims of payment already sent, without a verifiable

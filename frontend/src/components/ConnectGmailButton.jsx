@@ -46,6 +46,9 @@ export function ConnectMailboxButton({
     testId,
     label,
     variant = "primary",
+    compact = false,
+    disabled = false,
+    disabledTitle,
 }) {
     const key = provider === "outlook" ? "outlook" : "google";
     const copy = COPY[key];
@@ -75,18 +78,36 @@ export function ConnectMailboxButton({
 
     return (
         <>
-            <button
-                type="button"
-                onClick={() => setOpen(true)}
-                className={`${base} ${styles}`}
-                data-testid={testId || `connect-${copy.testPrefix}-button`}
-            >
-                <span className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-background border border-border">
-                    <Icon className={iconClass} />
-                </span>
-                {label || copy.labelDefault}
-                <ArrowRight className="w-4 h-4 opacity-70 transition-transform group-hover:translate-x-0.5" />
-            </button>
+            {compact ? (
+                <Button
+                    type="button"
+                    size="sm"
+                    variant={variant === "secondary" ? "outline" : "default"}
+                    className="rounded-full"
+                    disabled={disabled}
+                    title={disabled ? (disabledTitle || undefined) : undefined}
+                    onClick={() => { if (!disabled) setOpen(true); }}
+                    data-testid={testId || `connect-${copy.testPrefix}-button`}
+                >
+                    Connect
+                    <ArrowRight className="w-3.5 h-3.5" />
+                </Button>
+            ) : (
+                <button
+                    type="button"
+                    onClick={() => { if (!disabled) setOpen(true); }}
+                    disabled={disabled}
+                    title={disabled ? (disabledTitle || undefined) : undefined}
+                    className={`${base} ${styles} ${disabled ? "opacity-50 pointer-events-none" : ""}`}
+                    data-testid={testId || `connect-${copy.testPrefix}-button`}
+                >
+                    <span className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-background border border-border">
+                        <Icon className={iconClass} />
+                    </span>
+                    {label || copy.labelDefault}
+                    <ArrowRight className="w-4 h-4 opacity-70 transition-transform group-hover:translate-x-0.5" />
+                </button>
+            )}
 
             <Dialog open={open} onOpenChange={(o) => { if (!busy) setOpen(o); }}>
                 <DialogContent

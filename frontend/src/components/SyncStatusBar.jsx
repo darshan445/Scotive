@@ -57,21 +57,20 @@ export function SyncStatusBar({ onSynced, watching = false, openInvoiceCount = 0
             const { data } = await api.post("/scan/sync");
             const c = data?.counts || {};
             const live = c.live_detected || 0;
-            const newInv = data?.new_invoices || [];
-            if (newInv.length > 0) {
-                onSynced?.(newInv);
-            } else if (live > 0) {
-                toast.success(`Synced · ${live} new invoice${live === 1 ? "" : "s"} tracked`);
+            const qboCreated = (c.qbo_cdc && (c.qbo_cdc.created || 0)) || 0;
+            if (live > 0 || qboCreated > 0) {
+                const n = live || qboCreated;
+                toast.success(`Synced · ${n} new invoice${n === 1 ? "" : "s"} from QuickBooks`);
                 onSynced?.();
             } else if (c.skipped === "no_connection") {
-                toast.info("Connect Gmail to enable sync.");
+                toast.info("Connect Gmail or Outlook to match conversations.");
             } else if (c.skipped === "auth_error") {
-                toast.error("Gmail access expired — reconnect in Settings.");
+                toast.error("Mailbox access expired — reconnect in Settings.");
             } else {
                 toast.success("Up to date");
             }
             await load();
-            if (!newInv.length) onSynced?.();
+            onSynced?.();
         } catch (e) {
             toast.error(extractError(e));
         } finally {

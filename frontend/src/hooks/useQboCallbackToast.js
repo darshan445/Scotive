@@ -18,9 +18,6 @@ export function useQboCallbackToast(onResolved) {
 
         switch (result) {
             case "connected":
-                toast.success("QuickBooks connected", {
-                    description: "Your sandbox company is linked. Invoice import comes next.",
-                });
                 break;
             case "cancelled":
             case "access_denied":

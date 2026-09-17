@@ -25,7 +25,7 @@ export function InvoiceDetectedBanner({ detection, onDismiss }) {
                         {ref ? <span className="text-emerald-700/80">{ref}</span> : null}
                     </div>
                     <div className="text-[11px] text-emerald-700/80 mt-0.5">
-                        Tracked automatically from your sent mail — no action needed.
+                        Tracked automatically from QuickBooks — no action needed.
                     </div>
                 </div>
             </div>

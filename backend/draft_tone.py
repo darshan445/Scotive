@@ -29,9 +29,9 @@ LABEL_FOR_TONE = {
     TONE_CLARIFYING: LABEL_CLARIFYING,
 }
 
-# Index-aligned with Settings ladder: Pre-due / Due-date / Firm / Final
-STEP_LABELS = ["pre_due_nudge", "due_reminder", "firm_followup", "final_notice"]
-DEFAULT_OFFSETS = [-3, 0, 3, 10]
+# Index-aligned with Settings ladder; index 4 is post-Firm Final (not in Settings).
+STEP_LABELS = ["pre_due_nudge", "due_reminder", "friendly_followup", "firm_followup", "final_notice"]
+DEFAULT_OFFSETS = [-3, 0, 7, 9]
 
 # Chase register ladder (clarifying is a separate reply track)
 CHASE_ORDER = [TONE_FRIENDLY, TONE_FIRM, TONE_FINAL]
@@ -98,13 +98,17 @@ def ladder_step_reached(days_since_due: int, offsets: list, floor: int = 0) -> O
     return reached
 
 
-def tone_for_ladder_step(step_index: Optional[int]) -> str:
-    """Mirror escalation_scheduler: steps 0–1 friendly, 2 firm, 3+ final."""
+def tone_for_ladder_step(step_index: Optional[int], offsets: Optional[list] = None) -> str:
+    """First n-1 offsets are Friendly; last offset is Firm. Later steps are Final."""
+    from cadence import last_friendly_index
+
     if step_index is None:
         return TONE_FRIENDLY
-    if step_index <= 1:
+    offs = list(offsets if offsets is not None else DEFAULT_OFFSETS)
+    lf = last_friendly_index(offs)
+    if step_index <= lf:
         return TONE_FRIENDLY
-    if step_index == 2:
+    if step_index == lf + 1:
         return TONE_FIRM
     return TONE_FINAL
 
@@ -218,7 +222,7 @@ def derive_draft_tone(
             is_reply=False,
         )
 
-    tone = tone_for_ladder_step(step_index)
+    tone = tone_for_ladder_step(step_index, offsets=offsets)
     return _result(
         tone,
         step_index=step_index,

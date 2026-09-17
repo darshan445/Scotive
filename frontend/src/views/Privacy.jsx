@@ -14,8 +14,8 @@ export default function PrivacyPage() {
                     shares information when you use scotive.com and the Scotive service
                     (the “Service”). Not a new books app. You keep QBO/Xero. We run the chase.
                     You already invoiced them. Scotive watches the thread and the open invoice, and
-                    handles the next chase. Live connections today: Gmail, Outlook, and optional
-                    QuickBooks Online. Approved Friendly cadence can send on the clock. Firm/Final
+                    handles the next chase.                     Live connections today: Gmail, Outlook, and QuickBooks Online
+                    (required — invoices come from your invoicing tool). Approved Friendly cadence can send on the clock. Firm/Final
                     still need a click. Pay link in the draft. AI-assisted extraction and drafting.
                 </p>
                 <p>
@@ -51,7 +51,7 @@ export default function PrivacyPage() {
                     approve. You can disconnect anytime in Settings.
                 </p>
                 <p>
-                    <strong>Intuit / QuickBooks Online connection (optional).</strong> When you
+                    <strong>Intuit / QuickBooks Online connection.</strong> When you
                     connect QuickBooks Online we receive OAuth tokens, your QuickBooks company
                     (realm) identifier, granted scopes (accounting API access), and connection
                     status. Access and refresh tokens are encrypted at rest before storage. We
@@ -64,8 +64,8 @@ export default function PrivacyPage() {
                 <ul>
                     <li>
                         Client name and email, invoice references, amounts, currency, and dates —
-                        from Gmail extraction and/or from QuickBooks invoice and customer records
-                        you authorize us to read
+                        imported from QuickBooks invoice and customer records you authorize us to
+                        read, then matched to Gmail or Outlook threads
                     </li>
                     <li>
                         QuickBooks identifiers (for example invoice Id, DocNumber, Balance) and

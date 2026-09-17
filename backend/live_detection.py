@@ -116,150 +116,15 @@ async def detect_and_track_sent_invoices(
     access: str,
     my_email: str,
 ) -> list[dict[str, Any]]:
-    """Scan recent sent mail and auto-add new invoices to the ledger."""
-    if not await _onboarding_allows_live(db, user_id):
-        return []
-
-    state = await db.gmail_sync_state.find_one({"user_id": user_id}) or {}
-    terms_days = await get_default_payment_terms_days(db, user_id)
-    settings = await db.user_settings.find_one({"user_id": user_id}) or {}
-    grace_days = int(settings.get("grace_days") or 1)
-    ignored = await _ignored_message_ids(db, user_id)
-    blocklist = await load_blocklist(db, user_id)
-    now_iso = datetime.now(timezone.utc).isoformat()
-
-    candidates: dict[str, list[str]] = dict(state.get("anchor_map") or {})
-    domains: set[str] = set(state.get("client_domains") or [])
-    email_to_primary: dict[str, str] = dict(state.get("email_to_primary") or {})
-
-    seen_ids: set[str] = set()
-    new_detections: list[dict[str, Any]] = []
-
-    for q in live_queries():
-        ids = await list_message_ids(access, q, max_pages=2)
-        for mid in ids:
-            if mid in seen_ids:
-                continue
-            seen_ids.add(mid)
-            if await _should_skip_message(db, user_id, mid, ignored):
-                continue
-            msg = await get_message(access, mid)
-            if not msg:
-                continue
-            client = pass1_filter_anchor(msg, my_email, blocklist)
-            if not client:
-                continue
-            amount, currency = extract_amount_currency(msg)
-            if not amount:
-                continue
-
-            sent_dt = _parse_msg_date(msg)
-            due_date = extract_due_date(msg, sent_dt)
-            norm_ref = normalize_invoice_ref(None, msg.get("subject"))
-            primary = email_to_primary.get(client.lower(), client.lower())
-            client_key = client_identity_key(primary)
-
-            doc = enrich_invoice_doc({
-                "user_id": user_id,
-                "counterparty_email": primary,
-                "counterparty_name": _client_display_name(msg, client),
-                "client_identity_key": client_key,
-                "amount": amount,
-                "balance_remaining": float(amount),
-                "paid_amount": 0.0,
-                "currency": currency,
-                "invoice_ref": norm_ref,
-                "invoice_ref_normalized": norm_ref,
-                "due_date": due_date,
-                "due_date_assumed": False,
-                "promise_date": None,
-                "status": "invoiced",
-                "kind": "invoice_sent",
-                "source_message_id": mid,
-                "source_thread_id": msg.get("thread_id"),
-                "source_subject": normalize_subject(msg.get("subject")),
-                "source_from": msg.get("from"),
-                "source_date": normalize_source_date(msg.get("date")),
-                "evidence_sentence": None,
-                "confidence": 1.0,
-                "created_at": now_iso,
-            }, primary)
-
-            outcome, inv_id = await upsert_sweep_invoice(
-                db, user_id, doc, now_iso=now_iso,
-            )
-            if outcome == "created" and inv_id:
-                await _flip_overdue_if_needed(db, user_id, inv_id, now_iso)
-                inv_row = await db.invoices.find_one({"_id": inv_id})
-                if inv_row:
-                    new_detections.append(_detection_payload(inv_id, inv_row, mid, now_iso))
-                logger.info(
-                    "live.DETECTED client=%s amount=%s ref=%s msg=%s",
-                    primary, amount, norm_ref, mid,
-                )
-            elif outcome == "merged":
-                logger.debug("live.MERGE msg=%s ref=%s", mid, norm_ref)
-
-            candidates.setdefault(client.lower(), [])
-            if mid not in candidates[client.lower()]:
-                candidates[client.lower()].append(mid)
-            dom = _sender_domain(client)
-            if dom and dom not in CONSUMER_DOMAINS:
-                domains.add(dom)
-
-    if new_detections:
-        candidates, email_to_primary = merge_candidates_by_domain(candidates)
-        await persist_client_state(db, user_id, candidates, domains, email_to_primary)
-
-    return new_detections
+    """Retired — invoices come from the invoicing tool, not sent PDFs."""
+    _ = (db, user_id, access, my_email)
+    return []
 
 
 async def run_live_detection_tick(db, user_id) -> dict[str, Any]:
-    """One live-detection pass. Updates sync-state unread queue for the UI."""
-    conn = await db.gmail_connections.find_one({"user_id": user_id})
-    if not conn or conn.get("status") != "connected":
-        return {"detected_count": 0, "new_invoices": [], "skipped": "no_connection"}
-
-    state = await db.gmail_sync_state.find_one({"user_id": user_id}) or {}
-    if not await _onboarding_allows_live(db, user_id):
-        return {"detected_count": 0, "new_invoices": [], "skipped": "awaiting_curation"}
-
-    try:
-        access = await get_access_token(db, user_id)
-    except GmailAuthError:
-        return {"detected_count": 0, "new_invoices": [], "skipped": "auth_error"}
-
-    my_email = (conn.get("email") or "").lower()
-    now_iso = datetime.now(timezone.utc).isoformat()
-
-    try:
-        new_invoices = await detect_and_track_sent_invoices(db, user_id, access, my_email)
-        from accounting_notify import detect_accounting_invoices
-        accounting = await detect_accounting_invoices(db, user_id, access, my_email)
-        new_invoices = new_invoices + accounting
-    except Exception as e:
-        logger.exception("live.ERROR user=%s err=%s", user_id, e)
-        return {"detected_count": 0, "new_invoices": [], "error": str(e)[:200]}
-
-    existing_unread = list(state.get("unread_detections") or [])
-    seen_msg = {d.get("source_message_id") for d in existing_unread}
-    for det in new_invoices:
-        if det.get("source_message_id") not in seen_msg:
-            existing_unread.append(det)
-            seen_msg.add(det["source_message_id"])
-
-    await db.gmail_sync_state.update_one(
-        {"user_id": user_id},
-        {"$set": {
-            "last_detected_at": now_iso,
-            "last_live_detection_count": len(new_invoices),
-            "unread_detections": existing_unread,
-            "watching_sent_mail": True,
-        }},
-        upsert=True,
-    )
-
-    return {"detected_count": len(new_invoices), "new_invoices": new_invoices}
+    """Retired — do not create ledger rows from sent mail."""
+    _ = (db, user_id)
+    return {"detected_count": 0, "new_invoices": [], "skipped": "retired"}
 
 
 async def ack_detections(db, user_id, detection_ids: list[str] | None = None) -> dict:

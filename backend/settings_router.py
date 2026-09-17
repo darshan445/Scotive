@@ -16,7 +16,8 @@ logger = logging.getLogger("scotive.settings")
 
 
 DEFAULT_SETTINGS: dict = {
-    "escalation_offsets": [-3, 0, 3, 10],  # days relative to due date
+    "escalation_offsets": [-3, 0, 7, 9],  # days relative to due date
+    "friendly_auto_send": True,
     "follow_up_interval_days": 3,
     "late_fee_enabled": False,
     "late_fee_text": "",
@@ -138,6 +139,7 @@ async def seed_user_settings(db, user_id, *, tz_name: str | None = None) -> dict
 
 class SettingsPatch(BaseModel):
     escalation_offsets: Optional[list[int]] = None
+    friendly_auto_send: Optional[bool] = None
     follow_up_interval_days: Optional[int] = Field(default=None, ge=1, le=30)
     late_fee_enabled: Optional[bool] = None
     late_fee_text: Optional[str] = Field(default=None, max_length=280)
@@ -218,9 +220,6 @@ def build_router(db, get_current_user):
     @router.patch("/settings")
     async def patch_settings(payload: SettingsPatch, user: dict = Depends(get_current_user)):
         patch = payload.model_dump(exclude_none=True)
-        if not chasing_timing_enabled():
-            patch.pop("escalation_offsets", None)
-            patch.pop("follow_up_interval_days", None)
         if not patch:
             raise HTTPException(status_code=400, detail="No changes provided.")
         patch["updated_at"] = datetime.now(timezone.utc).isoformat()

@@ -112,10 +112,10 @@ export default function TermsPage() {
                 </p>
             </LegalSection>
 
-            <LegalSection id="qbo" title="5. QuickBooks Online connection (optional)">
+            <LegalSection id="qbo" title="5. QuickBooks Online connection">
                 <p>
-                    You may optionally connect Intuit QuickBooks Online. When you do, Scotive
-                    requests accounting API access to:
+                    You connect Intuit QuickBooks Online so Scotive can import the invoices it
+                    tracks. Scotive requests accounting API access to:
                 </p>
                 <ul>
                     <li>

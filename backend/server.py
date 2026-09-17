@@ -604,8 +604,11 @@ async def _escalation_loop(interval_seconds: int):
             totals = await escalate_all_users(db)
             if totals.get("users"):
                 logger.info(
-                    "Escalation tick: users=%s drafts+%s",
-                    totals["users"], totals["drafts_generated"],
+                    "Cadence tick: users=%s friendly_sent=%s firm_queued=%s drafts+%s",
+                    totals["users"],
+                    totals.get("friendly_sent", 0),
+                    totals.get("firm_queued", 0),
+                    totals["drafts_generated"],
                 )
         except Exception as e:
             logger.exception("Escalation loop iteration failed: %s", e)
@@ -664,8 +667,6 @@ async def recover_interrupted_work() -> None:
     Must run once per boot (Uvicorn --workers 1). Re-reads Mongo for the
     to-do list — does not rely on in-memory job queues.
     """
-    from seed_scan import run_seed_scan
-
     now_iso = datetime.now(timezone.utc).isoformat()
     sync_res = await db.gmail_sync_state.update_many(
         {"sync_running": True},
@@ -677,19 +678,20 @@ async def recover_interrupted_work() -> None:
             sync_res.modified_count,
         )
 
-    resumed = 0
-    async for job in db.seed_jobs.find({"status": {"$in": ["queued", "running"]}}):
-        uid = job.get("user_id")
-        if not uid:
-            continue
-        await db.seed_jobs.update_one(
-            {"_id": job["_id"]},
-            {"$set": {"status": "queued", "phase": "queued", "updated_at": now_iso}},
+    retired = await db.seed_jobs.update_many(
+        {"status": {"$in": ["queued", "running"]}},
+        {"$set": {
+            "status": "complete",
+            "phase": "retired",
+            "updated_at": now_iso,
+            "finished_at": now_iso,
+        }},
+    )
+    if retired.modified_count:
+        logger.info(
+            "Startup recovery: retired %s leftover seed job(s)",
+            retired.modified_count,
         )
-        asyncio.create_task(run_seed_scan(db, uid, job["_id"]))
-        resumed += 1
-    if resumed:
-        logger.info("Startup recovery: resumed %s seed job(s) from Mongo", resumed)
 
 
 @app.on_event("shutdown")
