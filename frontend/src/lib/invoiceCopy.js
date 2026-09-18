@@ -102,6 +102,9 @@ export function factualDigestLine(inv, sectionKey) {
         return "Says paid — did you receive it?";
     }
     if (sectionKey === "needs_reply") {
+        if (inv.status === "promised" && inv.promise_date) {
+            return `Promise date ${formatDate(inv.promise_date)}`;
+        }
         const parts = [`You billed ${formatCurrency(inv.amount, cur)}`];
         if (disputeClaim != null && Number(disputeClaim) > 0) {
             parts.push(`client claims ${formatCurrency(disputeClaim, cur)}`);

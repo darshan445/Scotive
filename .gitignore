@@ -66,6 +66,21 @@ backend/.env.production
 # Data and databases
 agenthub/agents/youtube/db
 
+# Rails API
+backend/log/*
+backend/tmp/*
+!backend/log/.keep
+!backend/tmp/.keep
+!backend/tmp/pids/.keep
+backend/storage/*
+!backend/storage/.keep
+backend/config/master.key
+backend/vendor/bundle
+backend/.bundle
+backend/coverage
+backend/spec/examples.txt
+
+
 # Archive files and large assets
 **/*.zip
 **/*.tar.gz
@@ -84,8 +99,9 @@ memory/test_credentials.md
 android-sdk/
 .env
 .env.*
-!.env.example
 *.env
+!.env.example
+!.env.prod.example
 credentials.json
 *.key
 .credentials

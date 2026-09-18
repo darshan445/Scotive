@@ -1,0 +1,362 @@
+---
+description: Complete AR reconciliation & automation engine spec — always apply for onboarding, sync, webhooks, cadence, matching, and schema
+alwaysApply: true
+---
+
+# Complete Accounts Receivable (AR) Reconciliation & Automation Engine Specification
+
+## 1. System Architectural Principles & Operational Guardrails
+
+**Books Win Always:** Financial truth stored in the core accounting platform (QuickBooks Online, Xero, FreshBooks) is absolute. If an accounting sync or webhook sets an invoice balance to zero or marks it paid, any conversational claims (disputes, payment promises, unconfirmed payment claims) are superseded and rejected. Automated collection cadences must be permanently terminated immediately.
+
+**Separation of Concerns:** Financial state (`current_ar_status`) and conversational ball-in-court (`needs_reply`) are orthogonal dimensions. A financial status such as overdue can coexist with `needs_reply = true` (e.g., the client asked for updated wire instructions or a W-9 form). Both dimensions must be tracked simultaneously.
+
+**Strict Tenant Isolation:** All operations, DB queries, caches, and search sets must be scoped to the authenticated `organization_id`. Integrations, invoices, and debtor contacts belong to the business entity, not individual users.
+
+**Bounded Ingestion:** Provider rate limits (Gmail, Outlook, accounting APIs) dictate that unbounded mailbox fetches or per-invoice mailbox queries are strictly prohibited. Ingestion operations must use batch queries, cursor checkpoints, and in-memory routing.
+
+**Append-Only State Ledger:** Never overwrite state without an audit trail. Every transition is written immutably to `invoice_state_transitions` to support deterministic backflipping and auditability, while `invoices.current_ar_status` acts as a fast denormalized read cache.
+
+## 2. Initial Onboarding Flow (Historical Discovery)
+
+### Objective
+
+Ingest the past 365 days of open and active financial data from the accounting provider, selectively discover debtor contacts, and accurately link historical email conversations to their respective invoices without triggering API rate limits.
+
+### Step-by-Step Execution Plan
+
+#### Step 1: Accounting Ground-Truth Ingestion
+
+Authenticate with the accounting provider and retrieve all open/unpaid invoices created within the last 365 days (`TxnDate >= CURRENT_DATE - 365 days`).
+
+Collect the unique debtor references (CustomerRef IDs) directly from the retrieved invoice set. Do not fetch all customers from the accounting system. Fetch and upsert only the clients linked to these active invoices into `clients`.
+
+For each active client:
+
+- Record display name and primary email.
+- Parse and store the corporate domain (ignoring public domains such as gmail.com, yahoo.com, outlook.com).
+- Initialize an empty array for associated contacts and aliases (`associated_emails`).
+
+For each active invoice:
+
+- Record external ID, invoice number (DocNumber), issue date (TxnDate), due date, total amount, and remaining balance.
+- Extract and store any embedded `pay_link_token` present in the invoice metadata or payment link URL.
+- Parse all CC and BCC email addresses from the invoice payload, store them on the invoice (`cc_emails`, `bcc_emails`), and append them into the parent client's `associated_emails` set.
+
+Persist the current timestamp or cursor as `last_accounting_sync_timestamp`.
+
+#### Step 2: Batch Historical Mailbox Fetching
+
+Group the active debtor clients into chunks of 10 clients per batch.
+
+Determine the earliest invoice `issue_date` across the 10 clients in the batch to set a strict historical lower bound.
+
+Construct a single compound search query per batch:
+
+`after:EARLIEST_ISSUE_DATE AND ((from:client_1_emails OR to:client_1_emails OR domain:client_1_domain) OR ... OR (from:client_10_emails OR to:client_10_emails OR domain:client_10_domain))`
+
+Note: `client_emails` must include the primary email plus all invoice-level CC and BCC addresses discovered in Step 1.
+
+Execute the provider query to fetch message envelopes and bodies, holding raw results strictly in RAM for processing.
+
+#### Step 3: Client-Isolated In-Memory Matching
+
+Iterate through each client within the batch. Slice the in-memory email messages matching that client's primary email, associated CC/BCC emails, or corporate domain.
+
+For each open invoice belonging to that specific client, run deterministic matching against the candidate messages:
+
+- **Rule A (Pay Link Token):** Check whether the message body or quoted reply text contains the invoice's unique `pay_link_token`. A match confirms the thread immediately.
+- **Rule B (Invoice Number):** Search the subject line and clean body for the exact invoice reference using word-boundary regular expressions (`\bINV-1042\b` or `\b1042\b`).
+- **Rule C (Exclusive Amount):** If the client has exactly one open invoice matching an explicitly quoted monetary figure in the message, confirm the match.
+
+When a match is found:
+
+- Persist the conversation and mark it as the Home Thread (`is_primary = true`).
+- If related sub-threads or branch threads match, link them as Split Threads (`is_primary = false`).
+- Insert sanitized messages (HTML stripped, signatures and quoted boilerplate removed).
+
+If an invoice finds no matching messages in the batch, flag it as a Miss and queue it for targeted fallback discovery.
+
+#### Step 4: Targeted Fallback Search (`FindInvoiceThreadJob`)
+
+For each missed invoice, run an asynchronous background job executing the bounded A -> E search chain against the mailbox API:
+
+- **Query A (Token Catch-All):** Search for `"pay_link_token" after:issue_date`. This catches external CPAs, secondary bookkeepers, or instances where the client's email in the accounting system was blank or incorrect. If found, link the thread and add the sender's email to the client's associated contacts.
+- **Query B (Client Contact + Invoice Number):** Search for `(from:client_contacts OR to:client_contacts) invoice_number after:issue_date`.
+- **Query C (Outbox/Sent Scan):** Search the user's Sent mailbox: `from:me ("pay_link_token" OR invoice_number) after:issue_date` to catch manual user sends or forward chains.
+- **Query D (Client Contact + Total Amount):** Search for `(from:client_contacts OR to:client_contacts) total_amount after:issue_date`.
+- **Query E (Exhausted):** If all queries yield no results, mark the invoice status as unmatched. It remains in standby mode awaiting future incoming emails.
+
+#### Step 5: Onboarding State Finalization
+
+For invoices where threads contain only outbound messages from the user: skip AI evaluation and assign status based on clock calculation (`invoiced` or `overdue`).
+
+For invoices with inbound client replies: dispatch an asynchronous job to evaluate conversational state via the AI State Reader (evaluated strictly one invoice per LLM call).
+
+## 3. Real-Time Webhook Engine (Fast-Ack & Event Routing)
+
+### Objective
+
+Process real-time change events from accounting and mailbox providers with sub-50ms acknowledgement, zero inline AI latency, and complete idempotency.
+
+### Step-by-Step Execution Plan
+
+#### Step 1: Ingestion & Fast Acknowledgement
+
+Receive inbound HTTP POST payload at the webhook endpoint.
+
+Validate provider cryptographic signatures or HMAC headers immediately.
+
+Extract the provider's unique event identifier and perform an idempotency lookup in `webhook_events`:
+
+- If the event ID already exists, return HTTP 200 OK immediately.
+- If new, persist the payload to `webhook_events` with status pending.
+
+Return HTTP 200 OK (or HTTP 202 Accepted) to the provider within 50ms.
+
+Enqueue background job `ProcessWebhookEventJob` passing the recorded event ID.
+
+#### Step 2: Background Dispatch & Accounting Webhook Routing
+
+When the background worker picks up an accounting event:
+
+Fetch the updated entity from the accounting API using the external ID provided in the payload.
+
+Lock the corresponding invoice row using a database transaction with row-level locking (`SELECT FOR UPDATE`).
+
+If `balance_remaining == 0`:
+
+- Transition status to `paid` (Terminal state).
+- Record the change in the state ledger (`trigger_source: 'books_webhook'`).
+- Cancel all pending scheduled outbox drafts for this invoice.
+- Terminate all automated collection cadences.
+
+If `balance_remaining > 0` and `balance_remaining < total_amount`:
+
+- Transition status to `partially_paid`.
+- Record the state transition and update the invoice balance.
+
+If the webhook references a new invoice for a previously unseen client:
+
+- Fetch customer details from the accounting provider and upsert into the `clients` table.
+- Insert the invoice, parse CC/BCC emails, update client contacts, and mark initial status as `invoiced` or `unmatched`.
+
+#### Step 3: Background Dispatch & Mailbox Webhook Routing
+
+When the background worker picks up a mailbox event (`mail_received`):
+
+Extract the `external_thread_id` from the notification payload.
+
+Check if the thread ID already exists in the local database:
+
+**Branch A: Known Thread (~95% of incoming traffic):**
+
+- Fetch the message body and metadata via provider API.
+- Insert the message into the local `messages` table.
+- Find all invoices linked to this thread via `invoice_conversations`.
+- For each linked invoice, enqueue an asynchronous AI evaluation job (`EvaluateInvoiceStateJob`).
+
+**Branch B: Unknown Thread (~5% of traffic):**
+
+- Fetch the message and evaluate against fast in-memory routing gates:
+- Check if the sender, recipient, or email domain belongs to any active client contact list. If no, discard immediately (drops spam, newsletters, platform receipts).
+- If client matches, or if an unknown sender quotes an active token or invoice number, run regex matching against open invoice tokens and numbers.
+- If a match hits an open invoice: save conversation as Home Thread, persist the message, register any unknown sender as an associated contact on the client profile, and enqueue the AI evaluation job.
+- If no match hits an open invoice: discard the message without saving to avoid polluting the database.
+
+## 4. "Sync Now" Engine (The Bounded Delta Safety Net)
+
+### Objective
+
+Provide a fast, manual or scheduled reconciler that catches missed webhooks, applies clock-based state transitions, and advances sync cursors without re-scanning historical inboxes.
+
+### Step-by-Step Execution Plan
+
+#### Step 1: Immediate Controller Acknowledgement
+
+User triggers "Sync Now" via UI, or an hourly scheduler fires.
+
+Return HTTP 202 Accepted to the client immediately and update UI to display a syncing indicator.
+
+Dispatch `RunSyncNowMasterJob(organization_id)`.
+
+#### Step 2: Parallel Execution of the Three Delta Workers
+
+The master sync job orchestrates three isolated workers in parallel:
+
+**Worker 1: Accounting Delta Worker**
+
+Query the accounting API using the delta filter: `updated_after: last_accounting_sync_timestamp`.
+
+For each modified invoice record returned:
+
+- If the invoice does not exist locally and belongs to an existing or new debtor, upsert the client and create the invoice.
+- Lock the invoice row (`SELECT FOR UPDATE`).
+- Reconcile `balance_remaining` and `due_date`.
+- If balance is now zero, transition status to `paid`, log to the state ledger, and cancel all outbox drafts.
+- Advance and persist `last_accounting_sync_timestamp`.
+
+**Worker 2: Mailbox Delta Worker**
+
+Query the mailbox API using the stored cursor (`historyId` for Gmail, delta sync token for Outlook/Unipile).
+
+Fetch only new message envelopes created since the cursor.
+
+Discard any message whose `external_message_id` already exists in the local `messages` table.
+
+For remaining messages:
+
+- Route known thread IDs directly to their linked invoices and persist the messages.
+- For unknown threads, run in-memory gating against the inverted token and invoice number maps. If an open invoice is matched, link the thread and persist the message.
+- Discard all non-matching messages.
+
+For every invoice that received new messages, enqueue `EvaluateInvoiceStateJob`.
+
+Advance and persist the mailbox sync cursor.
+
+**Worker 3: Clock-Driven State Transitions Worker**
+
+Executes pure SQL updates with zero external API calls.
+
+Due Date Transitions:
+
+- Select all invoices where `current_ar_status = 'invoiced' AND due_date < CURRENT_DATE AND balance_remaining > 0`.
+- Transition their status to `overdue`.
+- Record transitions in the state ledger (`trigger_source: 'clock_cron'`).
+
+Broken Promise Transitions:
+
+- Select all invoices where `current_ar_status = 'promised' AND active_promise_date < CURRENT_DATE AND balance_remaining > 0`.
+- Transition their status to `broken_promise`.
+- Record transitions in the state ledger (`trigger_source: 'clock_cron'`).
+- Alert the user or schedule an urgent broken-promise follow-up draft.
+
+#### Step 3: Concurrency Control & Live UI Broadcast
+
+Enforce the "Books Win Always" guardrail across all worker commits.
+
+Broadcast updated invoice statuses, timeline events, and action badges via WebSockets / Turbo Streams directly to the user dashboard.
+
+Mark synchronization status as complete.
+
+## 5. Automated Follow-up Cadence Engine (The Outbox)
+
+### Objective
+
+Safely draft, schedule, gate, and dispatch follow-ups without ever sending an embarrassing email to someone who already paid, asked a question, or raised a dispute.
+
+### Step-by-Step Execution Plan
+
+#### Step 1: Scheduling Trigger
+
+A background worker runs every morning (e.g., 08:00 AM in the organization's timezone):
+
+Query invoices matching cadence milestones:
+
+- Step -3 (Friendly Notice): `due_date = TODAY + 3 days`
+- Step 0 (Due Today): `due_date = TODAY`
+- Step +3 (Gentle Nudge): `due_date = TODAY - 3 days AND status is overdue`
+- Step +7 (Firm Follow-up): `due_date = TODAY - 7 days AND status is overdue`
+- Step +14 (Urgent Notice): `due_date = TODAY - 14 days AND status is overdue`
+- Broken Promise Step: `current_ar_status == 'broken_promise'` (triggered immediately when a promise expires)
+
+Create rows in `outbox_messages`:
+
+- `status = 'scheduled'` (or `'draft'` if organization requires manual review)
+- `scheduled_send_at = TODAY at 10:15 AM` (staggered send time)
+- `to_address = client.primary_email`
+- `cc_addresses = invoice.cc_emails`
+- `conversation_id = invoice's primary Home Thread`
+
+#### Step 2: Threading Integrity & Message Assembly
+
+All reminders MUST be dispatched directly on the Home Thread (`is_primary = true`).
+
+Extract the remote provider thread ID: `thread_id: conversation.external_thread_id`.
+
+Set RFC MIME headers:
+
+- `In-Reply-To: <last_message.external_message_id>`
+- `References: <anchor_message.external_message_id> ... <last_message.external_message_id>`
+
+The reminder lands cleanly in the client's existing email chain.
+
+#### Step 3: The 5 Pre-Flight Send Guards (Zero-Tolerance)
+
+When the dispatch worker wakes up at `scheduled_send_at`, it locks the invoice (`SELECT FOR UPDATE`) and checks:
+
+1. **Balance Guard:** Is `balance_remaining <= 0` or status `paid`? → Cancel (`paid_in_books`).
+2. **Turn Guard:** Is `needs_reply == true`? → Cancel (`client_awaiting_human_reply`).
+3. **Conversational Claims Guard:** Is status `disputed`, `paid_unconfirmed`, or active `promised`? → Cancel (`blocked_by_status`).
+4. **Snooze Guard:** Is `snoozed_until > NOW()`? → Cancel (`invoice_snoozed_by_user`).
+5. **Fatigue Guard:** Was an email already sent to this debtor within the last 48 hours? → Cancel (`anti_fatigue_cooldown`).
+
+#### Step 4: Dispatch & Post-Send Lifecycle
+
+Call Mailbox API to send the reply.
+
+Update `outbox_messages.status = 'sent'`.
+
+Insert sent message into `messages` (`direction: 'user_to_client'`).
+
+Ensure `invoices.needs_reply = false` (ball returned to debtor).
+
+## 6. Multi-Invoice Disambiguation & Partial Payments
+
+### 1. Multi-Invoice Single Email Resolution
+
+When a message references multiple invoices (e.g., "Paid #1042 and #1045 together"):
+
+- Link that single conversation to both invoices in the `invoice_conversations` junction table.
+- Fan out independent AI evaluation jobs: `EvaluateInvoiceStateJob(1042)` and `EvaluateInvoiceStateJob(1045)`.
+- Each invoice evaluates its own context and transitions in the state ledger independently.
+
+### 2. Partial Payments & Credit Memos
+
+When the accounting provider reports a payment reducing balance but leaving `balance_remaining > 0`:
+
+- Transition status to `partially_paid`.
+- Update the cadence engine's outbox copy dynamically to quote the exact remaining balance (e.g., "Received your partial payment of $400; remaining balance of $600 is due on...").
+
+## 7. Deterministic Reversals, Backflips & User Actions
+
+Conversational claims are temporary overlays on top of baseline clock/books truth. When a claim is canceled, disputed, or manually reverted, follow this fallback matrix:
+
+| Current Active State | Event / Trigger | Fallback Rule | Deterministic New Status |
+|---|---|---|---|
+| `promised` | Client raises a dispute | Dispute cancels promise. | `disputed` (Promise cleared) |
+| `disputed` | Dispute resolved (User action or email) | Do NOT restore old promise. | `invoiced` or `overdue` (Calculated from clock vs due_date) |
+| `paid_unconfirmed` | User marks "Payment Not Received" | Check prior unexpired promise. | `promised` (if promise date ≥ Today) OR `overdue` |
+| `broken_promise` | Client sends a new promise date | Superseded by newer commitment. | `promised` (with new date) |
+| Any State | Accounting Webhook: `balance == 0` | Ground truth overrides everything. | `paid` (All cadences killed permanently) |
+| Any State | User clicks "Undo / Revert State" | Inspect state ledger for last valid non-reverted row. | `previous_transition.to_status` |
+
+## 8. OAuth Resiliency & Gmail Watch Maintenance
+
+**Accounting Token Renewal:** Run a proactive background poller every 6 hours. Refresh access tokens if within 10 minutes of expiration. If an integration returns `invalid_grant`, immediately set `connection_status = 'reauth_required'`, pause sync workers, and prompt user via the dashboard.
+
+**Gmail Push Notification Renewal:** Gmail push watches strictly expire every 7 days. A dedicated background cron job runs on Day 5 to call `users.watch()` and renew `webhook_expires_at`. The Delta Sync engine acts as a continuous safety net if a push watch drops.
+
+## 9. AI State Reader Contract & Execution Rules
+
+**Isolation Rule:** Evaluated strictly one invoice per LLM execution. Multi-invoice threads are evaluated by fanning out independent jobs per invoice.
+
+**Payload Structure:**
+
+- `tracked_state`: Extracted from accounting ground truth (`invoice_ref`, `total_amount`, `issue_date`, `due_date`, `balance_remaining`, baseline status, and `processed_message_ids`).
+- `messages`: Chronological list (`sent_at ASC`) across Home and Split threads with clean bodies, sender directions, and timestamps.
+
+**Chronological Processing:** The model processes messages sequentially. Messages whose IDs exist in `processed_message_ids` provide context only; only unrecorded messages generate entries in `new_events`.
+
+**Output Requirements:**
+
+- Header `current_ar_status` (`invoiced`, `overdue`, `promised`, `broken_promise`, `disputed`, `paid_unconfirmed`, `partially_paid`).
+- Boolean `needs_reply` (indicates whether a human response to the client is required).
+- Extracted metadata (dispute amounts, relative promise phrases).
+
+**Commit Actions:**
+
+- Convert relative promise dates into calendar dates based on the message timestamp.
+- Append immutable records to the state transition ledger (`invoice_state_transitions`).
+- Update the cached status, promise dates, and flags on `invoices`.
+- Trigger outbox automation: snooze cadences if promised, pause if disputed or `paid_unconfirmed`, and queue drafts if overdue with `needs_reply == false`.

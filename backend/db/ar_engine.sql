@@ -1,0 +1,248 @@
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+-- ============================================================================
+-- 1. TENANTS & USER AUTHENTICATION
+-- ============================================================================
+
+CREATE TABLE organizations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(255) NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+CREATE TABLE users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    email VARCHAR(255) NOT NULL DEFAULT '',
+    encrypted_password VARCHAR(255) NOT NULL DEFAULT '',
+    first_name VARCHAR(100),
+    last_name VARCHAR(100),
+    role VARCHAR(50) DEFAULT 'member' NOT NULL, -- 'owner', 'admin', 'member'
+    reset_password_token VARCHAR(255),
+    reset_password_sent_at TIMESTAMPTZ,
+    remember_created_at TIMESTAMPTZ,
+    sign_in_count INT DEFAULT 0 NOT NULL,
+    current_sign_in_at TIMESTAMPTZ,
+    last_sign_in_at TIMESTAMPTZ,
+    current_sign_in_ip VARCHAR(50),
+    last_sign_in_ip VARCHAR(50),
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+CREATE UNIQUE INDEX idx_users_email ON users(email);
+CREATE UNIQUE INDEX idx_users_reset_password_token ON users(reset_password_token);
+CREATE INDEX idx_users_org_role ON users(organization_id, role);
+
+CREATE TABLE jwt_denylists (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    jti VARCHAR(255) NOT NULL,
+    exp TIMESTAMPTZ NOT NULL
+);
+
+CREATE UNIQUE INDEX idx_jwt_denylists_jti ON jwt_denylists(jti);
+
+-- ============================================================================
+-- 2. INTEGRATIONS (PLATFORM AGNOSTIC ADAPTERS)
+-- ============================================================================
+
+CREATE TABLE integrations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    category VARCHAR(50) NOT NULL,              -- 'accounting' or 'mailbox'
+    provider VARCHAR(50) NOT NULL,              -- 'qbo', 'xero', 'freshbooks', 'gmail', 'outlook', 'unipile'
+    external_account_id VARCHAR(255),          -- Realm ID, Tenant ID, or mailbox email address
+    account_name VARCHAR(255),                 -- Human-readable label (e.g. "Acme Operations")
+    access_token TEXT,                         -- Encrypted credentials
+    refresh_token TEXT,                        -- Encrypted credentials
+    token_expires_at TIMESTAMPTZ,
+    sync_cursor VARCHAR(255),                  -- Delta token, historyId, or timestamp checkpoint
+    last_synced_at TIMESTAMPTZ,
+    webhook_subscription_id VARCHAR(255),      -- Gmail watch resource ID, Xero channel ID
+    webhook_expires_at TIMESTAMPTZ,            -- Gmail 7-day watch expiry, webhook lease expiry
+    connection_status VARCHAR(50) DEFAULT 'connected' NOT NULL, -- 'connected', 'reauth_required', 'error', 'disconnected'
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    CONSTRAINT uq_integrations_org_provider_account UNIQUE (organization_id, provider, external_account_id)
+);
+
+CREATE INDEX idx_integrations_active ON integrations(organization_id, category, connection_status);
+
+-- ============================================================================
+-- 3. CORE AR DOMAIN (CLIENTS & INVOICES)
+-- ============================================================================
+
+CREATE TABLE clients (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    integration_id UUID NOT NULL REFERENCES integrations(id) ON DELETE CASCADE,
+    external_id VARCHAR(255) NOT NULL,         -- Remote Customer/Contact ID
+    name VARCHAR(255) NOT NULL,
+    primary_email VARCHAR(255),
+    domain VARCHAR(255),                       -- Parsed corporate domain (e.g., 'acme.com')
+    associated_emails JSONB DEFAULT '[]'::jsonb NOT NULL, -- CCs, BCCs, external CPAs, AP aliases
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    CONSTRAINT uq_clients_integration_external UNIQUE (integration_id, external_id)
+);
+
+CREATE INDEX idx_clients_domain ON clients(organization_id, domain);
+CREATE INDEX idx_clients_primary_email ON clients(organization_id, primary_email);
+
+CREATE TABLE invoices (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    integration_id UUID NOT NULL REFERENCES integrations(id) ON DELETE CASCADE,
+    client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    external_id VARCHAR(255) NOT NULL,         -- Remote Invoice ID
+    invoice_number VARCHAR(100) NOT NULL,      -- DocNumber (e.g., 'INV-1042')
+    issue_date DATE NOT NULL,                  -- TxnDate
+    due_date DATE NOT NULL,
+    currency VARCHAR(10) DEFAULT 'USD' NOT NULL,
+    total_amount NUMERIC(12, 2) NOT NULL,
+    balance_remaining NUMERIC(12, 2) NOT NULL,
+    pay_link_token VARCHAR(255),               -- Extracted shortcode or payment URL token
+    cc_emails JSONB DEFAULT '[]'::jsonb NOT NULL,  -- CC recipients on invoice
+    bcc_emails JSONB DEFAULT '[]'::jsonb NOT NULL, -- BCC recipients on invoice
+    current_ar_status VARCHAR(50) DEFAULT 'invoiced' NOT NULL,
+    -- Allowed: 'unmatched', 'invoiced', 'overdue', 'promised', 'broken_promise',
+    --          'disputed', 'paid_unconfirmed', 'partially_paid', 'paid', 'voided'
+    active_promise_date DATE,
+    disputed_claim_amount NUMERIC(12, 2),
+    needs_reply BOOLEAN DEFAULT FALSE NOT NULL,-- Ball-in-court flag
+    snoozed_until TIMESTAMPTZ,                 -- Manual pause or snooze timestamp
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    CONSTRAINT uq_invoices_integration_external UNIQUE (integration_id, external_id)
+);
+
+CREATE INDEX idx_invoices_status_dates ON invoices(organization_id, current_ar_status, due_date);
+CREATE INDEX idx_invoices_token ON invoices(organization_id, pay_link_token) WHERE pay_link_token IS NOT NULL;
+CREATE INDEX idx_invoices_number ON invoices(organization_id, invoice_number);
+CREATE INDEX idx_invoices_client_id ON invoices(client_id);
+
+-- ============================================================================
+-- 4. EMAIL THREADING & MESSAGES
+-- ============================================================================
+
+CREATE TABLE conversations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    integration_id UUID NOT NULL REFERENCES integrations(id) ON DELETE CASCADE, -- Mailbox integration
+    external_thread_id VARCHAR(255) NOT NULL,  -- Provider thread identifier
+    subject TEXT,
+    status VARCHAR(50) DEFAULT 'active' NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    CONSTRAINT uq_conversations_integration_thread UNIQUE (integration_id, external_thread_id)
+);
+
+CREATE TABLE messages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    external_message_id VARCHAR(255) NOT NULL, -- RFC Message-ID or provider ID
+    direction VARCHAR(20) NOT NULL,            -- 'user_to_client', 'client_to_user'
+    from_address VARCHAR(255) NOT NULL,
+    to_addresses JSONB DEFAULT '[]'::jsonb NOT NULL,
+    cc_addresses JSONB DEFAULT '[]'::jsonb NOT NULL,
+    sent_at TIMESTAMPTZ NOT NULL,
+    clean_body TEXT,                           -- HTML stripped, signatures and quoted replies removed
+    is_anchor BOOLEAN DEFAULT FALSE NOT NULL,  -- Initial invoice dispatch email
+    processed_by_ai BOOLEAN DEFAULT FALSE NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    CONSTRAINT uq_messages_conversation_ext_id UNIQUE (conversation_id, external_message_id)
+);
+
+CREATE INDEX idx_messages_sent_at ON messages(conversation_id, sent_at ASC);
+
+-- Junction table for Home Threads and Split Threads across multi-invoice references
+CREATE TABLE invoice_conversations (
+    invoice_id UUID NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+    conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    is_primary BOOLEAN DEFAULT FALSE NOT NULL, -- TRUE = Home Thread, FALSE = Split Thread
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    PRIMARY KEY (invoice_id, conversation_id)
+);
+
+CREATE INDEX idx_invoice_conversations_conv ON invoice_conversations(conversation_id);
+
+-- ============================================================================
+-- 5. AUDIT LEDGER & UI TIMELINE
+-- ============================================================================
+
+CREATE TABLE invoice_state_transitions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    invoice_id UUID NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+    from_status VARCHAR(50),
+    to_status VARCHAR(50) NOT NULL,
+    trigger_source VARCHAR(50) NOT NULL,       -- 'ai_reader', 'books_sync', 'clock_cron', 'manual_user'
+    triggered_by_message_id UUID REFERENCES messages(id) ON DELETE SET NULL,
+    promise_date DATE,
+    disputed_amount NUMERIC(12, 2),
+    needs_reply BOOLEAN DEFAULT FALSE NOT NULL,
+    reason_quote TEXT,                         -- Snippet from client email
+    is_reverted BOOLEAN DEFAULT FALSE NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+CREATE INDEX idx_state_transitions_audit ON invoice_state_transitions(invoice_id, created_at DESC);
+
+CREATE TABLE invoice_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    invoice_id UUID NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+    message_id UUID REFERENCES messages(id) ON DELETE SET NULL,
+    event_type VARCHAR(50) NOT NULL,           -- 'promise', 'paid_claim', 'dispute', 'reply_request'
+    sender VARCHAR(50) NOT NULL,               -- 'client', 'user'
+    quote TEXT,
+    event_data JSONB DEFAULT '{}'::jsonb NOT NULL,
+    confidence NUMERIC(3, 2),
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+CREATE INDEX idx_invoice_events_invoice ON invoice_events(invoice_id, created_at ASC);
+
+-- ============================================================================
+-- 6. OUTBOX & CADENCE ENGINE
+-- ============================================================================
+
+CREATE TABLE outbox_messages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    invoice_id UUID NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+    conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
+    status VARCHAR(50) DEFAULT 'scheduled' NOT NULL, -- 'draft', 'scheduled', 'sent', 'cancelled'
+    to_address VARCHAR(255) NOT NULL,
+    cc_addresses JSONB DEFAULT '[]'::jsonb NOT NULL,
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    scheduled_send_at TIMESTAMPTZ NOT NULL,
+    sent_at TIMESTAMPTZ,
+    cancellation_reason VARCHAR(100),          -- 'paid_in_books', 'needs_reply_active', etc.
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+CREATE INDEX idx_outbox_queue ON outbox_messages(status, scheduled_send_at) 
+WHERE status = 'scheduled';
+
+-- ============================================================================
+-- 7. INBOUND WEBHOOK DISPATCHER & IDEMPOTENCY
+-- ============================================================================
+
+CREATE TABLE webhook_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
+    integration_id UUID REFERENCES integrations(id) ON DELETE CASCADE,
+    provider VARCHAR(50) NOT NULL,             -- 'qbo', 'xero', 'freshbooks', 'gmail', 'outlook', 'unipile'
+    external_event_id VARCHAR(255) NOT NULL,   -- Provider event ID / HMAC signature hash
+    payload JSONB NOT NULL,
+    status VARCHAR(50) DEFAULT 'pending' NOT NULL, -- 'pending', 'processed', 'failed'
+    error_message TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    processed_at TIMESTAMPTZ,
+    CONSTRAINT uq_webhook_provider_event UNIQUE (provider, external_event_id)
+);
+
+CREATE INDEX idx_webhook_pending ON webhook_events(status, created_at ASC) 
+WHERE status = 'pending';

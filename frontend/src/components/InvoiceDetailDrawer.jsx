@@ -347,7 +347,10 @@ export function InvoiceDetailDrawer({ invoiceId, preview = null, open, onClose, 
             );
         }
 
-        // One primary compose verb by situation + Mark paid secondary
+        // Owner actions from remaining layers — not the model.
+        // Says-paid → Received / Not yet.
+        // Unanswered question or dispute → Reply.
+        // Else chase → Follow up. Mark paid always secondary.
         const needsCompose =
             s === "disputed"
             || inv.needs_reply

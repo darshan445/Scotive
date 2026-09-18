@@ -13,6 +13,16 @@ export const api = axios.create({
     timeout: 20000,
 });
 
+/** Sync now / QBO import — Gmail + model can take well over the default 20s. */
+export const LONG_JOB_TIMEOUT_MS = 180_000;
+
+export function isTimeoutError(err) {
+    if (err?.response) return false;
+    const code = err?.code || "";
+    if (code === "ECONNABORTED") return true;
+    return /timeout/i.test(err?.message || "");
+}
+
 export function formatApiErrorDetail(detail) {
     if (detail == null) return "Something went wrong. Please try again.";
     if (typeof detail === "string") return detail;
@@ -28,12 +38,14 @@ export function formatApiErrorDetail(detail) {
 
 export function extractError(err) {
     if (!err?.response) {
+        if (isTimeoutError(err)) {
+            return "That's taking longer than expected. Refresh in a moment — the work may still finish.";
+        }
         const code = err?.code || "";
         if (
-            code === "ECONNABORTED" ||
             code === "ERR_NETWORK" ||
             code === "ECONNRESET" ||
-            /timeout|network|connection/i.test(err?.message || "")
+            /network|connection/i.test(err?.message || "")
         ) {
             return "Can't reach the server. Check that the API is running, then try again.";
         }

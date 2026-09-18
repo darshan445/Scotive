@@ -1,0 +1,7 @@
+# Recurring jobs (Sidekiq-Cron). Empty until cadence / token refresh / watch renewal.
+# Example:
+# refresh_accounting_tokens:
+#   cron: "0 */6 * * *"
+#   class: RefreshAccountingTokensJob
+#   queue: default
+{}

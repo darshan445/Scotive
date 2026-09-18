@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Eye, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
-import { api, extractError } from "@/lib/api";
+import { api, extractError, isTimeoutError, LONG_JOB_TIMEOUT_MS } from "@/lib/api";
 import { useWorkspaceRefreshEffect } from "@/lib/workspaceRefresh";
 
 function timeAgo(iso) {
@@ -18,6 +18,31 @@ function timeAgo(iso) {
     if (days < 30) return days === 1 ? "1 day ago" : `${days} days ago`;
     const months = Math.floor(days / 30);
     return months === 1 ? "1 month ago" : `${months} months ago`;
+}
+
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForSyncIdle(prevLastSyncedAt, { maxMs = LONG_JOB_TIMEOUT_MS } = {}) {
+    const deadline = Date.now() + maxMs;
+    let sawRunning = false;
+    while (Date.now() < deadline) {
+        await sleep(1500);
+        try {
+            const { data } = await api.get("/scan/sync-state");
+            if (data?.sync_running) {
+                sawRunning = true;
+                continue;
+            }
+            if (sawRunning) return data;
+            const stamp = data?.last_synced_at;
+            if (stamp && stamp !== prevLastSyncedAt) return data;
+        } catch {
+            /* keep waiting — the job may still be on the server */
+        }
+    }
+    return null;
 }
 
 /**
@@ -51,27 +76,48 @@ export function SyncStatusBar({ onSynced, watching = false, openInvoiceCount = 0
 
     useWorkspaceRefreshEffect(load);
 
+    async function finishSync(counts) {
+        const c = counts || {};
+        const live = c.live_detected || 0;
+        const qboCreated = (c.qbo_cdc && (c.qbo_cdc.created || 0)) || 0;
+        if (live > 0 || qboCreated > 0) {
+            const n = live || qboCreated;
+            toast.success(`Synced · ${n} new invoice${n === 1 ? "" : "s"} from QuickBooks`);
+        } else if (c.skipped === "no_connection") {
+            toast.info("Connect Gmail or Outlook to match conversations.");
+        } else if (c.skipped === "auth_error") {
+            toast.error("Mailbox access expired — reconnect in Settings.");
+        } else {
+            toast.success("Up to date");
+        }
+        await load();
+        onSynced?.();
+    }
+
     async function syncNow() {
         setBusy(true);
+        const prevStamp = state?.last_synced_at;
         try {
-            const { data } = await api.post("/scan/sync");
+            const { data } = await api.post("/scan/sync", null, { timeout: LONG_JOB_TIMEOUT_MS });
             const c = data?.counts || {};
-            const live = c.live_detected || 0;
-            const qboCreated = (c.qbo_cdc && (c.qbo_cdc.created || 0)) || 0;
-            if (live > 0 || qboCreated > 0) {
-                const n = live || qboCreated;
-                toast.success(`Synced · ${n} new invoice${n === 1 ? "" : "s"} from QuickBooks`);
-                onSynced?.();
-            } else if (c.skipped === "no_connection") {
-                toast.info("Connect Gmail or Outlook to match conversations.");
-            } else if (c.skipped === "auth_error") {
-                toast.error("Mailbox access expired — reconnect in Settings.");
-            } else {
-                toast.success("Up to date");
+            if (c.skipped === "already_running") {
+                const idle = await waitForSyncIdle(prevStamp);
+                if (!idle) {
+                    toast.error("Sync is still running. The list will catch up when it finishes.");
+                    return;
+                }
+                await finishSync({});
+                return;
             }
-            await load();
-            onSynced?.();
+            await finishSync(c);
         } catch (e) {
+            if (isTimeoutError(e)) {
+                const idle = await waitForSyncIdle(prevStamp);
+                if (idle) {
+                    await finishSync({});
+                    return;
+                }
+            }
             toast.error(extractError(e));
         } finally {
             setBusy(false);

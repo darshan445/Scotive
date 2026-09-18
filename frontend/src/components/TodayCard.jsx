@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { api, extractError } from "@/lib/api";
 import { useWorkspaceRefreshEffect } from "@/lib/workspaceRefresh";
 import { formatMoney } from "@/components/LedgerCard";
-import { factualDigestLine, invoiceSubject, isJunkInvoiceRef } from "@/lib/invoiceCopy";
+import { factualDigestLine, invoiceStatusDisplay, invoiceSubject, isJunkInvoiceRef, statusLabel } from "@/lib/invoiceCopy";
 import { ClientMergePrompts } from "@/components/ClientMergePrompts";
 import { InvoiceOverflowMenu } from "@/components/InvoiceOverflowMenu";
 import { navigateToInvoice } from "@/lib/invoiceNavigation";
@@ -34,6 +34,8 @@ const STATUS_CHIP = {
     disputed: "bg-purple-50 text-purple-700 border-purple-200",
     paid_unconfirmed: "bg-emerald-50 text-emerald-700 border-emerald-200",
     overdue: "bg-red-50 text-red-700 border-red-200",
+    promised: "bg-yellow-50 text-yellow-800 border-yellow-200",
+    partially_paid: "bg-sky-50 text-sky-800 border-sky-200",
     promise_broken: "bg-orange-50 text-orange-700 border-orange-200",
     stale: "bg-stone-100 text-stone-600 border-stone-200",
 };
@@ -57,8 +59,8 @@ function cardLabel(r, sectionKey) {
         }
         return "Says paid";
     }
-    if (sectionKey === "needs_reply" && (r.status === "disputed" || r.disputed_claim_amount != null)) {
-        return "Disputed";
+    if (sectionKey === "needs_reply") {
+        return invoiceStatusDisplay(r) || statusLabel(r.status);
     }
     return ACTION_SECTIONS.find((s) => s.key === sectionKey)?.label || sectionKey;
 }
@@ -70,8 +72,8 @@ function chipClass(r, sectionKey, sectionTone) {
         }
         return STATUS_CHIP.paid_unconfirmed;
     }
-    if (sectionKey === "needs_reply" && (r.status === "disputed" || r.disputed_claim_amount != null)) {
-        return STATUS_CHIP.disputed;
+    if (sectionKey === "needs_reply") {
+        return STATUS_CHIP[r.status] || TONE_BADGE[sectionTone];
     }
     if (sectionKey === "due_overdue") return STATUS_CHIP.overdue;
     if (sectionKey === "broken_promises") return STATUS_CHIP.promise_broken;

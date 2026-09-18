@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ -n "${DATABASE_URL:-}" ]; then
+  echo "Waiting for Postgres..."
+  until pg_isready -d "$DATABASE_URL" >/dev/null 2>&1; do
+    sleep 1
+  done
+fi
+
+if [ "${RUN_DB_PREPARE:-false}" = "true" ]; then
+  bundle exec rails db:prepare
+fi
+
+exec "$@"

@@ -1,55 +1,85 @@
-# Production stack — single-worker API + MongoDB
+# Production stack — baked image, no code bind-mount, no Kamal.
 #
-#   cp backend/.env.example backend/.env.production   # fill prod secrets/URLs
-#   docker compose -f docker-compose.prod.yml up -d --build
+#   cp backend/.env.prod.example backend/.env.prod
+#   # fill secrets, then:
+#   docker compose -f docker-compose.prod.yml up --build -d
 #
-# Pin --workers 1 in the image CMD (see backend/Dockerfile production stage).
-# Do not scale the api service (replicas > 1 would duplicate background loops).
+# API: host port 3000. Postgres/Redis stay on the compose network (not published).
 
-name: scotive
+name: scotive-prod
 
 services:
-  mongo:
-    image: mongo:7.0
+  db:
+    image: postgres:16-alpine
     restart: unless-stopped
-    # Bind to localhost only — put a reverse proxy / firewall in front of the API.
-    ports:
-      - "127.0.0.1:27017:27017"
+    environment:
+      POSTGRES_USER: scotive
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-scotive}
+      POSTGRES_DB: scotive
     volumes:
-      - scotive_mongo_data:/data/db
+      - scotive_pg_prod:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
-      interval: 15s
+      test: ["CMD-SHELL", "pg_isready -U scotive -d scotive"]
+      interval: 5s
       timeout: 5s
-      retries: 5
-      start_period: 30s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - scotive_redis_prod:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   api:
     build:
       context: ./backend
       dockerfile: Dockerfile
       target: production
-      args:
-        PYTHON_VERSION: "3.11"
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8000:8000"
+      - "3000:3000"
     env_file:
-      - ./backend/.env.production
+      - ./backend/.env.prod
     environment:
-      # Always use the compose network hostname (overrides .env.production if needed).
-      MONGO_URL: mongodb://mongo:27017
-      DB_NAME: ${DB_NAME:-scotive}
+      RAILS_ENV: production
+      PORT: "3000"
+      DATABASE_URL: postgres://scotive:${POSTGRES_PASSWORD:-scotive}@db:5432/scotive
+      REDIS_URL: redis://redis:6379/0
+      RUN_DB_PREPARE: "false"
     depends_on:
-      mongo:
+      db:
         condition: service_healthy
-    # Never set deploy.replicas > 1 while background loops live in-process.
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 45s
+      redis:
+        condition: service_healthy
+    command: ["bundle", "exec", "rails", "server", "-b", "0.0.0.0", "-p", "3000"]
+
+  sidekiq:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: production
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env.prod
+    environment:
+      RAILS_ENV: production
+      DATABASE_URL: postgres://scotive:${POSTGRES_PASSWORD:-scotive}@db:5432/scotive
+      REDIS_URL: redis://redis:6379/0
+      RUN_DB_PREPARE: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+    command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
 
 volumes:
-  scotive_mongo_data:
+  scotive_pg_prod:
+  scotive_redis_prod:
