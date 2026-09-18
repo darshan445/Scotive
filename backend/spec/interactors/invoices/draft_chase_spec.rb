@@ -102,4 +102,15 @@ RSpec.describe Invoices::DraftChase do
       expect(result.data[:body]).to include("Pay here: https://pay.qbo.test/inv-12")
     end
   end
+
+  it "uses saved ladder offsets to pick Firm before the follow-up interval" do
+    allow(llm).to receive(:complete_json).and_raise(Faraday::Error, "timeout")
+    organization.update!(escalation_offsets: [ -3, 0, 7, 12 ], follow_up_interval_days: 10)
+    travel_to Time.utc(2026, 9, 18, 12) do
+      result = execute!
+      expect(result.success?).to eq(true)
+      expect(result.data[:tone_label]).to eq("Firm follow-up")
+      expect(result.data[:cadence_step]).to eq("firm_plus_7")
+    end
+  end
 end

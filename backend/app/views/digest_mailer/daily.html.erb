@@ -1,0 +1,22 @@
+<p>Hi<%= @user.first_name.present? ? " #{@user.first_name}" : "" %>,</p>
+
+<p>Here’s what needs you in Scotive today.</p>
+
+<% @sections.each do |section| %>
+  <h3><%= section[:label] %></h3>
+  <ul>
+    <% section[:rows].each do |row| %>
+      <li>
+        <a href="<%= @frontend_url %>/invoices/<%= row[:_id] %>">
+          <%= row[:invoice_ref] || "Invoice" %>
+        </a>
+        · <%= row[:counterparty_name] || row[:counterparty_email] || "Unknown client" %>
+        <% if row[:amount] %>
+          · <%= row[:currency] || "USD" %> <%= format("%.2f", row[:amount].to_f) %>
+        <% end %>
+      </li>
+    <% end %>
+  </ul>
+<% end %>
+
+<p><a href="<%= @dashboard_url %>">Open today’s list</a></p>

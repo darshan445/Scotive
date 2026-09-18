@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState, Fragment } from "react";
 import { ChevronDown, ChevronRight, Loader2, LogOut, RefreshCw } from "lucide-react";
-import { api, extractError } from "@/lib/api";
+import { api, extractError, unwrapData } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -71,7 +71,7 @@ function UserInvoicesPanel({ userId }) {
                 const { data } = await api.get(`/admin/users/${userId}/invoices`, {
                     params: { limit: 100 },
                 });
-                if (!cancelled) setInvoices(data.invoices || []);
+                if (!cancelled) setInvoices(unwrapData(data)?.invoices || []);
             } catch (err) {
                 if (!cancelled) {
                     setError(extractError(err));
@@ -167,7 +167,7 @@ function AdminLogin({ onLoggedIn }) {
         setSubmitting(true);
         try {
             const { data } = await api.post("/admin/login", { email, password });
-            onLoggedIn(data);
+            onLoggedIn(unwrapData(data));
         } catch (err) {
             setError(extractError(err));
         } finally {
@@ -232,7 +232,7 @@ function ContactInbox({ refreshKey }) {
         setError("");
         try {
             const { data } = await api.get("/admin/contact-messages", { params: { limit: 50 } });
-            setMessages(data.messages || []);
+            setMessages(unwrapData(data)?.messages || []);
         } catch (err) {
             setError(extractError(err));
             setMessages([]);
@@ -336,7 +336,7 @@ function AdminDashboard({ admin, onLogout }) {
         setError("");
         try {
             const { data } = await api.get("/admin/dashboard");
-            setDashboard(data);
+            setDashboard(unwrapData(data));
             setInboxKey((k) => k + 1);
         } catch (err) {
             setError(extractError(err));
@@ -394,7 +394,7 @@ function AdminDashboard({ admin, onLogout }) {
                 {stats ? (
                     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
                         <StatCard label="Users" value={stats.total_users} />
-                        <StatCard label="Gmail" value={stats.gmail_connected} />
+                        <StatCard label="Mailbox" value={stats.gmail_connected} />
                         <StatCard label="QBO" value={stats.qbo_connected} />
                         <StatCard label="Both" value={stats.both_connected} />
                         <StatCard label="Neither" value={stats.neither_connected} />
@@ -407,7 +407,7 @@ function AdminDashboard({ admin, onLogout }) {
                 <div className="flex flex-wrap gap-2">
                     {[
                         { id: "all", label: "All" },
-                        { id: "gmail", label: "Gmail only" },
+                        { id: "gmail", label: "Mailbox only" },
                         { id: "qbo", label: "QBO only" },
                         { id: "both", label: "Both" },
                         { id: "neither", label: "Neither" },
@@ -485,8 +485,8 @@ function AdminDashboard({ admin, onLogout }) {
                                                                 ok={u.gmail_connected}
                                                                 label={
                                                                     u.gmail_connected
-                                                                        ? `Gmail · ${u.gmail_email || "on"}`
-                                                                        : "Gmail · off"
+                                                                        ? `${u.mailbox_provider === "outlook" ? "Outlook" : "Gmail"} · ${u.gmail_email || "on"}`
+                                                                        : "Mailbox · off"
                                                                 }
                                                             />
                                                             <ConnPill
@@ -535,7 +535,7 @@ export default function AdminPage() {
         (async () => {
             try {
                 const { data } = await api.get("/admin/me");
-                if (!cancelled) setAdmin(data);
+                if (!cancelled) setAdmin(unwrapData(data));
             } catch {
                 if (!cancelled) setAdmin(null);
             } finally {

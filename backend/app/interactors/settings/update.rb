@@ -56,7 +56,10 @@ class Settings::Update
   end
 
   def normalized_offsets
-    Array(attrs[:escalation_offsets]).first(4).map { |value| Integer(value) }
+    values = Array(attrs[:escalation_offsets]).map { |value| Integer(value) }
+    raise_string_error("Escalation offsets must be four numbers") unless values.size == 4
+
+    values
   rescue ArgumentError, TypeError
     raise_string_error("Escalation offsets must be numbers")
   end

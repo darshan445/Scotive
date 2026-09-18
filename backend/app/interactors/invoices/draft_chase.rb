@@ -69,18 +69,7 @@ class Invoices::DraftChase
     return "broken_promise" if invoice.current_ar_status == "broken_promise"
     return intent_step if intent_step.present?
 
-    days_late = (organization.today - invoice.due_date).to_i
-    if days_late >= 14
-      "urgent_plus_14"
-    elsif days_late >= 7
-      "firm_plus_7"
-    elsif days_late >= 3
-      "nudge_plus_3"
-    elsif days_late >= 0
-      "due_today"
-    else
-      "notice_minus_3"
-    end
+    Cadence::Steps.current_key(organization, invoice)
   end
 
   def intent_step

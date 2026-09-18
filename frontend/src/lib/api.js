@@ -39,7 +39,8 @@ api.interceptors.response.use(
     (error) => {
         const url = String(error?.config?.url || "");
         const isAuthAttempt = /\/v1\/auth\/(sign-in|sign-up)/.test(url);
-        if (error?.response?.status === 401 && !isAuthAttempt) {
+        const isAdminRoute = /\/admin\//.test(url) || /\/admin$/.test(url);
+        if (error?.response?.status === 401 && !isAuthAttempt && !isAdminRoute) {
             setAuthToken(null);
         }
         return Promise.reject(error);

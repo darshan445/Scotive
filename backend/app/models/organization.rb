@@ -22,4 +22,11 @@ class Organization < ApplicationRecord
   def today
     Time.current.in_time_zone(zone).to_date
   end
+
+  def ladder_offsets
+    values = Array(escalation_offsets).first(4).map { |value| Integer(value) }
+    values.size == 4 ? values : DEFAULT_OFFSETS
+  rescue ArgumentError, TypeError
+    DEFAULT_OFFSETS
+  end
 end

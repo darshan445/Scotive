@@ -35,7 +35,7 @@ module Cadence::Copy
     when "firm_plus_7"
       "Following up on overdue invoice #{number} for #{amount} (due #{due}). Remaining balance is #{remaining}. Please let me know if you need anything to process this."
     when "urgent_plus_14"
-      "Invoice #{number} for #{amount} is now 14 days past due (due #{due}). Remaining balance is #{remaining}. Please send payment or reply with an update."
+      "Invoice #{number} for #{amount} is now #{days_late(invoice)} days past due (due #{due}). Remaining balance is #{remaining}. Please send payment or reply with an update."
     when "broken_promise"
       "You mentioned payment would be made by #{promise} for invoice #{number} (#{amount}). I have not seen it land yet. Can you confirm when it will go out?"
     else
@@ -57,5 +57,10 @@ module Cadence::Copy
 
   def format_date(value)
     value&.to_date&.strftime("%B %-d, %Y")
+  end
+
+  def days_late(invoice)
+    today = invoice.organization&.today || Date.current
+    [ (today - invoice.due_date).to_i, 1 ].max
   end
 end

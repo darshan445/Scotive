@@ -503,9 +503,9 @@ function DailyDigestSection({ settings, saving, onSave, timezones }) {
 
             <div className="flex items-center justify-between gap-4 mt-6 max-w-lg">
                 <div>
-                    <div className="font-medium">Save a preferred digest hour</div>
+                    <div className="font-medium">Email a daily digest</div>
                     <div className="text-xs text-muted-foreground">
-                        Stored for later. Home already shows what needs you today — email digest send is not live yet.
+                        Sends what needs you today — past due, broken promises, says paid, needs reply — at this hour.
                     </div>
                 </div>
                 <Switch checked={enabled} onCheckedChange={setEnabled} data-testid="toggle-daily-digest" />
@@ -537,7 +537,7 @@ function DailyDigestSection({ settings, saving, onSave, timezones }) {
                     daily_digest_enabled: enabled,
                     daily_digest_hour: hour,
                     daily_digest_timezone: tz,
-                }, "Timezone saved")}
+                }, "Timezone and digest saved")}
                 testid="save-digest"
             />
         </Section>

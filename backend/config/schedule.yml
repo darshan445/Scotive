@@ -17,3 +17,7 @@ qbo_token_refresh:
 mailbox_watch_renewal:
   cron: "0 7 * * *"
   class: Email::RenewMailboxWebhooksJob
+
+daily_digest:
+  cron: "*/15 * * * *"
+  class: Digests::SendJob

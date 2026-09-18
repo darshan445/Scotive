@@ -61,5 +61,15 @@ Rails.application.routes.draw do
         post "qbo-step", to: "qbo_steps#create"
       end
     end
+
+    namespace :admin do
+      post "login", to: "sessions#create"
+      get "me", to: "sessions#show"
+      post "logout", to: "sessions#destroy"
+      get "dashboard", to: "dashboards#show"
+      get "users/:user_id/invoices", to: "user_invoices#index"
+      get "contact-messages", to: "contact_messages#index"
+      post "contact-messages/:id/read", to: "contact_messages#read"
+    end
   end
 end

@@ -9,10 +9,6 @@ class Cadence::Enqueue
   include ExecuteMethodHelper
   include LogHelper
 
-  FRIENDLY_STEPS = %w[notice_minus_3 due_today nudge_plus_3].freeze
-  DRAFT_STEPS = %w[firm_plus_7 urgent_plus_14 broken_promise].freeze
-  STEPS = (FRIENDLY_STEPS + DRAFT_STEPS).freeze
-
   def self.execute(invoice:, step:)
     new(invoice: invoice, step: step).execute
   end
@@ -25,7 +21,7 @@ class Cadence::Enqueue
   def execute
     execute_log_and_return_open_struct do
       raise_string_error("Invoice is required") if invoice.blank?
-      raise_string_error("Unknown cadence step") unless STEPS.include?(step)
+      raise_string_error("Unknown cadence step") unless Cadence::Steps.known?(step)
 
       reason = skip_reason
       if reason
@@ -78,7 +74,7 @@ class Cadence::Enqueue
   end
 
   def draft?
-    DRAFT_STEPS.include?(step) || !invoice.organization.friendly_auto_send?
+    Cadence::Steps.draft?(step) || !invoice.organization.friendly_auto_send?
   end
 
   def send_at

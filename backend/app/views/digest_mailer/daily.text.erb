@@ -1,0 +1,12 @@
+Hi<%= @user.first_name.present? ? " #{@user.first_name}" : "" %>,
+
+Here’s what needs you in Scotive today.
+
+<% @sections.each do |section| %>
+<%= section[:label] %>
+<% section[:rows].each do |row| %>
+- <%= row[:invoice_ref] || "Invoice" %> · <%= row[:counterparty_name] || row[:counterparty_email] || "Unknown client" %><% if row[:amount] %> · <%= row[:currency] || "USD" %> <%= format("%.2f", row[:amount].to_f) %><% end %>
+<% end %>
+
+<% end %>
+Open today’s list: <%= @dashboard_url %>
