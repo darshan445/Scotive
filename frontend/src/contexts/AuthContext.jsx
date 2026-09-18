@@ -1,9 +1,17 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
-import { api, extractError } from "@/lib/api";
+import { api, extractError, setAuthToken } from "@/lib/api";
 
 const AuthContext = createContext(null);
+
+function sessionFrom(payload) {
+    const data = payload?.data ?? payload;
+    const user = data?.user ?? null;
+    const token = data?.token;
+    if (token) setAuthToken(token);
+    return user;
+}
 
 export function AuthProvider({ children }) {
     // null = checking, false = anon, object = user
@@ -11,10 +19,12 @@ export function AuthProvider({ children }) {
 
     const fetchMe = useCallback(async () => {
         try {
-            const { data } = await api.get("/auth/me");
-            setUser(data);
-            return data;
+            const { data } = await api.get("/v1/auth/me");
+            const next = sessionFrom(data);
+            setUser(next || false);
+            return next;
         } catch (_e) {
+            setAuthToken(null);
             setUser(false);
             return null;
         }
@@ -26,9 +36,10 @@ export function AuthProvider({ children }) {
 
     const login = useCallback(async (email, password) => {
         try {
-            const { data } = await api.post("/auth/login", { email, password });
-            setUser(data);
-            return { ok: true, user: data };
+            const { data } = await api.post("/v1/auth/sign-in", { email, password });
+            const next = sessionFrom(data);
+            setUser(next);
+            return { ok: true, user: next };
         } catch (e) {
             return { ok: false, error: extractError(e) };
         }
@@ -38,9 +49,10 @@ export function AuthProvider({ children }) {
         try {
             const body = { email, password, name };
             if (timezone) body.timezone = timezone;
-            const { data } = await api.post("/auth/register", body);
-            setUser(data);
-            return { ok: true, user: data };
+            const { data } = await api.post("/v1/auth/sign-up", body);
+            const next = sessionFrom(data);
+            setUser(next);
+            return { ok: true, user: next };
         } catch (e) {
             return { ok: false, error: extractError(e) };
         }
@@ -48,17 +60,18 @@ export function AuthProvider({ children }) {
 
     const logout = useCallback(async () => {
         try {
-            await api.post("/auth/logout");
+            await api.delete("/v1/auth/sign-out");
         } catch (_e) {
             /* ignore */
         }
+        setAuthToken(null);
         setUser(false);
     }, []);
 
     const forgotPassword = useCallback(async (email) => {
         try {
-            const { data } = await api.post("/auth/forgot-password", { email });
-            return { ok: true, message: data?.message };
+            const { data } = await api.post("/v1/auth/forgot-password", { email });
+            return { ok: true, message: data?.data?.message || data?.message };
         } catch (e) {
             return { ok: false, error: extractError(e) };
         }
@@ -66,7 +79,7 @@ export function AuthProvider({ children }) {
 
     const resetPassword = useCallback(async (token, password) => {
         try {
-            await api.post("/auth/reset-password", { token, password });
+            await api.post("/v1/auth/reset-password", { token, password });
             return { ok: true };
         } catch (e) {
             return { ok: false, error: extractError(e) };

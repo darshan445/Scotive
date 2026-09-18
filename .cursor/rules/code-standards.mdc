@@ -1,0 +1,87 @@
+---
+description: Rails/API code standards — SOLID, interactors, versioned JSON APIs. Always apply.
+alwaysApply: true
+---
+
+# Scotive code standards
+
+## SOLID
+
+- **S** — one class, one job. Controllers HTTP only. Models persistence/invariants. Interactors one use case.
+- **O** — extend with a new interactor or adapter, do not fork existing ones for a new provider.
+- **L** — child interactors must return the same `OpenStruct` (`success?`, `data`, `errors`).
+- **I** — do not dump unrelated helpers into one concern. A concern needs two+ real callers.
+- **D** — HTTP/API clients live in interactors (Faraday). Controllers never call Faraday or Sidekiq internals.
+
+## Interactors (default for business logic and external I/O)
+
+Mother Goose pattern (`app/interactors`, `bin/rails generate interactor Foo::Bar`).
+
+**Always this shape. Never `.call`. Never `return` inside `execute`.**
+
+```ruby
+class Auth::SignIn
+  include ExecuteMethodHelper
+  include LogHelper
+
+  def self.execute(email:, password:)
+    new(email: email, password: password).execute
+  end
+
+  def initialize(email:, password:)
+    @email = email
+    @password = password
+  end
+
+  def execute
+    execute_log_and_return_open_struct do
+      user = find_user!
+      token = validate_result(Auth::EncodeJwt.execute(user: user)).data
+      { user: user, token: token } # last expression → result.data
+    end
+  end
+end
+
+result = Auth::SignIn.execute(email:, password:)
+result.success? ? result.data : result.errors
+```
+
+```ruby
+# BAD — not this codebase
+def self.call(...) ; end
+def call ; end
+def execute
+  return user if user
+  execute_log_and_return_open_struct { ... }
+end
+```
+
+- Fail with `raise_string_error("msg")`. Compose with `validate_result(Other.execute(...))`.
+- Last expression in the `execute_log_and_return_open_struct` block is `result.data`. Guard with `raise_string_error` / `if`, not `return`.
+- `return` is fine in **private** helpers only.
+- Group by domain: `app/interactors/auth/sign_in.rb` → `Auth::SignIn`.
+- **Concerns** — shared ActiveRecord/controller behavior only. Not a logic dumping ground.
+- **Services** — almost never. If it is a use case, it is an interactor with `.execute`.
+
+Controllers:
+
+```ruby
+def create
+  result = Auth::SignUp.execute(**attrs)
+  render_result(result, status: :created)
+end
+```
+
+## HTTP API
+
+- Version under `/api/v1/...`. Unversioned `/api/health` only.
+- JSON envelope: `{ "data": ... }` or `{ "errors": [{ "status", "code", "detail" }] }`.
+- Auth: JWT `Authorization: Bearer`. Never session cookies as the API credential.
+- Tenant: every domain query scoped to `current_user.organization_id`.
+- Migrations for schema. No hand-maintained SQL dumps.
+
+## Frontend
+
+- Axios `baseURL` is `/api`. Call `/v1/auth/sign-in`, not unversioned `/auth/login`.
+- Persist JWT; send Bearer on every request. Parse `errors[].detail` for UI copy.
+---

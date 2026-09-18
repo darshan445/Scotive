@@ -2,12 +2,12 @@
 
 Rails.application.config.middleware.insert_before 0, Rack::Cors do
   allow do
-    origins ENV.fetch("FRONTEND_URL", "http://localhost:3000")
+    origins(*ENV.fetch("FRONTEND_URL", "http://localhost:3001").split(",").map(&:strip))
 
     resource "*",
       headers: :any,
       methods: %i[get post put patch delete options head],
-      expose: ["Authorization"],
+      expose: [ "Authorization" ],
       credentials: true
   end
 end

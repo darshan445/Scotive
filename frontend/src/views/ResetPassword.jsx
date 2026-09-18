@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 
 export default function ResetPasswordPage() {
-    const [params] = useSearchParams();
+    const params = useSearchParams();
     const token = params.get("token") || "";
     const { resetPassword } = useAuth();
     const router = useRouter();

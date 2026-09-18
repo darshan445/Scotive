@@ -6,12 +6,45 @@ const BACKEND_URL =
     "";
 
 export const API_BASE = `${BACKEND_URL}/api`;
+const TOKEN_KEY = "scotive_token";
+
+export function getAuthToken() {
+    if (typeof window === "undefined") return null;
+    return window.localStorage.getItem(TOKEN_KEY);
+}
+
+export function setAuthToken(token) {
+    if (typeof window === "undefined") return;
+    if (token) window.localStorage.setItem(TOKEN_KEY, token);
+    else window.localStorage.removeItem(TOKEN_KEY);
+}
 
 export const api = axios.create({
     baseURL: API_BASE,
     withCredentials: true,
     timeout: 20000,
 });
+
+api.interceptors.request.use((config) => {
+    const token = getAuthToken();
+    if (token) {
+        config.headers = config.headers || {};
+        config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+});
+
+api.interceptors.response.use(
+    (response) => response,
+    (error) => {
+        const url = String(error?.config?.url || "");
+        const isAuthAttempt = /\/v1\/auth\/(sign-in|sign-up)/.test(url);
+        if (error?.response?.status === 401 && !isAuthAttempt) {
+            setAuthToken(null);
+        }
+        return Promise.reject(error);
+    }
+);
 
 /** Sync now / QBO import — Gmail + model can take well over the default 20s. */
 export const LONG_JOB_TIMEOUT_MS = 180_000;
@@ -28,10 +61,17 @@ export function formatApiErrorDetail(detail) {
     if (typeof detail === "string") return detail;
     if (Array.isArray(detail)) {
         return detail
-            .map((e) => (e && typeof e.msg === "string" ? e.msg : JSON.stringify(e)))
+            .map((e) => {
+                if (!e) return "";
+                if (typeof e === "string") return e;
+                if (typeof e.detail === "string") return e.detail;
+                if (typeof e.msg === "string") return e.msg;
+                return JSON.stringify(e);
+            })
             .filter(Boolean)
             .join(" ");
     }
+    if (detail && typeof detail.detail === "string") return detail.detail;
     if (detail && typeof detail.msg === "string") return detail.msg;
     return String(detail);
 }
@@ -50,5 +90,9 @@ export function extractError(err) {
             return "Can't reach the server. Check that the API is running, then try again.";
         }
     }
-    return formatApiErrorDetail(err?.response?.data?.detail) || err?.message || "Unexpected error";
+    const data = err?.response?.data;
+    if (Array.isArray(data?.errors) && data.errors.length) {
+        return formatApiErrorDetail(data.errors);
+    }
+    return formatApiErrorDetail(data?.detail) || err?.message || "Unexpected error";
 }

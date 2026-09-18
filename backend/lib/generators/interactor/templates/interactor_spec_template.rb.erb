@@ -1,0 +1,27 @@
+# frozen_string_literal: true
+
+require "rails_helper"
+
+RSpec.describe <%= class_name_camelized %>, type: :interactor do
+  describe ".execute" do
+    let(:argument) { "argument_value" }
+
+    subject { described_class.execute(argument) }
+
+    context "when everything is valid" do
+      it "returns success with data" do
+        expect(subject.success?).to be true
+        expect(subject.data).not_to be_nil
+      end
+    end
+
+    context "when the argument is invalid" do
+      let(:argument) { nil }
+
+      it "returns failure with errors" do
+        expect(subject.success?).to be false
+        expect(subject.errors).to be_present
+      end
+    end
+  end
+end

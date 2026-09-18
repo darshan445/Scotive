@@ -3,8 +3,6 @@
 class ApplicationController < ActionController::API
   include Devise::Controllers::Helpers
 
-  before_action :authenticate_user!, unless: :devise_controller?
-
   private
 
   def current_organization

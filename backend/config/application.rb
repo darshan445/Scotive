@@ -21,13 +21,13 @@ Bundler.require(*Rails.groups)
 module Scotive
   class Application < Rails::Application
     config.load_defaults 8.1
-    config.autoload_lib(ignore: %w[assets tasks])
+    config.autoload_lib(ignore: %w[assets tasks generators devise])
+    Rails.autoloaders.main.collapse(root.join("app/interactors/concerns"))
 
     config.api_only = true
     config.require_master_key = false
     config.secret_key_base = ENV.fetch("SECRET_KEY_BASE")
 
-    config.active_record.schema_format = :sql
     config.active_job.queue_adapter = :sidekiq
 
     config.generators do |g|

@@ -25,9 +25,12 @@ docker compose up --build
 ```
 
 - API: http://localhost:3000/api/health
-- Postgres: localhost:5432 (`scotive` / `scotive`) — empty database, no migrations yet
+- Frontend: `cd frontend && npm run dev` → http://localhost:3001 (`NEXT_PUBLIC_BACKEND_URL=http://localhost:3000`)
+- Postgres: localhost:5432 (`scotive` / `scotive`)
 - Redis: localhost:6379
-- Sidekiq: same file
+- Sidekiq: same compose file
+
+After schema changes: `docker compose exec api bin/rails db:migrate`
 
 Rebuild after Gemfile changes: `docker compose up --build`. Stop: `docker compose down`.
 
@@ -41,7 +44,6 @@ docker compose -f docker-compose.prod.yml up --build -d
 
 - API: host port 3000
 - Postgres / Redis: not published (compose network only)
-- `RUN_DB_PREPARE` is still `false` (no table creation)
 
 Logs: `docker compose -f docker-compose.prod.yml logs -f api`
 Stop: `docker compose -f docker-compose.prod.yml down`
@@ -50,14 +52,21 @@ Set `POSTGRES_PASSWORD` in the shell or a root `.env` next to the prod compose f
 
 Turn `FORCE_SSL=true` in `.env.prod` only when TLS terminates in front of the API.
 
-## Auth (JSON)
+## Auth (`/api/v1`)
 
-- `POST /api/auth/sign_up` `{ "user": { "email", "password", "password_confirmation", "first_name", "last_name" }, "organization_name": "Acme" }`
-- `POST /api/auth/sign_in` `{ "user": { "email", "password" } }`
-- `DELETE /api/auth/sign_out` `Authorization: Bearer <token>`
+Envelope: `{ "data": ... }` or `{ "errors": [{ "status", "code", "detail" }] }`. JWT in `Authorization: Bearer`.
+
+| Method | Path | Body |
+|---|---|---|
+| POST | `/api/v1/auth/sign-up` | `{ email, password, name?, timezone? }` |
+| POST | `/api/v1/auth/sign-in` | `{ email, password }` |
+| GET | `/api/v1/auth/me` | Bearer |
+| DELETE | `/api/v1/auth/sign-out` | Bearer |
+| POST | `/api/v1/auth/forgot-password` | `{ email }` |
+| POST | `/api/v1/auth/reset-password` | `{ token, password }` |
 
 Host Ruby (optional, RVM): `rvm use 3.3.10@scotive` then `cd backend && bundle exec rails s -p 3000` against compose Postgres/Redis.
 
-Interactor pattern: from `backend/` run `bash ../interactor_setup.sh` when you start domain jobs.
+Interactors: `bin/rails generate interactor Auth::DoSomething` from `backend/`. Pattern is already installed.
 
 Rulebook prompt: `backend/prompts/rulebook_reeval.txt`

@@ -1,0 +1,31 @@
+# frozen_string_literal: true
+
+# <%= class_name_camelized %> Interactor
+# Purpose: [DESCRIBE WHAT THIS INTERACTOR DOES]
+# Methods:
+# - execute
+
+class <%= class_name_camelized %>
+  include ExecuteMethodHelper
+  include LogHelper
+
+  def self.execute(argument)
+    new(argument).execute
+  end
+
+  def initialize(argument)
+    @argument = argument
+  end
+
+  def execute
+    execute_log_and_return_open_struct do
+      # Last expression becomes result.data. Do not use return in this method.
+      # Fail with raise_string_error("msg") or validate_result(Other.execute(...)).
+      argument
+    end
+  end
+
+  private
+
+  attr_reader :argument
+end

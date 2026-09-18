@@ -3,9 +3,17 @@ Rails.application.routes.draw do
   get "/api/health", to: "api/health#show"
 
   devise_for :users, skip: :all
-  devise_scope :user do
-    post "/api/auth/sign_up", to: "api/auth/registrations#create"
-    post "/api/auth/sign_in", to: "api/auth/sessions#create"
-    delete "/api/auth/sign_out", to: "api/auth/sessions#destroy"
+
+  namespace :api do
+    namespace :v1 do
+      namespace :auth do
+        post "sign-up", to: "registrations#create"
+        post "sign-in", to: "sessions#create"
+        delete "sign-out", to: "sessions#destroy"
+        get "me", to: "me#show"
+        post "forgot-password", to: "passwords#create"
+        post "reset-password", to: "passwords#update"
+      end
+    end
   end
 end
