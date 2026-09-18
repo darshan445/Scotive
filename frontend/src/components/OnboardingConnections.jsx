@@ -9,9 +9,7 @@ import { ConnectMailboxButton } from "@/components/ConnectGmailButton";
 import { ConnectQboButton } from "@/components/ConnectQboButton";
 import { toastQboImportComplete } from "@/components/QboOnboardingStep";
 import { Button } from "@/components/ui/button";
-import { api, extractError } from "@/lib/api";
-
-const POLL_MS = 400;
+import { api, extractError, unwrapData, LONG_JOB_TIMEOUT_MS } from "@/lib/api";
 
 function connFor(connections, provider) {
     return (connections || []).find((c) => c.provider === provider && c.connected);
@@ -155,6 +153,11 @@ export function OnboardingConnections({
     const [disconnecting, setDisconnecting] = useState(null);
     const [liveQbo, setLiveQbo] = useState(qboStatus);
     const [livePipe, setLivePipe] = useState(onboarding?.qbo_pipeline || null);
+    const [kickoffImporting, setKickoffImporting] = useState(false);
+    const [kickoffError, setKickoffError] = useState(false);
+    const [kickoffMatching, setKickoffMatching] = useState(false);
+    const importKickoffRef = useRef(false);
+    const matchKickoffRef = useRef(false);
 
     useEffect(() => {
         setLiveQbo(qboStatus);
@@ -162,14 +165,11 @@ export function OnboardingConnections({
 
     const merged = liveQbo || qboStatus;
     const { lastAt, status: importStatus, imported, total } = importFields(merged, onboarding);
-    const importError = importStatus === "error";
+    const importError = importStatus === "error" || kickoffError;
+    const importComplete = Boolean(!importError && (lastAt || importStatus === "complete"));
     const importing = Boolean(
-        qboConnected && (
-            importStatus === "running"
-            || (!lastAt && importStatus !== "complete" && importStatus !== "error")
-        ),
+        qboConnected && !importComplete && (importStatus === "running" || importStatus === "queued" || kickoffImporting),
     );
-    const importComplete = Boolean(!importing && !importError && (lastAt || importStatus === "complete"));
     const emailUnlocked = qboConnected && importComplete && !importing;
     const googleConn = connFor(connections, "google");
     const outlookConn = connFor(connections, "outlook");
@@ -179,10 +179,14 @@ export function OnboardingConnections({
     const pipe = livePipe || onboarding?.qbo_pipeline || null;
     const pipeBusy = pipelineBusy(pipe);
     const phase = pipe?.phase || "";
-    const jobDone = pipe?.status === "complete" || pipe?.status === "error";
+    const matchComplete = pipe?.status === "complete";
+    const matchFailed = pipe?.status === "error";
     const deciding = Boolean(pipeBusy && phase === "deciding_status");
-    const jobPending = Boolean(anyMail && importComplete && !pipeBusy && !jobDone);
-    const matchingPhase = Boolean(jobPending || (pipeBusy && !deciding));
+    const matchingPhase = Boolean(
+        kickoffMatching ||
+        (anyMail && importComplete && !matchComplete && !matchFailed) ||
+        (pipeBusy && !deciding)
+    );
     const blocking = matchingPhase || deciding;
     const pipeTotal = Number(pipe?.total || 0);
     const examined = Number(pipe?.examined || 0);
@@ -193,71 +197,59 @@ export function OnboardingConnections({
     const barLabel = deciding ? "Updating status from conversations" : "Matching conversations";
     const matchBarOnGmail = blocking && googleOn;
     const matchBarOnOutlook = blocking && outlookOn && !googleOn;
-    const canContinue = anyMail && qboConnected && importComplete && jobDone && !blocking;
+    const canContinue = anyMail && qboConnected && importComplete && matchComplete && !blocking;
     const companyName = (merged?.company_name || "").trim();
+
+    const onImportedRef = useRef(onQboImported);
+    onImportedRef.current = onQboImported;
 
     useEffect(() => {
         if (onboarding?.qbo_pipeline) setLivePipe(onboarding.qbo_pipeline);
     }, [onboarding?.qbo_pipeline]);
 
     useEffect(() => {
-        if (!qboConnected || importComplete || importError) return undefined;
-        let cancelled = false;
-        async function tick() {
+        if (!qboConnected || importComplete || importError || importKickoffRef.current) return undefined;
+        importKickoffRef.current = true;
+        setKickoffImporting(true);
+        setKickoffError(false);
+        (async () => {
             try {
-                const { data } = await api.get("/qbo/status");
-                if (!cancelled) setLiveQbo(data);
-            } catch {
-                /* keep last snapshot */
+                const { data } = await api.post("/v1/qbo/import", null, { timeout: LONG_JOB_TIMEOUT_MS });
+                toastQboImportComplete(unwrapData(data)?.counts || {});
+                const { data: status } = await api.get("/v1/qbo/status");
+                setLiveQbo(unwrapData(status));
+                onImportedRef.current?.();
+            } catch (e) {
+                importKickoffRef.current = false;
+                setKickoffError(true);
+                toast.error(extractError(e));
+            } finally {
+                setKickoffImporting(false);
             }
-        }
-        tick();
-        const id = setInterval(tick, POLL_MS);
-        return () => {
-            cancelled = true;
-            clearInterval(id);
-        };
+        })();
+        return undefined;
     }, [qboConnected, importComplete, importError]);
 
     useEffect(() => {
-        if (!anyMail || !importComplete || jobDone) return undefined;
-        let cancelled = false;
-        async function tick() {
-            try {
-                const { data } = await api.get("/qbo/pipeline-status");
-                if (!cancelled && data?.pipeline) setLivePipe(data.pipeline);
-            } catch {
-                /* keep last snapshot */
-            }
-        }
-        tick();
-        const id = setInterval(tick, POLL_MS);
-        return () => {
-            cancelled = true;
-            clearInterval(id);
-        };
-    }, [anyMail, importComplete, jobDone]);
-
-    useEffect(() => {
-        if (!anyMail || !importComplete) return undefined;
-        if (pipeBusy || jobDone) return undefined;
-        let cancelled = false;
+        if (!anyMail || !importComplete || matchComplete || matchFailed || matchKickoffRef.current) return undefined;
+        matchKickoffRef.current = true;
+        setKickoffMatching(true);
         (async () => {
             try {
-                await api.post("/qbo/match-conversations");
-                const { data } = await api.get("/qbo/pipeline-status");
-                if (!cancelled && data?.pipeline) setLivePipe(data.pipeline);
-            } catch {
-                /* enqueue is best-effort; poll will pick it up */
+                const { data } = await api.post("/v1/qbo/match-conversations", null, { timeout: LONG_JOB_TIMEOUT_MS });
+                const payload = unwrapData(data);
+                setLivePipe(payload?.pipeline || { status: "complete", phase: "matching" });
+                onImportedRef.current?.();
+            } catch (e) {
+                setLivePipe({ status: "error", phase: "matching" });
+                toast.error(extractError(e));
+            } finally {
+                setKickoffMatching(false);
             }
         })();
-        return () => {
-            cancelled = true;
-        };
-    }, [anyMail, importComplete, pipeBusy, jobDone]);
+        return undefined;
+    }, [anyMail, importComplete, matchComplete, matchFailed]);
 
-    const onImportedRef = useRef(onQboImported);
-    onImportedRef.current = onQboImported;
     const skipImportNotify = useRef(true);
     useEffect(() => {
         if (skipImportNotify.current) {
@@ -271,7 +263,10 @@ export function OnboardingConnections({
         if (disconnecting) return;
         setDisconnecting("qbo");
         try {
-            await api.post("/qbo/disconnect");
+            await api.post("/v1/qbo/disconnect");
+            importKickoffRef.current = false;
+            setKickoffImporting(false);
+            setKickoffError(false);
             setLiveQbo({ connected: false, status: "disconnected" });
             toast("QuickBooks disconnected");
             onConnectionsChange?.();
@@ -286,7 +281,10 @@ export function OnboardingConnections({
         if (disconnecting) return;
         setDisconnecting(provider);
         try {
-            await api.post("/gmail/disconnect", null, { params: { provider } });
+            await api.post("/v1/gmail/disconnect", null, { params: { provider } });
+            matchKickoffRef.current = false;
+            setKickoffMatching(false);
+            setLivePipe(null);
             toast(provider === "outlook" ? "Outlook disconnected" : "Gmail disconnected");
             onConnectionsChange?.();
         } catch (e) {
@@ -299,11 +297,12 @@ export function OnboardingConnections({
     async function retryImport() {
         if (retrying) return;
         setRetrying(true);
+        setKickoffError(false);
         try {
-            const { data } = await api.post("/qbo/import");
-            toastQboImportComplete(data?.counts || {});
-            const { data: status } = await api.get("/qbo/status");
-            setLiveQbo(status);
+            const { data } = await api.post("/v1/qbo/import", null, { timeout: LONG_JOB_TIMEOUT_MS });
+            toastQboImportComplete(unwrapData(data)?.counts || {});
+            const { data: status } = await api.get("/v1/qbo/status");
+            setLiveQbo(unwrapData(status));
             onQboImported?.();
         } catch (e) {
             toast.error(extractError(e));
@@ -316,9 +315,9 @@ export function OnboardingConnections({
         if (!canContinue || busy) return;
         setBusy(true);
         try {
-            await api.post("/onboarding/qbo-step", { action: "connected" }).catch(() => {});
-            const { data } = await api.post("/onboarding/continue");
-            await onContinue?.(data);
+            await api.post("/v1/onboarding/qbo-step", { action: "connected" }).catch(() => {});
+            const { data } = await api.post("/v1/onboarding/continue");
+            await onContinue?.(unwrapData(data));
         } catch (e) {
             toast.error(extractError(e));
             setBusy(false);
@@ -327,17 +326,17 @@ export function OnboardingConnections({
 
     const emailLockHint = !qboConnected
         ? "Connect invoicing first"
-        : importing
+        : !importComplete || importing || importError
             ? "Available after invoices are imported"
-            : importError
-                ? "Available after invoices are imported"
-                : null;
+            : null;
 
     let nextHint = "Connect invoicing, then Gmail or Outlook";
     if (importing) nextHint = "Importing invoices…";
     else if (importError) nextHint = "Invoice import didn’t finish — try again";
+    else if (qboConnected && !importComplete) nextHint = "Invoice import is next — mailbox stays locked until then";
     else if (qboConnected && !anyMail) nextHint = "Connect Gmail or Outlook — one or both";
     else if (matchingPhase) nextHint = "Matching conversations…";
+    else if (matchFailed) nextHint = "Couldn’t match conversations — reconnect email to try again";
     else if (deciding) nextHint = "Updating status from conversations…";
     else if (canContinue) nextHint = "Next opens your ledger";
 
@@ -373,13 +372,7 @@ export function OnboardingConnections({
                                         <div className="text-xs text-muted-foreground truncate mt-0.5">{companyName}</div>
                                     ) : null}
                                 </div>
-                                {qboConnected && importComplete ? (
-                                    <ConnectedActions
-                                        onDisconnect={disconnectQbo}
-                                        busy={disconnecting === "qbo"}
-                                        testId="onboarding-qbo-connected"
-                                    />
-                                ) : qboConnected && importing ? (
+                                {qboConnected && importing ? (
                                     <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
                                         <Loader2 className="w-4 h-4 animate-spin" /> Importing
                                     </span>
@@ -396,6 +389,12 @@ export function OnboardingConnections({
                                         {retrying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
                                         Try again
                                     </Button>
+                                ) : qboConnected ? (
+                                    <ConnectedActions
+                                        onDisconnect={disconnectQbo}
+                                        busy={disconnecting === "qbo"}
+                                        testId="onboarding-qbo-connected"
+                                    />
                                 ) : (
                                     <ConnectQboButton
                                         label="Connect"

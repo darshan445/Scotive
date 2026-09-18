@@ -118,4 +118,45 @@ RSpec.describe "API v1 auth", type: :request do
       expect(response).to have_http_status(:unauthorized)
     end
   end
+
+  describe "DELETE /api/v1/auth/account" do
+    it "requires a token" do
+      delete "/api/v1/auth/account", params: { confirm_email: email }, as: :json
+      expect(response).to have_http_status(:unauthorized)
+    end
+
+    it "rejects a mismatched confirmation email" do
+      token = Auth::SignUp.execute(email: email, password: password, name: "Ada").data[:token]
+
+      delete "/api/v1/auth/account",
+             headers: auth_headers(token),
+             params: { confirm_email: "other@agency.com" },
+             as: :json
+
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(User.find_by(email: email)).to be_present
+    end
+
+    it "destroys the organization and owner when email matches" do
+      token = Auth::SignUp.execute(email: email, password: password, name: "Ada").data[:token]
+      organization_id = User.find_by!(email: email).organization_id
+      qbo_client = instance_double(Quickbooks::QuickbookClient, revoke_token: nil)
+      email_client = instance_double(Email::EmailClient, delete_account: nil)
+      allow(Quickbooks::QuickbookClient).to receive(:new).and_return(qbo_client)
+      allow(Email::EmailClient).to receive(:new).and_return(email_client)
+
+      delete "/api/v1/auth/account",
+             headers: auth_headers(token),
+             params: { confirm_email: email },
+             as: :json
+
+      expect(response).to have_http_status(:ok)
+      expect(json_body.dig("data", "deleted")).to eq(true)
+      expect(User.find_by(email: email)).to be_nil
+      expect(Organization.find_by(id: organization_id)).to be_nil
+
+      get "/api/v1/auth/me", headers: auth_headers(token), as: :json
+      expect(response).to have_http_status(:unauthorized)
+    end
+  end
 end

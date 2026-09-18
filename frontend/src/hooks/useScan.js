@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, extractError } from "@/lib/api";
+import { api, extractError, unwrapData } from "@/lib/api";
 import { useWorkspaceRefreshEffect } from "@/lib/workspaceRefresh";
 
 export function useScan() {
@@ -63,9 +63,10 @@ export function useLedger(shouldFetch = true) {
 
     const refresh = useCallback(async () => {
         try {
-            const { data } = await api.get("/ledger");
-            setData(data);
-            return data;
+            const { data } = await api.get("/v1/ledger");
+            const ledger = unwrapData(data);
+            setData(ledger);
+            return ledger;
         } catch (e) {
             setError(extractError(e));
             return null;

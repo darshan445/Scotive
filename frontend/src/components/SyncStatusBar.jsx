@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Eye, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
-import { api, extractError, isTimeoutError, LONG_JOB_TIMEOUT_MS } from "@/lib/api";
-import { useWorkspaceRefreshEffect } from "@/lib/workspaceRefresh";
+import { api, extractError, unwrapData, LONG_JOB_TIMEOUT_MS } from "@/lib/api";
+import { notifyWorkspaceRefresh, useWorkspaceRefreshEffect } from "@/lib/workspaceRefresh";
 
 function timeAgo(iso) {
     if (!iso) return null;
@@ -28,16 +28,17 @@ async function waitForSyncIdle(prevLastSyncedAt, { maxMs = LONG_JOB_TIMEOUT_MS }
     const deadline = Date.now() + maxMs;
     let sawRunning = false;
     while (Date.now() < deadline) {
-        await sleep(1500);
+        await sleep(800);
         try {
-            const { data } = await api.get("/scan/sync-state");
-            if (data?.sync_running) {
+            const { data } = await api.get("/v1/sync");
+            const snapshot = unwrapData(data);
+            if (snapshot?.sync_running) {
                 sawRunning = true;
                 continue;
             }
-            if (sawRunning) return data;
-            const stamp = data?.last_synced_at;
-            if (stamp && stamp !== prevLastSyncedAt) return data;
+            if (sawRunning) return snapshot;
+            const stamp = snapshot?.last_synced_at;
+            if (stamp && stamp !== prevLastSyncedAt) return snapshot;
         } catch {
             /* keep waiting — the job may still be on the server */
         }
@@ -55,8 +56,8 @@ export function SyncStatusBar({ onSynced, watching = false, openInvoiceCount = 0
 
     const load = useCallback(async () => {
         try {
-            const { data } = await api.get("/scan/sync-state");
-            setState(data);
+            const { data } = await api.get("/v1/sync");
+            setState(unwrapData(data));
         } catch {
             /* ignore */
         }
@@ -91,6 +92,7 @@ export function SyncStatusBar({ onSynced, watching = false, openInvoiceCount = 0
             toast.success("Up to date");
         }
         await load();
+        notifyWorkspaceRefresh();
         onSynced?.();
     }
 
@@ -98,26 +100,15 @@ export function SyncStatusBar({ onSynced, watching = false, openInvoiceCount = 0
         setBusy(true);
         const prevStamp = state?.last_synced_at;
         try {
-            const { data } = await api.post("/scan/sync", null, { timeout: LONG_JOB_TIMEOUT_MS });
-            const c = data?.counts || {};
-            if (c.skipped === "already_running") {
-                const idle = await waitForSyncIdle(prevStamp);
-                if (!idle) {
-                    toast.error("Sync is still running. The list will catch up when it finishes.");
-                    return;
-                }
-                await finishSync({});
+            const { data } = await api.post("/v1/sync");
+            const started = unwrapData(data) || {};
+            const idle = await waitForSyncIdle(prevStamp);
+            if (!idle) {
+                toast.error("Sync is still running. The list will catch up when it finishes.");
                 return;
             }
-            await finishSync(c);
+            await finishSync(idle.counts || started.counts || {});
         } catch (e) {
-            if (isTimeoutError(e)) {
-                const idle = await waitForSyncIdle(prevStamp);
-                if (idle) {
-                    await finishSync({});
-                    return;
-                }
-            }
             toast.error(extractError(e));
         } finally {
             setBusy(false);

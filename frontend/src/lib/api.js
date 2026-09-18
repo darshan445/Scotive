@@ -46,6 +46,14 @@ api.interceptors.response.use(
     }
 );
 
+/** Rails JSON envelope is `{ data: ... }`. Auth already unwraps; OAuth hooks use this. */
+export function unwrapData(payload) {
+    if (payload && typeof payload === "object" && Object.prototype.hasOwnProperty.call(payload, "data")) {
+        return payload.data;
+    }
+    return payload;
+}
+
 /** Sync now / QBO import — Gmail + model can take well over the default 20s. */
 export const LONG_JOB_TIMEOUT_MS = 180_000;
 

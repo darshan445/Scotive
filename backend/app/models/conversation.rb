@@ -6,4 +6,6 @@ class Conversation < ApplicationRecord
   has_many :messages, dependent: :destroy
   has_many :invoice_conversations, dependent: :destroy
   has_many :invoices, through: :invoice_conversations
+
+  validates :external_thread_id, presence: true
 end

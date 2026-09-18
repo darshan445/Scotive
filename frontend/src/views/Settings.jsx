@@ -26,7 +26,7 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { api, extractError } from "@/lib/api";
+import { api, extractError, unwrapData } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { ConnectionPanel } from "@/components/ConnectionPanel";
 import { SettingsSkeleton } from "@/components/PageSkeletons";
@@ -41,13 +41,19 @@ const ESCALATION_LABELS = [
     "Your turn (Firm)",
 ];
 
+const DEFAULT_SETTINGS = {
+    escalation_offsets: [-3, 0, 7, 9],
+    follow_up_interval_days: 3,
+    friendly_auto_send: true,
+};
+
 export default function SettingsPage() {
     const { user, logout } = useAuth();
     const { status: gmailStatus } = useGmailConnection();
     const { status: qboStatus } = useQboConnection();
     const [settings, setSettings] = useState(null);
+    const [settingsReady, setSettingsReady] = useState(false);
     const [saving, setSaving] = useState(false);
-    const [err, setErr] = useState("");
     const [suppressed, setSuppressed] = useState([]);
     const [timezones, setTimezones] = useState([]);
 
@@ -59,19 +65,24 @@ export default function SettingsPage() {
     useEffect(() => {
         let alive = true;
         async function load() {
-            try {
-                const [s, sup, tz] = await Promise.all([
-                    api.get("/settings"),
-                    api.get("/suppressed-senders"),
-                    api.get("/settings/timezones"),
-                ]);
-                if (!alive) return;
-                setSettings(s.data);
-                setSuppressed(sup.data.senders || []);
-                setTimezones(tz.data.timezones || []);
-            } catch (e) {
-                if (alive) setErr(extractError(e));
+            const [settingsRes, suppressedRes, tzRes] = await Promise.allSettled([
+                api.get("/settings"),
+                api.get("/suppressed-senders"),
+                api.get("/settings/timezones"),
+            ]);
+            if (!alive) return;
+            if (settingsRes.status === "fulfilled") {
+                setSettings(unwrapData(settingsRes.value.data) || DEFAULT_SETTINGS);
+            } else {
+                setSettings(DEFAULT_SETTINGS);
             }
+            if (suppressedRes.status === "fulfilled") {
+                setSuppressed(unwrapData(suppressedRes.value.data)?.senders || []);
+            }
+            if (tzRes.status === "fulfilled") {
+                setTimezones(unwrapData(tzRes.value.data)?.timezones || []);
+            }
+            setSettingsReady(true);
         }
         load();
         return () => { alive = false; };
@@ -81,7 +92,7 @@ export default function SettingsPage() {
         setSaving(true);
         try {
             const { data } = await api.patch("/settings", patch);
-            setSettings(data);
+            setSettings(unwrapData(data) || data);
             toast.success(successMsg);
         } catch (e) {
             toast.error(extractError(e));
@@ -103,7 +114,7 @@ export default function SettingsPage() {
     async function doDelete() {
         setDeleting(true);
         try {
-            await api.delete("/account", { data: { confirm_email: confirmEmail } });
+            await api.delete("/v1/auth/account", { data: { confirm_email: confirmEmail } });
             toast.success("Account deleted");
             await logout();
         } catch (e) {
@@ -112,17 +123,7 @@ export default function SettingsPage() {
         }
     }
 
-    if (err && !settings) {
-        return (
-            <AppShell width="3xl" mainClassName="py-10 md:py-14">
-                <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                    {err}
-                </div>
-            </AppShell>
-        );
-    }
-
-    if (!settings) {
+    if (!settingsReady || !settings) {
         return (
             <AppShell width="3xl" mainClassName="py-10 md:py-14">
                 <SettingsSkeleton />

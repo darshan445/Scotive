@@ -1,15 +1,15 @@
 "use client";
 import { toast } from "sonner";
-import { api } from "@/lib/api";
+import { api, unwrapData, LONG_JOB_TIMEOUT_MS } from "@/lib/api";
 
 /**
  * After QBO OAuth: mark step + import unpaid invoices (fast).
  * Conversation match / status re-eval runs in the background — dashboard shows progress.
  */
 export async function finishQboOnboardingImport() {
-    await api.post("/onboarding/qbo-step", { action: "connected" });
-    const { data } = await api.post("/qbo/import");
-    return data?.counts || {};
+    await api.post("/v1/onboarding/qbo-step", { action: "connected" });
+    const { data } = await api.post("/v1/qbo/import", null, { timeout: LONG_JOB_TIMEOUT_MS });
+    return unwrapData(data)?.counts || {};
 }
 
 export function toastQboImportComplete(counts = {}) {

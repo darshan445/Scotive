@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { ConnectQboButton } from "@/components/ConnectQboButton";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { api, extractError } from "@/lib/api";
+import { api, extractError, unwrapData, LONG_JOB_TIMEOUT_MS } from "@/lib/api";
 import { useQboConnection } from "@/hooks/useQboConnection";
 import { notifyWorkspaceRefresh } from "@/lib/workspaceRefresh";
 function formatDate(iso) {
@@ -42,8 +42,8 @@ export function QboConnectionPanel({ status }) {
     async function handleImport() {
         setImporting(true);
         try {
-            const { data } = await api.post("/qbo/import");
-            const c = data?.counts || {};
+            const { data } = await api.post("/v1/qbo/import", null, { timeout: LONG_JOB_TIMEOUT_MS });
+            const c = unwrapData(data)?.counts || {};
             const created = c.created || 0;
             const updated = c.updated || 0;
             const merged = c.merged || 0;

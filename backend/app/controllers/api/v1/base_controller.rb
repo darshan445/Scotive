@@ -3,9 +3,15 @@
 module Api
   module V1
     class BaseController < ApplicationController
+      prepend_before_action :skip_devise_trackable
       before_action :authenticate_user!
 
       private
+
+      # JWT auth runs on every API call. Do not treat those as new Devise sign-ins.
+      def skip_devise_trackable
+        request.env["devise.skip_trackable"] = true
+      end
 
       def bearer_token
         request.headers["Authorization"].to_s

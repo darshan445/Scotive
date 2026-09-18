@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, TrendingUp, AlertTriangle, Clock } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { ClientDetailSkeleton } from "@/components/PageSkeletons";
-import { api, extractError } from "@/lib/api";
+import { api, extractError, unwrapData } from "@/lib/api";
 import { formatMoney, formatOpenTotals } from "@/components/LedgerCard";
 import { invoiceStatusDateLine, invoiceSubject, isJunkInvoiceRef } from "@/lib/invoiceCopy";
 import { navigateToInvoice } from "@/lib/invoiceNavigation";
@@ -85,8 +85,8 @@ export default function ClientDetailPage() {
     const [err, setErr] = useState("");
 
     useEffect(() => {
-        api.get(`/clients/${encodeURIComponent(email)}`)
-            .then(({ data }) => setData(data))
+        api.get(`/v1/clients/${encodeURIComponent(email)}`)
+            .then(({ data }) => setData(unwrapData(data)))
             .catch((e) => setErr(extractError(e)));
     }, [email]);
 

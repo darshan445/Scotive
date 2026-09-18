@@ -6,6 +6,7 @@ export const STATUS_LABELS = {
     overdue: "Past due",
     promised: "Promised",
     promise_broken: "Promise broken",
+    broken_promise: "Promise broken",
     disputed: "Disputed",
     partially_paid: "Partially paid",
     paid_unconfirmed: "Says paid",

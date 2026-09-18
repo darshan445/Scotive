@@ -7,7 +7,7 @@ import * as SheetPrimitive from "@radix-ui/react-dialog";
 import { ChaseComposer, confirmDiscardComposer } from "@/components/ChaseComposer";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { api, extractError } from "@/lib/api";
+import { api, extractError, unwrapData } from "@/lib/api";
 import { formatDate, formatMoney } from "@/components/LedgerCard";
 import {
     invoiceStatusDisplay,
@@ -243,8 +243,8 @@ export function InvoiceDetailDrawer({ invoiceId, preview = null, open, onClose, 
     const refresh = useCallback(() => {
         if (!invoiceId) return;
         setErr("");
-        api.get(`/invoices/${invoiceId}/conversation`)
-            .then(({ data: res }) => setData(res))
+        api.get(`/v1/invoices/${invoiceId}/conversation`)
+            .then(({ data: res }) => setData(unwrapData(res)))
             .catch((e) => setErr(extractError(e)));
     }, [invoiceId]);
 

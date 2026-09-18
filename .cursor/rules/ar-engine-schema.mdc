@@ -59,7 +59,8 @@ CREATE TABLE integrations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
     category VARCHAR(50) NOT NULL,              -- 'accounting' or 'mailbox'
-    provider VARCHAR(50) NOT NULL,              -- 'qbo', 'xero', 'freshbooks', 'gmail', 'outlook', 'unipile'
+    provider VARCHAR(50) NOT NULL,              -- 'qbo', 'xero', 'freshbooks', 'gmail', 'outlook'
+    -- Unipile is a mailbox connection service, not a provider value.
     external_account_id VARCHAR(255),          -- Realm ID, Tenant ID, or mailbox email address
     account_name VARCHAR(255),                 -- Human-readable label (e.g. "Acme Operations")
     access_token TEXT,                         -- Encrypted credentials
@@ -242,7 +243,8 @@ CREATE TABLE webhook_events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
     integration_id UUID REFERENCES integrations(id) ON DELETE CASCADE,
-    provider VARCHAR(50) NOT NULL,             -- 'qbo', 'xero', 'freshbooks', 'gmail', 'outlook', 'unipile'
+    provider VARCHAR(50) NOT NULL,             -- 'qbo', 'xero', 'freshbooks', 'gmail', 'outlook'
+    -- Mailbox HTTP may arrive via Unipile; persist the mailbox provider (gmail/outlook), not 'unipile'.
     external_event_id VARCHAR(255) NOT NULL,   -- Provider event ID / HMAC signature hash
     payload JSONB NOT NULL,
     status VARCHAR(50) DEFAULT 'pending' NOT NULL, -- 'pending', 'processed', 'failed'

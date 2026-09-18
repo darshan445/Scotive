@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
-import { api } from "@/lib/api";
+import { api, unwrapData } from "@/lib/api";
 import { useWorkspaceRefreshEffect } from "@/lib/workspaceRefresh";
 
 const POLL_MS =
@@ -50,7 +50,8 @@ export function useLiveDetection({ enabled, onDetected, onDueDatePrompt, onFollo
     const poll = useCallback(async () => {
         if (!enabled || document.hidden) return;
         try {
-            const { data: state } = await api.get("/scan/sync-state");
+            const { data } = await api.get("/v1/sync");
+            const state = unwrapData(data);
             showUnread(state?.unread_detections);
             showDuePrompts(state?.pending_due_date_prompts);
             showFollowUpPrompts(state?.pending_followup_prompts);

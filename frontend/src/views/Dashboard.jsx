@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { AlertTriangle, ArrowUpRight, CalendarClock, Wallet } from "lucide-react";
 import { toast } from "sonner";
@@ -10,7 +10,6 @@ import { TodayCard } from "@/components/TodayCard";
 import { SyncStatusBar } from "@/components/SyncStatusBar";
 import { WatchingEmptyState } from "@/components/WatchingEmptyState";
 import { OnboardingConnections } from "@/components/OnboardingConnections";
-import { finishQboOnboardingImport, toastQboImportComplete } from "@/components/QboOnboardingStep";
 import { InvoiceDetectedBanner } from "@/components/InvoiceDetectedBanner";
 import { DueDatePromptBanner } from "@/components/DueDatePromptBanner";
 import { FollowUpPromptBanner } from "@/components/FollowUpPromptBanner";
@@ -31,7 +30,6 @@ import { useOnboarding } from "@/hooks/useOnboarding";
 import { useLiveDetection } from "@/hooks/useLiveDetection";
 import { useWorkspaceRefresh } from "@/hooks/useWorkspaceRefresh";
 import { openLedgerInvoices, historyLedgerInvoices, pausedLedgerInvoices, outstandingBalance } from "@/lib/ledgerInvoices";
-import { api, extractError } from "@/lib/api";
 
 const OPEN_STATUSES = new Set(["invoiced", "overdue", "promised", "partially_paid", "promise_broken", "disputed", "paid_unconfirmed"]);
 
@@ -190,27 +188,10 @@ export default function DashboardPage() {
         setFollowUpPrompt(null);
         setDueDatePrompt(null);
     }, [refreshWorkspace]);
-    const qboImportRef = useRef(false);
     const [chaseInvoice, setChaseInvoice] = useState(null);
     const [latestDetection, setLatestDetection] = useState(null);
     const [dueDatePrompt, setDueDatePrompt] = useState(null);
     const [followUpPrompt, setFollowUpPrompt] = useState(null);
-
-    const runQboImport = useCallback(async () => {
-        if (qboImportRef.current) return;
-        qboImportRef.current = true;
-        try {
-            const counts = await finishQboOnboardingImport();
-            toastQboImportComplete(counts);
-            await refreshOnboarding();
-            await refreshQbo();
-        } catch (e) {
-            qboImportRef.current = false;
-            toast.error(extractError(e));
-            await api.post("/onboarding/qbo-step", { action: "connected" }).catch(() => {});
-            await refreshOnboarding();
-        }
-    }, [refreshOnboarding, refreshQbo]);
 
     const hasOpenInvoices = useMemo(
         () => openLedgerInvoices(ledger?.invoices).length > 0,
@@ -271,15 +252,26 @@ export default function DashboardPage() {
     useQboCallbackToast(
         useCallback(async (result) => {
             await refreshQbo();
-            if (result === "connected" && !pastOnboarding) {
-                await runQboImport();
+            if (result === "connected") {
+                await refreshOnboarding();
             }
-        }, [refreshQbo, pastOnboarding, runQboImport]),
+        }, [refreshQbo, refreshOnboarding]),
     );
 
     useEffect(() => {
         refreshOnboarding();
     }, [status?.connected, qboStatus?.connected, refreshOnboarding]);
+
+    const handleConnectionsChange = useCallback(() => {
+        void refresh();
+        void refreshQbo();
+        void refreshOnboarding();
+    }, [refresh, refreshQbo, refreshOnboarding]);
+
+    const handleQboImported = useCallback(() => {
+        void refreshQbo();
+        void refreshOnboarding();
+    }, [refreshQbo, refreshOnboarding]);
 
     async function handleConnectionsContinue(data) {
         await refreshOnboarding();
@@ -317,17 +309,8 @@ export default function DashboardPage() {
                         qboStatus={qboStatus}
                         onboarding={onboarding}
                         onContinue={handleConnectionsContinue}
-                        onConnectionsChange={() => {
-                            qboImportRef.current = false;
-                            void refresh();
-                            void refreshQbo();
-                            void refreshOnboarding();
-                        }}
-                        onQboImported={() => {
-                            qboImportRef.current = true;
-                            void refreshQbo();
-                            void refreshOnboarding();
-                        }}
+                        onConnectionsChange={handleConnectionsChange}
+                        onQboImported={handleQboImported}
                     />
                 </div>
             ) : (

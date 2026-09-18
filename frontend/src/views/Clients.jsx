@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { ClientsTableSkeleton } from "@/components/PageSkeletons";
-import { api, extractError } from "@/lib/api";
+import { api, extractError, unwrapData } from "@/lib/api";
 import { formatDate, formatOpenTotals } from "@/components/LedgerCard";
 import { useWorkspaceRefreshEffect } from "@/lib/workspaceRefresh";
 
@@ -13,7 +13,7 @@ export default function ClientsPage() {
     const [err, setErr] = useState("");
 
     const load = useCallback(() => {
-        api.get("/clients").then(({ data }) => setClients(data.clients)).catch((e) => setErr(extractError(e)));
+        api.get("/v1/clients").then(({ data }) => setClients(unwrapData(data).clients)).catch((e) => setErr(extractError(e)));
     }, []);
 
     useEffect(() => { load(); }, [load]);

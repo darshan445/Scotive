@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, extractError } from "@/lib/api";
+import { api, extractError, unwrapData } from "@/lib/api";
 
 const POLL_MS = 1500;
 
@@ -23,9 +23,10 @@ export function useOnboarding({ enabled = true } = {}) {
 
     const refresh = useCallback(async () => {
         try {
-            const { data } = await api.get("/onboarding/state");
-            setState(data);
-            return data;
+            const { data } = await api.get("/v1/onboarding/state");
+            const stateData = unwrapData(data);
+            setState(stateData);
+            return stateData;
         } catch (e) {
             setError(extractError(e));
             return null;

@@ -89,9 +89,17 @@ For each missed invoice, run an asynchronous background job executing the bounde
 
 #### Step 5: Onboarding State Finalization
 
-For invoices where threads contain only outbound messages from the user: skip AI evaluation and assign status based on clock calculation (`invoiced` or `overdue`).
+For each newly matched invoice from historical discovery:
 
-For invoices with inbound client replies: dispatch an asynchronous job to evaluate conversational state via the AI State Reader (evaluated strictly one invoice per LLM call).
+1. **Check Message Directions:** Inspect all messages linked across Home and Split threads:
+   * **Branch A (Outbound Only):** If the thread contains exclusively `direction: 'user_to_client'` messages (no client replies exist), **skip AI evaluation entirely**. Assign status via clock evaluation:
+     * `due_date < CURRENT_DATE` → `overdue`
+     * `due_date >= CURRENT_DATE` → `invoiced`
+     * Set `needs_reply = false`.
+   * **Branch B (Inbound Client Activity Present):** If the thread contains one or more `direction: 'client_to_user'` messages, enqueue `EvaluateInvoiceStateJob(invoice_id)` to execute the `rulebook_reeval.txt` prompt. 
+     * The model reads the thread oldest → newest.
+     * Evaluates active conversational state (`promised`, `disputed`, `paid_unconfirmed`, `partially_paid`, or baseline `invoiced`/`overdue`).
+     * Extracts `needs_reply` and appends all baseline events to `invoice_state_transitions`.
 
 ## 3. Real-Time Webhook Engine (Fast-Ack & Event Routing)
 
@@ -339,24 +347,52 @@ Conversational claims are temporary overlays on top of baseline clock/books trut
 
 ## 9. AI State Reader Contract & Execution Rules
 
-**Isolation Rule:** Evaluated strictly one invoice per LLM execution. Multi-invoice threads are evaluated by fanning out independent jobs per invoice.
+**Prompt Source File:** `rulebook_reeval.txt`  
+The prompt template in `rulebook_reeval.txt` serves as the single system prompt for reading conversational state. First-pass thread reading, webhook-driven evaluations, and periodic re-evaluations use this identical prompt.
 
-**Payload Structure:**
+### Trigger Matrix: When `rulebook_reeval.txt` Is Executed
 
-- `tracked_state`: Extracted from accounting ground truth (`invoice_ref`, `total_amount`, `issue_date`, `due_date`, `balance_remaining`, baseline status, and `processed_message_ids`).
-- `messages`: Chronological list (`sent_at ASC`) across Home and Split threads with clean bodies, sender directions, and timestamps.
+The background job (`EvaluateInvoiceStateJob`) invokes `rulebook_reeval.txt` ONLY under these 4 specific conditions:
 
-**Chronological Processing:** The model processes messages sequentially. Messages whose IDs exist in `processed_message_ids` provide context only; only unrecorded messages generate entries in `new_events`.
+1. **Onboarding State Finalization (First Pass):**
+   * Trigger: Step 5 of Initial Onboarding.
+   * Condition: Newly matched invoice threads that contain at least one inbound client message (`direction: 'client_to_user'`).
+   * *Skip rule:* If the thread contains only outbound user emails (`direction: 'user_to_client'`), skip the prompt entirely and assign status deterministically via clock math (`invoiced` or `overdue`).
 
-**Output Requirements:**
+2. **Real-Time Inbound Email Webhook:**
+   * Trigger: Mailbox webhook receives a new message (`mail_received`).
+   * Condition: A new message lands on a known linked thread, or an unknown thread matches an open invoice via token/number routing.
+   * Execution: Enqueued immediately for all invoices attached to that thread in `invoice_conversations`.
 
-- Header `current_ar_status` (`invoiced`, `overdue`, `promised`, `broken_promise`, `disputed`, `paid_unconfirmed`, `partially_paid`).
-- Boolean `needs_reply` (indicates whether a human response to the client is required).
-- Extracted metadata (dispute amounts, relative promise phrases).
+3. **Sync Now / Hourly Catch-Up Worker:**
+   * Trigger: Scheduled delta sync or manual user "Sync Now".
+   * Condition: The Mailbox Delta Worker discovers uningested message IDs linked to open invoices.
+   * Execution: Evaluates all open invoices where `messages.processed_by_ai = false`.
 
-**Commit Actions:**
+4. **Multi-Invoice Fanning Event:**
+   * Trigger: A single inbound client message references multiple invoices (e.g., *"Paid #1042 and #1045"*).
+   * Execution: Fanned out as independent, parallel executions of `rulebook_reeval.txt`—once for Invoice #1042 and once for Invoice #1045—with `anchor_invoice_ref` set to each specific invoice number.
 
-- Convert relative promise dates into calendar dates based on the message timestamp.
-- Append immutable records to the state transition ledger (`invoice_state_transitions`).
-- Update the cached status, promise dates, and flags on `invoices`.
-- Trigger outbox automation: snooze cadences if promised, pause if disputed or `paid_unconfirmed`, and queue drafts if overdue with `needs_reply == false`.
+### When NOT to Use `rulebook_reeval.txt` (Zero LLM Execution)
+
+* **Accounting Webhooks & Books Changes:** Balance changes or paid reconciliations are handled via deterministic SQL (`SELECT FOR UPDATE`).
+* **Clock Milestones:** Invoices becoming `overdue` or promises turning into `broken_promise` are executed via pure SQL chron workers.
+* **Manual User UI Overrides:** Button clicks ("Payment Not Received", "Mark Dispute Resolved", "Snooze") run purely through the deterministic state fallback ledger.
+* **Outbound Sends:** System cadence follow-ups or user-composed emails do not require LLM state evaluation.
+
+### Execution Contract
+
+* **Isolation Rule:** Evaluated strictly **one invoice per LLM execution**. Multi-invoice threads are evaluated by fanning out independent jobs per invoice.
+* **Payload Structure:**
+  * `tracked_state`: Extracted from accounting ground truth (`invoice_ref`, `total_amount`, `issue_date`, `due_date`, `balance_remaining`, baseline status, and `processed_message_ids`).
+  * `messages`: Chronological list (`sent_at ASC`) across Home and Split threads with clean bodies, sender directions, and timestamps.
+* **Chronological Processing:** The model processes messages sequentially. Messages whose IDs exist in `processed_message_ids` provide context only; only unrecorded messages generate entries in `new_events`.
+* **Output Requirements:**
+  * Header `current_ar_status` (`invoiced`, `overdue`, `promised`, `broken_promise`, `disputed`, `paid_unconfirmed`, `partially_paid`).
+  * Boolean `needs_reply` (indicates whether a human response to the client is required).
+  * Extracted metadata (dispute amounts, relative promise phrases).
+* **Commit Actions:**
+  * Convert relative promise dates into calendar dates based on the message timestamp.
+  * Append immutable records to the state transition ledger (`invoice_state_transitions`).
+  * Update the cached status, promise dates, and flags on `invoices`.
+  * Trigger outbox automation: snooze cadences if promised, pause if disputed or `paid_unconfirmed`, and queue drafts if overdue with `needs_reply = false`.

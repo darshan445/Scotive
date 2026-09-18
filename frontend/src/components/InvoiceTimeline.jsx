@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ExternalLink } from "lucide-react";
-import { api, extractError } from "@/lib/api";
+import { api, extractError, unwrapData } from "@/lib/api";
 import { formatTimelineEntry, gmailThreadUrl } from "@/lib/invoiceTimeline";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -10,8 +10,8 @@ export function InvoiceTimeline({ invoiceId, className = "" }) {
 
     useEffect(() => {
         let alive = true;
-        api.get(`/invoices/${invoiceId}/timeline`)
-            .then(({ data: res }) => { if (alive) setData(res); })
+        api.get(`/v1/invoices/${invoiceId}/timeline`)
+            .then(({ data: res }) => { if (alive) setData(unwrapData(res)); })
             .catch((e) => { if (alive) setErr(extractError(e)); });
         return () => { alive = false; };
     }, [invoiceId]);

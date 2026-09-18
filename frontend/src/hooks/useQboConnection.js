@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, extractError } from "@/lib/api";
+import { api, extractError, unwrapData } from "@/lib/api";
 
 /** status shape from backend QboStatus */
 export function useQboConnection() {
@@ -8,10 +8,11 @@ export function useQboConnection() {
 
     const refresh = useCallback(async () => {
         try {
-            const { data } = await api.get("/qbo/status");
-            setStatus(data);
+            const { data } = await api.get("/v1/qbo/status");
+            const statusData = unwrapData(data);
+            setStatus(statusData);
             setError("");
-            return data;
+            return statusData;
         } catch (e) {
             setError(extractError(e));
             setStatus({
@@ -31,8 +32,8 @@ export function useQboConnection() {
 
     const startConnect = useCallback(async () => {
         try {
-            const { data } = await api.get("/qbo/oauth/start");
-            window.location.href = data.authorization_url;
+            const { data } = await api.get("/v1/qbo/oauth/start");
+            window.location.href = unwrapData(data).authorization_url;
         } catch (e) {
             setError(extractError(e));
         }
@@ -40,7 +41,7 @@ export function useQboConnection() {
 
     const disconnect = useCallback(async () => {
         try {
-            await api.post("/qbo/disconnect");
+            await api.post("/v1/qbo/disconnect");
             await refresh();
             return { ok: true };
         } catch (e) {

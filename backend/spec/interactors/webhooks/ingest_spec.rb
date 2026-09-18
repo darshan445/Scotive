@@ -1,0 +1,86 @@
+# frozen_string_literal: true
+
+require "rails_helper"
+require "base64"
+require "openssl"
+
+RSpec.describe Webhooks::Ingest do
+  include ActiveJob::TestHelper
+
+  let(:organization) { Organization.create!(name: "Ada's workspace") }
+  let(:verifier) { "qbo-verifier-token" }
+  let!(:qbo) do
+    organization.integrations.create!(
+      category: "accounting",
+      provider: "qbo",
+      external_account_id: "realm-1",
+      account_name: "Studio",
+      access_token: "at",
+      connection_status: "connected"
+    )
+  end
+
+  def sign(body)
+    Base64.strict_encode64(OpenSSL::HMAC.digest("SHA256", verifier, body))
+  end
+
+  def qbo_body(operation: "Update")
+    {
+      "eventNotifications" => [
+        {
+          "realmId" => "realm-1",
+          "dataChangeEvent" => {
+            "entities" => [
+              {
+                "name" => "Invoice",
+                "id" => "95",
+                "operation" => operation,
+                "lastUpdated" => "2026-09-18T10:00:00.000Z"
+              }
+            ]
+          }
+        }
+      ]
+    }.to_json
+  end
+
+  around do |example|
+    prior = ENV["QBO_WEBHOOK_VERIFIER_TOKEN"]
+    ENV["QBO_WEBHOOK_VERIFIER_TOKEN"] = verifier
+    example.run
+    ENV["QBO_WEBHOOK_VERIFIER_TOKEN"] = prior
+  end
+
+  after { clear_enqueued_jobs }
+
+  it "persists a pending event and enqueues process" do
+    body = qbo_body
+    result = nil
+    expect {
+      result = described_class.execute(provider: "qbo", raw_body: body, signature: sign(body))
+    }.to have_enqueued_job(Webhooks::ProcessEventJob)
+
+    expect(result.success?).to eq(true)
+    event = WebhookEvent.last
+    expect(event.status).to eq("pending")
+    expect(event.provider).to eq("qbo")
+    expect(event.organization_id).to eq(organization.id)
+    expect(event.payload["id"]).to eq("95")
+  end
+
+  it "is idempotent for the same QBO entity event" do
+    body = qbo_body
+    described_class.execute(provider: "qbo", raw_body: body, signature: sign(body))
+    expect {
+      described_class.execute(provider: "qbo", raw_body: body, signature: sign(body))
+    }.not_to have_enqueued_job(Webhooks::ProcessEventJob)
+    expect(WebhookEvent.count).to eq(1)
+  end
+
+  it "rejects a bad HMAC" do
+    result = described_class.execute(provider: "qbo", raw_body: qbo_body, signature: "nope")
+    expect(result.success?).to eq(false)
+    expect(result.errors).to match(/signature/)
+    expect(WebhookEvent.count).to eq(0)
+  end
+end
