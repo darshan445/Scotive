@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { api, extractError, unwrapData, LONG_JOB_TIMEOUT_MS } from "@/lib/api";
 import { useQboConnection } from "@/hooks/useQboConnection";
 import { notifyWorkspaceRefresh } from "@/lib/workspaceRefresh";
+import { needsReconnect } from "@/lib/connectionStatus";
 function formatDate(iso) {
     if (!iso) return "";
     try {
@@ -80,6 +81,29 @@ export function QboConnectionPanel({ status }) {
         );
     }
 
+    if (needsReconnect(status.status)) {
+        return (
+            <div
+                className="rounded-xl border border-amber-200 bg-amber-50 p-6 flex flex-col md:flex-row md:items-center gap-4"
+                data-testid="qbo-connection-panel-revoked"
+            >
+                <div className="flex items-start gap-3 flex-1">
+                    <AlertTriangle className="w-5 h-5 text-amber-700 mt-0.5" />
+                    <div>
+                        <div className="font-heading font-semibold text-amber-900">QuickBooks access was revoked</div>
+                        <div className="text-sm text-amber-800 mt-1">
+                            Reconnect to keep importing invoices and paid status from QuickBooks.
+                            {status.company_name ? (
+                                <> ({status.company_name})</>
+                            ) : null}
+                        </div>
+                    </div>
+                </div>
+                <ConnectQboButton label="Reconnect QuickBooks" testId="reconnect-qbo-button" />
+            </div>
+        );
+    }
+
     if (!status.connected || status.status === "disconnected") {
         return (
             <div
@@ -98,26 +122,6 @@ export function QboConnectionPanel({ status }) {
                     </div>
                 </div>
                 <ConnectQboButton label="Connect QuickBooks" testId="connect-qbo-button" variant="secondary" />
-            </div>
-        );
-    }
-
-    if (status.status === "revoked") {
-        return (
-            <div
-                className="rounded-xl border border-amber-200 bg-amber-50 p-6 flex flex-col md:flex-row md:items-center gap-4"
-                data-testid="qbo-connection-panel-revoked"
-            >
-                <div className="flex items-start gap-3 flex-1">
-                    <AlertTriangle className="w-5 h-5 text-amber-700 mt-0.5" />
-                    <div>
-                        <div className="font-heading font-semibold text-amber-900">QuickBooks access was revoked</div>
-                        <div className="text-sm text-amber-800 mt-1">
-                            Reconnect to keep importing invoices and paid status from QuickBooks.
-                        </div>
-                    </div>
-                </div>
-                <ConnectQboButton label="Reconnect QuickBooks" testId="reconnect-qbo-button" />
             </div>
         );
     }

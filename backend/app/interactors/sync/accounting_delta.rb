@@ -9,6 +9,7 @@ class Sync::AccountingDelta
   include ExecuteMethodHelper
   include LogHelper
   include Quickbooks::BooksPersistence
+  include Quickbooks::TokenRefresh
 
   LOOKBACK = 2.hours
 
@@ -55,7 +56,7 @@ class Sync::AccountingDelta
     integration.update!(last_synced_at: Time.current)
     counts.merge(paid: paid_count(invoices), skipped: nil)
   rescue Faraday::Error => e
-    mark_reauth!(integration) if e.message.match?(/invalid_grant|401/)
+    mark_reauth!(integration) if qbo_grant_error?(e)
     raise_string_error("QuickBooks accounting delta failed")
   end
 
@@ -86,32 +87,5 @@ class Sync::AccountingDelta
 
   def paid_count(payloads)
     payloads.count { |payload| BigDecimal(payload["Balance"].to_s) <= 0 }
-  end
-
-  def ensure_fresh_token!(record)
-    token = record.access_token
-    needs_refresh = record.refresh_token.present? &&
-      (record.token_expires_at.blank? || record.token_expires_at <= 10.minutes.from_now)
-
-    if needs_refresh
-      tokens = client.refresh_access_token(refresh_token: record.refresh_token)
-      token = tokens["access_token"] || tokens[:access_token]
-      refresh = tokens["refresh_token"] || tokens[:refresh_token]
-      expires_in = (tokens["expires_in"] || tokens[:expires_in]).to_i
-      raise_string_error("QuickBooks did not return an access token") if token.blank?
-
-      record.update!(
-        access_token: token,
-        refresh_token: refresh.presence || record.refresh_token,
-        token_expires_at: expires_in.positive? ? Time.current + expires_in.seconds : record.token_expires_at
-      )
-    end
-
-    raise_string_error("QuickBooks access token is missing") if token.blank?
-    token
-  end
-
-  def mark_reauth!(record)
-    record.update!(connection_status: "reauth_required")
   end
 end

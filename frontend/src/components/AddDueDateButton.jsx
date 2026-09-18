@@ -19,7 +19,7 @@ export function AddDueDateButton({ invoiceId, onChanged, className = "" }) {
         if (!date || !invoiceId) return;
         setBusy(true);
         try {
-            await api.post(`/invoices/${invoiceId}/action`, { action: "set_due_date", due_date: date });
+            await api.post(`/v1/invoices/${invoiceId}/action`, { action: "set_due_date", due_date: date });
             toast.success("Due date saved");
             setOpen(false);
             setDate("");

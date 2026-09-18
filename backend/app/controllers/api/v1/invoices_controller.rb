@@ -18,6 +18,46 @@ module Api
         )
         render_result(result, failure_status: :not_found)
       end
+
+      def action
+        result = ::Invoices::ApplyAction.execute(
+          organization: current_organization,
+          invoice_id: params[:id],
+          action: body_param("action"),
+          due_date: body_param("due_date")
+        )
+        render_result(result, failure_status: missing_invoice?(result) ? :not_found : :unprocessable_content)
+      end
+
+      def draft_chase
+        result = ::Invoices::DraftChase.execute(
+          organization: current_organization,
+          invoice_id: params[:id],
+          note: body_param("note"),
+          intent: body_param("intent")
+        )
+        render_result(result, failure_status: missing_invoice?(result) ? :not_found : :unprocessable_content)
+      end
+
+      def send_chase
+        result = ::Invoices::SendChase.execute(
+          organization: current_organization,
+          invoice_id: params[:id],
+          subject: body_param("subject"),
+          body: body_param("body")
+        )
+        render_result(result, failure_status: missing_invoice?(result) ? :not_found : :unprocessable_content)
+      end
+
+      private
+
+      def body_param(key)
+        request.request_parameters[key].presence || params[key]
+      end
+
+      def missing_invoice?(result)
+        !result.success? && result.errors.to_s.match?(/not found/i)
+      end
     end
   end
 end

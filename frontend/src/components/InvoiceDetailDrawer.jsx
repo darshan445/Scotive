@@ -298,7 +298,7 @@ export function InvoiceDetailDrawer({ invoiceId, preview = null, open, onClose, 
         if (!inv) return;
         setBusy(true);
         try {
-            await api.post(`/invoices/${inv._id}/action`, { action });
+            await api.post(`/v1/invoices/${inv._id}/action`, { action });
             toast.success(
                 action === "mark_paid" ? "Marked paid"
                     : action === "deny_payment_claim" ? "Marked not yet received"

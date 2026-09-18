@@ -37,7 +37,7 @@ module Ledger::InvoicePayload
       created_at: invoice.created_at&.iso8601,
       status_updated_at: invoice.updated_at&.iso8601,
       paid_at: paid_at&.iso8601,
-      paid_via: paid_at.present? ? "quickbooks" : nil,
+      paid_via: paid_via_for(invoice),
       snoozed_until: invoice.snoozed_until&.iso8601
     }
   end
@@ -59,8 +59,18 @@ module Ledger::InvoicePayload
   def paid_at_for(invoice)
     return unless invoice.current_ar_status == "paid"
 
+    paid_transition(invoice)&.created_at || invoice.updated_at
+  end
+
+  def paid_via_for(invoice)
+    return unless invoice.current_ar_status == "paid"
+
+    paid_transition(invoice)&.trigger_source.to_s.start_with?("books") ? "quickbooks" : "manual"
+  end
+
+  def paid_transition(invoice)
     invoice.invoice_state_transitions.select { |row| row.to_status == "paid" }
-      .max_by(&:created_at)&.created_at || invoice.updated_at
+      .max_by(&:created_at)
   end
 
   def iso_date(value)

@@ -15,7 +15,7 @@ const CLOSED = new Set(["paid", "written_off"]);
 /** Mark paid immediately, toast with Undo (5s), then refresh lists. */
 export async function markInvoicePaidWithUndo(invoiceId, { onChanged } = {}) {
     try {
-        await api.post(`/invoices/${invoiceId}/action`, { action: "mark_paid" });
+        await api.post(`/v1/invoices/${invoiceId}/action`, { action: "mark_paid" });
         await onChanged?.();
         toast.success("Marked as paid", {
             duration: 5000,
@@ -23,7 +23,7 @@ export async function markInvoicePaidWithUndo(invoiceId, { onChanged } = {}) {
                 label: "Undo",
                 onClick: async () => {
                     try {
-                        await api.post(`/invoices/${invoiceId}/action`, { action: "undo" });
+                        await api.post(`/v1/invoices/${invoiceId}/action`, { action: "undo" });
                         toast.success("Restored");
                         await onChanged?.();
                     } catch (e) {
@@ -39,7 +39,7 @@ export async function markInvoicePaidWithUndo(invoiceId, { onChanged } = {}) {
 
 export async function pauseInvoiceTracking(invoiceId, { onChanged } = {}) {
     try {
-        await api.post(`/invoices/${invoiceId}/action`, { action: "pause" });
+        await api.post(`/v1/invoices/${invoiceId}/action`, { action: "pause" });
         toast.success("Paused tracking");
         await onChanged?.();
     } catch (e) {
@@ -49,7 +49,7 @@ export async function pauseInvoiceTracking(invoiceId, { onChanged } = {}) {
 
 export async function resumeInvoiceTracking(invoiceId, { onChanged } = {}) {
     try {
-        await api.post(`/invoices/${invoiceId}/action`, { action: "resume" });
+        await api.post(`/v1/invoices/${invoiceId}/action`, { action: "resume" });
         toast.success("Resumed tracking");
         await onChanged?.();
     } catch (e) {

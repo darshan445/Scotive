@@ -25,8 +25,17 @@ Rails.application.routes.draw do
       get "clients/:email", to: "clients#show", constraints: { email: /[^\/]+/ }
       get "invoices/:id/conversation", to: "invoices#conversation"
       get "invoices/:id/timeline", to: "invoices#timeline"
+      post "invoices/:id/action", to: "invoices#action"
+      post "invoices/:id/draft-chase", to: "invoices#draft_chase"
+      post "invoices/:id/send-chase", to: "invoices#send_chase"
       get "sync", to: "sync#show"
       post "sync", to: "sync#create"
+
+      get "settings", to: "settings#show"
+      patch "settings", to: "settings#update"
+      get "settings/timezones", to: "settings#timezones"
+      get "digest/today", to: "digests#today"
+      post "contact", to: "contacts#create"
 
       namespace :qbo do
         get "oauth/start", to: "oauth#start"

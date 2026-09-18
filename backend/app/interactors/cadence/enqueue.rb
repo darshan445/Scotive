@@ -78,14 +78,14 @@ class Cadence::Enqueue
   end
 
   def draft?
-    DRAFT_STEPS.include?(step)
+    DRAFT_STEPS.include?(step) || !invoice.organization.friendly_auto_send?
   end
 
   def send_at
     if step == "broken_promise"
       Time.current
     else
-      Time.current.utc.change(hour: 10, min: 15)
+      Time.current.in_time_zone(invoice.organization.zone).change(hour: 10, min: 15)
     end
   end
 

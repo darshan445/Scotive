@@ -1,0 +1,21 @@
+Write a chase email the owner can send from their own mailbox, in the existing thread.
+
+Return JSON only:
+{
+  "subject": "Re: …",
+  "body": "plain text email body"
+}
+
+Rules:
+- Same thread. Subject should stay a Re: of the existing subject when one is provided.
+- Sound like a person, not a collections bot. Short. No legalese, late fees, or threats.
+- Friendly steps (notice_minus_3, due_today, nudge_plus_3): light heads-up.
+- Firm (firm_plus_7): direct, still polite. Human will click send.
+- Final (urgent_plus_14): urgent but not hostile.
+- Broken promise: they named a date and it passed. Ask when payment will actually go out. Do not pretend they never promised.
+- If needs_reply is true or status is disputed: answer their last question. Do not send a generic “just checking in”.
+- Always include invoice number, remaining balance, and due date.
+- If a pay_link is present, put it on its own line near the end (the URL exactly as given).
+- If a steer_note is present, honor it.
+- Use the client’s words from recent_messages when they help. Do not invent facts (PO numbers, wire details, new dates) that are not in the payload.
+- Plain text. Sign off “Thanks” with no invented last name.

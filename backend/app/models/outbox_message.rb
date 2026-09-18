@@ -12,4 +12,10 @@ class OutboxMessage < ApplicationRecord
 
   scope :pending, -> { where(status: %w[scheduled draft]) }
   scope :due_to_send, -> { where(status: "scheduled").where("scheduled_send_at <= ?", Time.current) }
+
+  def self.cancel_pending_for!(invoice, reason)
+    pending.where(invoice_id: invoice.id, organization_id: invoice.organization_id).find_each do |row|
+      row.update!(status: "cancelled", cancellation_reason: reason)
+    end
+  end
 end

@@ -1,13 +1,10 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
 import { LogOut } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BrandMark } from "@/components/BrandMark";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
-import { api } from "@/lib/api";
-import { useWorkspaceRefreshEffect } from "@/lib/workspaceRefresh";
 
 const linkBase = "px-3 py-2 rounded-md text-sm font-medium transition-colors";
 
@@ -27,22 +24,6 @@ function NavItem({ href, children, testId, className = "" }) {
 
 export function TopNav() {
     const { user, logout } = useAuth();
-    const [reviewCount, setReviewCount] = useState(0);
-
-    const loadReviewCount = useCallback(async () => {
-        try {
-            const { data } = await api.get("/review-queue");
-            setReviewCount(data.count || 0);
-        } catch {
-            /* ignore */
-        }
-    }, []);
-
-    useEffect(() => {
-        loadReviewCount();
-    }, [loadReviewCount]);
-
-    useWorkspaceRefreshEffect(loadReviewCount);
 
     return (
         <header className="border-b border-border bg-background/95 backdrop-blur-sm sticky top-0 z-30">
@@ -52,14 +33,7 @@ export function TopNav() {
                     <nav className="hidden md:flex items-center gap-1" aria-label="App">
                         <NavItem href="/dashboard" testId="nav-dashboard">Home</NavItem>
                         <NavItem href="/clients" testId="nav-clients">Clients</NavItem>
-                        <NavItem href="/review" testId="nav-review" className="relative">
-                            Review
-                            {reviewCount > 0 ? (
-                                <span className="ml-1.5 inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-md bg-primary text-primary-foreground text-[10px] font-semibold px-1" data-testid="nav-review-badge">
-                                    {reviewCount}
-                                </span>
-                            ) : null}
-                        </NavItem>
+                        <NavItem href="/review" testId="nav-review">Review</NavItem>
                         <NavItem href="/settings" testId="nav-settings">Settings</NavItem>
                     </nav>
                 </div>

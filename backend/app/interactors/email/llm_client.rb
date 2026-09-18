@@ -4,11 +4,11 @@ require "faraday"
 
 # Faraday wrapper for OpenAI chat completions (JSON object responses).
 class Email::LlmClient
-  def complete_json(system:, user:)
+  def complete_json(system:, user:, temperature: 0)
     response = connection.post("/v1/chat/completions") do |req|
       req.body = {
         model: model,
-        temperature: 0,
+        temperature: temperature,
         response_format: { type: "json_object" },
         messages: [
           { role: "system", content: system },

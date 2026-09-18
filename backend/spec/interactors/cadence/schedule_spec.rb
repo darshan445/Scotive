@@ -91,4 +91,17 @@ RSpec.describe Cadence::Schedule do
       expect(other.outbox_messages).to be_empty
     end
   end
+
+  it "uses the organization calendar date, not UTC Date.current" do
+    organization.update!(time_zone: "America/Los_Angeles")
+    travel_to Time.utc(2026, 9, 19, 6) do
+      due = create_invoice!(status: "invoiced", due_date: Date.new(2026, 9, 18), number: "INV-LOCAL")
+      skip = create_invoice!(status: "invoiced", due_date: Date.new(2026, 9, 19), number: "INV-UTC")
+
+      result = described_class.execute(organization: organization)
+      expect(result.success?).to eq(true)
+      expect(due.outbox_messages.sole.cadence_step).to eq("due_today")
+      expect(skip.outbox_messages).to be_empty
+    end
+  end
 end

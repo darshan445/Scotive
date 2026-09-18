@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_09_18_183000) do
+ActiveRecord::Schema[8.1].define(version: 2026_09_18_190500) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -30,6 +30,15 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_18_183000) do
     t.index ["organization_id", "domain"], name: "idx_clients_domain"
     t.index ["organization_id", "primary_email"], name: "idx_clients_primary_email"
     t.index ["organization_id"], name: "index_clients_on_organization_id"
+  end
+
+  create_table "contact_messages", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.string "company"
+    t.datetime "created_at", null: false
+    t.string "email", null: false
+    t.text "message", null: false
+    t.string "name"
+    t.datetime "updated_at", null: false
   end
 
   create_table "conversations", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -160,7 +169,13 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_18_183000) do
 
   create_table "organizations", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.datetime "created_at", null: false
+    t.boolean "daily_digest_enabled", default: false, null: false
+    t.integer "daily_digest_hour", default: 9, null: false
+    t.jsonb "escalation_offsets", default: [-3, 0, 7, 9], null: false
+    t.integer "follow_up_interval_days", default: 3, null: false
+    t.boolean "friendly_auto_send", default: true, null: false
     t.string "name", null: false
+    t.string "time_zone", default: "UTC", null: false
     t.datetime "updated_at", null: false
   end
 
@@ -180,7 +195,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_18_183000) do
     t.string "to_address", null: false
     t.datetime "updated_at", null: false
     t.index ["conversation_id"], name: "index_outbox_messages_on_conversation_id"
-    t.index ["invoice_id", "cadence_step"], name: "uq_outbox_pending_step", unique: true, where: "(((status)::text = ANY ((ARRAY['scheduled'::character varying, 'draft'::character varying])::text[])) AND (cadence_step IS NOT NULL))"
+    t.index ["invoice_id", "cadence_step"], name: "uq_outbox_pending_step", unique: true, where: "(((status)::text = ANY (ARRAY[('scheduled'::character varying)::text, ('draft'::character varying)::text])) AND (cadence_step IS NOT NULL))"
     t.index ["invoice_id"], name: "index_outbox_messages_on_invoice_id"
     t.index ["organization_id"], name: "index_outbox_messages_on_organization_id"
     t.index ["status", "scheduled_send_at"], name: "idx_outbox_queue", where: "((status)::text = 'scheduled'::text)"

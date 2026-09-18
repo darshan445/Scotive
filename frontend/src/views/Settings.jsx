@@ -54,7 +54,6 @@ export default function SettingsPage() {
     const [settings, setSettings] = useState(null);
     const [settingsReady, setSettingsReady] = useState(false);
     const [saving, setSaving] = useState(false);
-    const [suppressed, setSuppressed] = useState([]);
     const [timezones, setTimezones] = useState([]);
 
     // Delete-account dialog state
@@ -65,19 +64,15 @@ export default function SettingsPage() {
     useEffect(() => {
         let alive = true;
         async function load() {
-            const [settingsRes, suppressedRes, tzRes] = await Promise.allSettled([
-                api.get("/settings"),
-                api.get("/suppressed-senders"),
-                api.get("/settings/timezones"),
+            const [settingsRes, tzRes] = await Promise.allSettled([
+                api.get("/v1/settings"),
+                api.get("/v1/settings/timezones"),
             ]);
             if (!alive) return;
             if (settingsRes.status === "fulfilled") {
                 setSettings(unwrapData(settingsRes.value.data) || DEFAULT_SETTINGS);
             } else {
                 setSettings(DEFAULT_SETTINGS);
-            }
-            if (suppressedRes.status === "fulfilled") {
-                setSuppressed(unwrapData(suppressedRes.value.data)?.senders || []);
             }
             if (tzRes.status === "fulfilled") {
                 setTimezones(unwrapData(tzRes.value.data)?.timezones || []);
@@ -91,23 +86,13 @@ export default function SettingsPage() {
     async function persist(patch, successMsg = "Saved") {
         setSaving(true);
         try {
-            const { data } = await api.patch("/settings", patch);
+            const { data } = await api.patch("/v1/settings", patch);
             setSettings(unwrapData(data) || data);
             toast.success(successMsg);
         } catch (e) {
             toast.error(extractError(e));
         } finally {
             setSaving(false);
-        }
-    }
-
-    async function unsuppress(email) {
-        try {
-            await api.delete(`/suppressed-senders/${encodeURIComponent(email)}`);
-            setSuppressed((prev) => prev.filter((s) => s.email !== email));
-            toast.success("Removed from suppression list");
-        } catch (e) {
-            toast.error(extractError(e));
         }
     }
 
@@ -213,14 +198,6 @@ export default function SettingsPage() {
                     onSave={persist}
                     timezones={timezones}
                 />
-
-                {/* Suppressed senders hidden for MVP — flip to true to restore. */}
-                {false ? (
-                    <SuppressedSendersSection
-                        senders={suppressed}
-                        onRemove={unsuppress}
-                    />
-                ) : null}
 
                 <DangerZone
                     email={user?.email}
@@ -459,33 +436,29 @@ function ScanWindowSection({ settings }) {
 // ---------------------------------------------------------------------------
 function DailyDigestSection({ settings, saving, onSave, timezones }) {
     const initialHour = settings.daily_digest_hour ?? settings.daily_digest_hour_utc ?? 9;
-    const initialTz = settings.daily_digest_timezone || "UTC";
+    const initialTz = settings.daily_digest_timezone || settings.time_zone || "UTC";
     const [enabled, setEnabled] = useState(!!settings.daily_digest_enabled);
     const [hour, setHour] = useState(initialHour);
     const [tz, setTz] = useState(initialTz);
-    const [sending, setSending] = useState(false);
     useEffect(() => { setEnabled(!!settings.daily_digest_enabled); }, [settings.daily_digest_enabled]);
     useEffect(() => { setHour(settings.daily_digest_hour ?? settings.daily_digest_hour_utc ?? 9); },
         [settings.daily_digest_hour, settings.daily_digest_hour_utc]);
-    useEffect(() => { setTz(settings.daily_digest_timezone || "UTC"); }, [settings.daily_digest_timezone]);
+    useEffect(() => { setTz(settings.daily_digest_timezone || settings.time_zone || "UTC"); },
+        [settings.daily_digest_timezone, settings.time_zone]);
     const dirty =
         enabled !== !!settings.daily_digest_enabled ||
         hour !== initialHour ||
         tz !== initialTz;
 
-    // Compute "next digest at" in the user's chosen timezone for reassurance.
     let nextAtLabel = "";
     try {
         const now = new Date();
-        // Round display "now" to the top of the current hour in the target tz so
-        // "next send at Xam" doesn't include stray minutes.
         const parts = new Intl.DateTimeFormat("en-US", {
             timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: false,
         }).formatToParts(now);
         const currentHourInTz = parseInt(parts.find((p) => p.type === "hour")?.value || "0", 10);
         const currentMinInTz = parseInt(parts.find((p) => p.type === "minute")?.value || "0", 10);
-        // If we're already past the target hour today, schedule for tomorrow.
-        let hoursUntil = hour - currentHourInTz;
+        let hoursUntil = 8 - currentHourInTz;
         if (hoursUntil < 0 || (hoursUntil === 0 && currentMinInTz > 0)) hoursUntil += 24;
         const nextMs = now.getTime() + hoursUntil * 3600 * 1000 - currentMinInTz * 60 * 1000;
         const next = new Date(nextMs);
@@ -495,91 +468,66 @@ function DailyDigestSection({ settings, saving, onSave, timezones }) {
             hour: "numeric",
             hour12: true,
         });
-        nextAtLabel = `Next send: ${fmt.format(next)} (${tz.replace("_", " ")})`;
+        nextAtLabel = `Next Friendly morning: ${fmt.format(next)} (${tz.replace("_", " ")})`;
     } catch {
         nextAtLabel = "";
     }
 
-    async function sendNow() {
-        setSending(true);
-        try {
-            const { data } = await api.post("/digest/send-now");
-            if (data.status === "sent") {
-                toast.success("Digest sent to your inbox");
-            } else if (data.reason === "empty") {
-                toast.info("Nothing to send today — you're all caught up.");
-            } else if (data.reason === "no_gmail" || data.reason === "no_send_scope") {
-                toast.error("Connect Gmail with send scope to email digests.");
-            } else if (String(data.reason || "").startsWith("auth_error")) {
-                toast.error("Gmail auth expired — reconnect in Gmail account below.");
-            } else {
-                toast.error(`Digest not sent: ${data.reason || "unknown"}`);
-            }
-        } catch (e) {
-            toast.error(extractError(e));
-        } finally {
-            setSending(false);
-        }
-    }
-
     return (
         <Section
-            title="Daily digest email"
-            subtitle="Once a day, Scotive can email you a summary of what needs action — past due, broken promises, and resolved payments. Sent from your own connected Gmail. Silent when there's nothing to report.">
-            <div className="flex items-center justify-between gap-4">
+            title="Timezone"
+            subtitle="Friendly cadence runs at 08:00 in this timezone and sends at 10:15. Firm and Final still wait for your click.">
+            <div className="space-y-2 max-w-lg">
+                <Label htmlFor="digest-tz">Workspace timezone</Label>
+                <Select value={tz} onValueChange={setTz}>
+                    <SelectTrigger data-testid="select-digest-tz">
+                        <SelectValue placeholder="Select timezone" />
+                    </SelectTrigger>
+                    <SelectContent className="max-h-72">
+                        {tz && !(timezones || []).some((z) => z.value === tz) ? (
+                            <SelectItem value={tz} data-testid={`digest-tz-${tz}`}>
+                                {tz.replace(/_/g, " ")}
+                            </SelectItem>
+                        ) : null}
+                        {(timezones || []).map((z) => (
+                            <SelectItem key={z.value} value={z.value} data-testid={`digest-tz-${z.value}`}>
+                                {z.label}
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+                <p className="text-[11px] text-muted-foreground" data-testid="digest-next-send">
+                    {nextAtLabel || "Cadence uses this timezone for the 08:00 morning pass."}
+                </p>
+            </div>
+
+            <div className="flex items-center justify-between gap-4 mt-6 max-w-lg">
                 <div>
-                    <div className="font-medium">Send me a daily digest</div>
+                    <div className="font-medium">Save a preferred digest hour</div>
                     <div className="text-xs text-muted-foreground">
-                        Last sent: {settings.last_digest_sent_at ? new Date(settings.last_digest_sent_at).toLocaleString() : "never"}
+                        Stored for later. Home already shows what needs you today — email digest send is not live yet.
                     </div>
                 </div>
                 <Switch checked={enabled} onCheckedChange={setEnabled} data-testid="toggle-daily-digest" />
             </div>
             {enabled ? (
-                <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-5">
-                    <div className="space-y-2">
-                        <Label htmlFor="digest-hour">Send hour</Label>
-                        <Select value={String(hour)} onValueChange={(v) => setHour(parseInt(v, 10))}>
-                            <SelectTrigger data-testid="select-digest-hour">
-                                <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                                {Array.from({ length: 24 }, (_, i) => i).map((h) => {
-                                    const suffix = h === 0 ? "12:00 AM" : h < 12 ? `${h}:00 AM` : h === 12 ? "12:00 PM" : `${h - 12}:00 PM`;
-                                    return (
-                                        <SelectItem key={h} value={String(h)} data-testid={`digest-hour-${h}`}>
-                                            {suffix} ({String(h).padStart(2, "0")}:00)
-                                        </SelectItem>
-                                    );
-                                })}
-                            </SelectContent>
-                        </Select>
-                    </div>
-                    <div className="space-y-2">
-                        <Label htmlFor="digest-tz">Timezone</Label>
-                        <Select value={tz} onValueChange={setTz}>
-                            <SelectTrigger data-testid="select-digest-tz">
-                                <SelectValue placeholder="Select timezone" />
-                            </SelectTrigger>
-                            <SelectContent className="max-h-72">
-                                {tz && !(timezones || []).some((z) => z.value === tz) ? (
-                                    <SelectItem value={tz} data-testid={`digest-tz-${tz}`}>
-                                        {tz.replace(/_/g, " ")}
+                <div className="mt-5 max-w-lg space-y-2">
+                    <Label htmlFor="digest-hour">Preferred hour</Label>
+                    <Select value={String(hour)} onValueChange={(v) => setHour(parseInt(v, 10))}>
+                        <SelectTrigger data-testid="select-digest-hour">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {Array.from({ length: 24 }, (_, i) => i).map((h) => {
+                                const suffix = h === 0 ? "12:00 AM" : h < 12 ? `${h}:00 AM` : h === 12 ? "12:00 PM" : `${h - 12}:00 PM`;
+                                return (
+                                    <SelectItem key={h} value={String(h)} data-testid={`digest-hour-${h}`}>
+                                        {suffix} ({String(h).padStart(2, "0")}:00)
                                     </SelectItem>
-                                ) : null}
-                                {(timezones || []).map((z) => (
-                                    <SelectItem key={z.value} value={z.value} data-testid={`digest-tz-${z.value}`}>
-                                        {z.label}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                    </div>
-                    <div className="sm:col-span-2">
-                        <p className="text-[11px] text-muted-foreground" data-testid="digest-next-send">
-                            {nextAtLabel || "Local time zones honored — the digest arrives in your inbox at the chosen hour."}
-                        </p>
-                    </div>
+                                );
+                            })}
+                        </SelectContent>
+                    </Select>
                 </div>
             ) : null}
             <SectionFooter
@@ -589,57 +537,9 @@ function DailyDigestSection({ settings, saving, onSave, timezones }) {
                     daily_digest_enabled: enabled,
                     daily_digest_hour: hour,
                     daily_digest_timezone: tz,
-                }, "Digest settings saved")}
+                }, "Timezone saved")}
                 testid="save-digest"
             />
-            <div className="mt-5 pt-4 border-t border-border flex items-center justify-end gap-3">
-                <span className="type-label text-muted-foreground">
-                    Preview
-                </span>
-                <Button variant="outline" size="sm" onClick={sendNow} disabled={sending} data-testid="digest-send-now">
-                    {sending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : null}
-                    Send digest to me now
-                </Button>
-            </div>
-        </Section>
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Suppressed senders
-// ---------------------------------------------------------------------------
-function SuppressedSendersSection({ senders, onRemove }) {
-    return (
-        <Section
-            title="Suppressed senders"
-            subtitle="Emails from these addresses are ignored by the AI pipeline. Add senders from the Review queue's Not payment-related action.">
-            {senders.length === 0 ? (
-                <div className="rounded-md border border-dashed border-border p-6 text-center text-sm text-muted-foreground" data-testid="suppressed-empty">
-                    Nothing suppressed yet.
-                </div>
-            ) : (
-                <ul className="rounded-2xl border border-border bg-card divide-y divide-border" data-testid="suppressed-list">
-                    {senders.map((s) => (
-                        <li key={s.email} className="px-4 py-3 flex items-center justify-between gap-3">
-                            <div className="min-w-0">
-                                <div className="font-mono text-sm truncate">{s.email}</div>
-                                {s.created_at ? (
-                                    <div className="text-[11px] text-muted-foreground">
-                                        Suppressed {new Date(s.created_at).toLocaleDateString()}
-                                    </div>
-                                ) : null}
-                            </div>
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => onRemove(s.email)}
-                                data-testid="unsuppress-btn">
-                                Remove
-                            </Button>
-                        </li>
-                    ))}
-                </ul>
-            )}
         </Section>
     );
 }

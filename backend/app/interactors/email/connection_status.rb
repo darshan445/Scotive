@@ -24,12 +24,13 @@ class Email::ConnectionStatus
       rows = organization.integrations.mailbox.order(:provider)
       connections = rows.map { |integration| connection_hash(integration) }
       active = rows.find(&:connected?)
+      reauth = rows.find { |row| row.connection_status == "reauth_required" }
       {
         connected: active.present?,
-        status: active&.connection_status || "disconnected",
+        status: active&.connection_status || reauth&.connection_status || "disconnected",
         can_send: active.present?,
-        email: active&.account_name,
-        provider: frontend_provider(active&.provider),
+        email: (active || reauth)&.account_name,
+        provider: frontend_provider((active || reauth)&.provider),
         connections: connections
       }
     end
@@ -43,6 +44,7 @@ class Email::ConnectionStatus
     {
       provider: frontend_provider(integration.provider),
       connected: integration.connected?,
+      status: integration.connection_status,
       email: integration.account_name
     }
   end

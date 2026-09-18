@@ -78,13 +78,7 @@ export function useLiveDetection({ enabled, onDetected, onDueDatePrompt, onFollo
         if (enabled) poll();
     });
 
-    const ackAll = useCallback(async () => {
-        try {
-            await api.post("/sync/detections/ack", {});
-        } catch {
-            /* ignore */
-        }
-    }, []);
+    const ackAll = useCallback(async () => {}, []);
 
     return { poll, ackAll };
 }

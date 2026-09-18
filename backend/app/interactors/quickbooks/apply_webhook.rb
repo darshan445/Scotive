@@ -9,6 +9,7 @@ class Quickbooks::ApplyWebhook
   include ExecuteMethodHelper
   include LogHelper
   include Quickbooks::BooksPersistence
+  include Quickbooks::TokenRefresh
 
   def self.execute(webhook_event:, client: Quickbooks::QuickbookClient.new)
     new(webhook_event: webhook_event, client: client).execute
@@ -131,32 +132,13 @@ class Quickbooks::ApplyWebhook
   end
 
   def ensure_fresh_token!(record)
-    token = record.access_token
-    needs_refresh = record.refresh_token.present? &&
-      (record.token_expires_at.blank? || record.token_expires_at <= 10.minutes.from_now)
-
-    if needs_refresh
-      tokens = client.refresh_access_token(refresh_token: record.refresh_token)
-      token = tokens["access_token"] || tokens[:access_token]
-      refresh = tokens["refresh_token"] || tokens[:refresh_token]
-      expires_in = (tokens["expires_in"] || tokens[:expires_in]).to_i
-      raise_string_error("QuickBooks did not return an access token") if token.blank?
-
-      record.update!(
-        access_token: token,
-        refresh_token: refresh.presence || record.refresh_token,
-        token_expires_at: expires_in.positive? ? Time.current + expires_in.seconds : record.token_expires_at
-      )
-    end
-
-    raise_string_error("QuickBooks access token is missing") if token.blank?
-    token
+    super
   rescue Faraday::Error => e
     handle_qbo_error!(e)
   end
 
   def handle_qbo_error!(error)
-    integration.update!(connection_status: "reauth_required") if error.message.match?(/invalid_grant|401/)
+    mark_reauth!(integration) if qbo_grant_error?(error)
     raise_string_error("QuickBooks webhook apply failed")
   end
 

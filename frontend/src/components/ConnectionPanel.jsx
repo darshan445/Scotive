@@ -5,6 +5,7 @@ import { ConnectMailboxButton } from "@/components/ConnectGmailButton";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
+import { needsReconnect } from "@/lib/connectionStatus";
 
 function formatDate(iso) {
     if (!iso) return "";
@@ -36,7 +37,7 @@ function connFor(status, provider) {
 
 function MailboxRow({ provider, conn, onDisconnect, busy }) {
     const label = providerLabel(provider);
-    const revoked = conn?.status === "revoked";
+    const revoked = needsReconnect(conn?.status);
     const connected = Boolean(conn?.connected) && !revoked;
 
     return (

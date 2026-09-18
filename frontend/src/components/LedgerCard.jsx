@@ -2,8 +2,6 @@
 import { useMemo, Fragment, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { PlusCircle } from "lucide-react";
-import { ManualInvoiceDialog } from "@/components/ManualInvoiceDialog";
 import { InvoiceOverflowMenu } from "@/components/InvoiceOverflowMenu";
 import { AddDueDateButton, NO_DUE_DATE_LABEL } from "@/components/AddDueDateButton";
 import {
@@ -85,7 +83,6 @@ export function formatDate(iso) {
 
 export function LedgerCard({ ledger, onChanged, variant = "open" }) {
     const router = useRouter();
-    const [manualOpen, setManualOpen] = useState(false);
     const [statusFilter, setStatusFilter] = useState("all");
     const [sortKey, setSortKey] = useState("due_soonest");
     const [groupByClient, setGroupByClient] = useState(false);
@@ -183,14 +180,6 @@ export function LedgerCard({ ledger, onChanged, variant = "open" }) {
                             </>
                         )}
                     </div>
-                    {!isHistory && !isPaused ? (
-                        <button
-                            onClick={() => setManualOpen(true)}
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3.5 py-2 text-sm font-medium hover:bg-muted transition-colors"
-                            data-testid="track-manual-button-header">
-                            <PlusCircle className="w-4 h-4" /> Track manually
-                        </button>
-                    ) : null}
                 </div>
             </div>
 
@@ -210,14 +199,6 @@ export function LedgerCard({ ledger, onChanged, variant = "open" }) {
                               ? "Pause tracking from the ⋯ menu when you want an invoice off active lists without marking it paid."
                               : "Scotive is watching your sent mail — send your next invoice like you always do and it will appear here."}
                     </p>
-                    {!isHistory && !isPaused ? (
-                        <button
-                            onClick={() => setManualOpen(true)}
-                            className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-md border border-border bg-card text-sm font-medium hover:bg-muted transition-colors"
-                            data-testid="track-manual-button">
-                            <PlusCircle className="w-4 h-4" /> Track a payment manually
-                        </button>
-                    ) : null}
                 </div>
             ) : (
                 <div className="rounded-2xl border border-border bg-card overflow-hidden" data-testid="ledger-table-wrapper">
@@ -427,11 +408,6 @@ export function LedgerCard({ ledger, onChanged, variant = "open" }) {
                     )}
                 </div>
             )}
-            <ManualInvoiceDialog
-                open={manualOpen}
-                onOpenChange={setManualOpen}
-                onCreated={() => onChanged?.()}
-            />
         </div>
     );
 }

@@ -50,5 +50,6 @@ RSpec.describe Email::EnsureMailboxWebhook do
       request_url: "https://example.ngrok-free.dev/api/v1/gmail/webhooks"
     ))
     expect(organization.integrations.mailbox.first.webhook_subscription_id).to eq("wh-1")
+    expect(organization.integrations.mailbox.first.webhook_expires_at).to be_within(2.seconds).of(7.days.from_now)
   end
 end

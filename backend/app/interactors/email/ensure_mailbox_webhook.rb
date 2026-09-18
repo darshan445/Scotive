@@ -93,6 +93,7 @@ class Email::EnsureMailboxWebhook
   def stamp_mailboxes!(webhook_id)
     organization.integrations.mailbox.connected.update_all(
       webhook_subscription_id: webhook_id,
+      webhook_expires_at: 7.days.from_now,
       updated_at: Time.current
     )
   end

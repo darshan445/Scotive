@@ -24,13 +24,7 @@ export function FollowUpPromptBanner({ prompt, onDismiss, onChanged, onReview })
     async function skip() {
         setBusy(true);
         try {
-            if (prompt.draft_id) {
-                await api.post(`/chase-drafts/${prompt.draft_id}/dismiss`);
-            } else {
-                await api.post("/sync/followup-prompts/ack", {
-                    invoice_ids: [prompt.invoice_id],
-                });
-            }
+            await api.post(`/v1/invoices/${prompt.invoice_id}/action`, { action: "skip_followup" });
             onDismiss?.();
             await onChanged?.();
         } catch (e) {
@@ -43,7 +37,7 @@ export function FollowUpPromptBanner({ prompt, onDismiss, onChanged, onReview })
     async function stopChasing() {
         setBusy(true);
         try {
-            await api.post(`/invoices/${prompt.invoice_id}/action`, { action: "pause" });
+            await api.post(`/v1/invoices/${prompt.invoice_id}/action`, { action: "pause" });
             toast.success("Chasing paused for this invoice");
             onDismiss?.();
             await onChanged?.();

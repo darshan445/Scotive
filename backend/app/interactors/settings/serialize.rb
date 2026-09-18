@@ -1,0 +1,19 @@
+# frozen_string_literal: true
+
+# Settings payload shared by show + update.
+module Settings::Serialize
+  module_function
+
+  def payload(organization)
+    {
+      time_zone: organization.time_zone,
+      daily_digest_timezone: organization.time_zone,
+      daily_digest_enabled: organization.daily_digest_enabled,
+      daily_digest_hour: organization.daily_digest_hour,
+      last_digest_sent_at: nil,
+      friendly_auto_send: organization.friendly_auto_send,
+      escalation_offsets: Array(organization.escalation_offsets),
+      follow_up_interval_days: organization.follow_up_interval_days
+    }
+  end
+end

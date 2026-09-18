@@ -149,9 +149,7 @@ module Quickbooks::BooksPersistence
   def cancel_pending_outbox!(invoice, reason)
     return unless OutboxMessage.table_exists?
 
-    OutboxMessage.where(invoice_id: invoice.id, organization_id: invoice.organization_id, status: %w[scheduled draft]).find_each do |row|
-      row.update!(status: "cancelled", cancellation_reason: reason)
-    end
+    OutboxMessage.cancel_pending_for!(invoice, reason)
   end
 
   def void_local_invoice!(invoice, trigger_source: "books_webhook")

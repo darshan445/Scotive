@@ -48,7 +48,7 @@ class Cadence::Schedule
   attr_reader :organization
 
   def enqueue_due!(step, config)
-    due_date = Date.current + config[:due_offset]
+    due_date = organization.today + config[:due_offset]
     created = 0
     skipped = 0
     due_scope(config[:statuses], due_date).find_each do |invoice|

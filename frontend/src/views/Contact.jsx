@@ -27,7 +27,7 @@ export default function ContactPage() {
         setError("");
         setSubmitting(true);
         try {
-            await api.post("/contact", {
+            await api.post("/v1/contact", {
                 name: name.trim(),
                 email: email.trim(),
                 company: company.trim() || null,

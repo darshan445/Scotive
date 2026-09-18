@@ -18,7 +18,7 @@ export function DueDatePromptBanner({ prompt, onDismiss, onChanged }) {
         if (!date) return;
         setBusy(true);
         try {
-            await api.post(`/invoices/${id}/action`, { action: "set_due_date", due_date: date });
+            await api.post(`/v1/invoices/${id}/action`, { action: "set_due_date", due_date: date });
             toast.success("Due date saved");
             onDismiss?.();
             await onChanged?.();
@@ -32,7 +32,7 @@ export function DueDatePromptBanner({ prompt, onDismiss, onChanged }) {
     async function skipDueDate() {
         setBusy(true);
         try {
-            await api.post(`/invoices/${id}/action`, { action: "skip_due_date" });
+            await api.post(`/v1/invoices/${id}/action`, { action: "skip_due_date" });
             onDismiss?.();
             await onChanged?.();
         } catch (e) {

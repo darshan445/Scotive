@@ -30,6 +30,8 @@ import { useOnboarding } from "@/hooks/useOnboarding";
 import { useLiveDetection } from "@/hooks/useLiveDetection";
 import { useWorkspaceRefresh } from "@/hooks/useWorkspaceRefresh";
 import { openLedgerInvoices, historyLedgerInvoices, pausedLedgerInvoices, outstandingBalance } from "@/lib/ledgerInvoices";
+import { needsReconnect } from "@/lib/connectionStatus";
+import { ConnectQboButton } from "@/components/ConnectQboButton";
 
 const OPEN_STATUSES = new Set(["invoiced", "overdue", "promised", "partially_paid", "promise_broken", "disputed", "paid_unconfirmed"]);
 
@@ -117,7 +119,7 @@ function StatsStrip({ ledger }) {
 }
 
 function GmailIssueBanner({ status }) {
-    const revoked = status?.status === "revoked";
+    const revoked = needsReconnect(status?.status);
     const label = status?.provider === "outlook" ? "Outlook" : "Gmail";
     const provider = status?.provider === "outlook" ? "outlook" : "google";
     return (
@@ -157,6 +159,33 @@ function GmailIssueBanner({ status }) {
                 testId="reconnect-gmail-button"
                 variant={revoked ? "primary" : "secondary"}
             />
+        </div>
+    );
+}
+
+function QboIssueBanner({ status }) {
+    if (!needsReconnect(status?.status)) return null;
+    return (
+        <div
+            className="rounded-2xl border border-amber-200 bg-amber-50 p-5 flex flex-col sm:flex-row sm:items-center gap-4"
+            data-testid="qbo-dashboard-reauth"
+        >
+            <div className="flex items-start gap-3 flex-1 min-w-0">
+                <AlertTriangle className="w-5 h-5 text-amber-700 mt-0.5 flex-shrink-0" />
+                <div className="min-w-0">
+                    <div className="font-heading font-semibold text-amber-900">QuickBooks needs to be reconnected</div>
+                    <div className="text-sm text-amber-800 mt-1">
+                        Invoice sync is paused until you reconnect
+                        {status.company_name ? <> {status.company_name}</> : null}.
+                    </div>
+                    <Link
+                        href="/settings"
+                        className="inline-flex items-center gap-1 mt-2 text-xs font-semibold text-amber-900 underline underline-offset-2 hover:text-amber-950">
+                        Integration settings <ArrowUpRight className="w-3 h-3" />
+                    </Link>
+                </div>
+            </div>
+            <ConnectQboButton label="Reconnect QuickBooks" testId="reconnect-qbo-dashboard" />
         </div>
     );
 }
@@ -344,9 +373,10 @@ export default function DashboardPage() {
                         ) : null}
                     </div>
 
-                    {pastOnboarding && (status?.status === "revoked" || status?.status === "send_missing") ? (
+                    {pastOnboarding && (needsReconnect(status?.status) || status?.status === "send_missing") ? (
                         <GmailIssueBanner status={status} />
                     ) : null}
+                    {pastOnboarding ? <QboIssueBanner status={qboStatus} /> : null}
 
                     {pastOnboarding ? (
                         ledger == null ? (

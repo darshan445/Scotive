@@ -3,11 +3,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, Clock, HelpCircle, MessageSquareWarning, Wallet } from "lucide-react";
 import { toast } from "sonner";
-import { api, extractError } from "@/lib/api";
+import { api, extractError, unwrapData } from "@/lib/api";
 import { useWorkspaceRefreshEffect } from "@/lib/workspaceRefresh";
 import { formatMoney } from "@/components/LedgerCard";
 import { factualDigestLine, invoiceStatusDisplay, invoiceSubject, isJunkInvoiceRef, statusLabel } from "@/lib/invoiceCopy";
-import { ClientMergePrompts } from "@/components/ClientMergePrompts";
 import { InvoiceOverflowMenu } from "@/components/InvoiceOverflowMenu";
 import { navigateToInvoice } from "@/lib/invoiceNavigation";
 import { Button } from "@/components/ui/button";
@@ -87,9 +86,9 @@ export function TodayCard({ onChanged }) {
     const [busyId, setBusyId] = useState(null);
 
     const refresh = useCallback(() => {
-        api.post("/lifecycle/run").catch(() => {}).finally(() => {
-            api.get("/digest/today").then(({ data: d }) => setData(d)).catch(() => {});
-        });
+        api.get("/v1/digest/today")
+            .then(({ data: d }) => setData(unwrapData(d)))
+            .catch(() => {});
     }, []);
 
     const handleChanged = useCallback(async () => {
@@ -102,7 +101,7 @@ export function TodayCard({ onChanged }) {
         e?.preventDefault?.();
         setBusyId(invoiceId);
         try {
-            await api.post(`/invoices/${invoiceId}/action`, { action });
+            await api.post(`/v1/invoices/${invoiceId}/action`, { action });
             toast.success(action === "mark_paid" ? "Marked received" : "Marked not yet received");
             await handleChanged();
         } catch (err) {
@@ -129,38 +128,13 @@ export function TodayCard({ onChanged }) {
     if (!data) return null;
 
     const actionCount = actionSections.reduce((n, s) => n + s.rows.length, 0);
-    const mergePrompts = data.merge_prompts || [];
-    const hasMergePrompts = mergePrompts.length > 0;
-
-    if (actionCount === 0 && !hasMergePrompts) {
-        return null;
-    }
 
     if (actionCount === 0) {
-        return (
-            <div className="space-y-4" data-testid="today-card-wrapper">
-                <ClientMergePrompts
-                    prompts={mergePrompts}
-                    onChanged={() => {
-                        refresh();
-                        onChanged?.();
-                    }}
-                />
-            </div>
-        );
+        return null;
     }
 
     return (
         <div className="space-y-4" data-testid="today-card-wrapper">
-            {hasMergePrompts ? (
-                <ClientMergePrompts
-                    prompts={mergePrompts}
-                    onChanged={() => {
-                        refresh();
-                        onChanged?.();
-                    }}
-                />
-            ) : null}
             <div className="surface-card overflow-hidden" data-testid="today-card">
                 <div className="px-6 py-5 border-b border-border flex items-center justify-between">
                     <div>

@@ -91,6 +91,24 @@ RSpec.describe Cadence::Enqueue do
     end
   end
 
+  it "schedules send at 10:15 in the organization timezone" do
+    organization.update!(time_zone: "America/New_York")
+    travel_to Time.utc(2026, 9, 18, 12) do
+      add_home_thread!
+      result = described_class.execute(invoice: invoice, step: "notice_minus_3")
+      expect(result.data[:created]).to eq(true)
+      row = invoice.outbox_messages.find_by!(cadence_step: "notice_minus_3")
+      expect(row.scheduled_send_at).to eq(Time.utc(2026, 9, 18, 14, 15))
+    end
+  end
+
+  it "drafts Friendly steps when auto-send is off" do
+    organization.update!(friendly_auto_send: false)
+    add_home_thread!
+    result = described_class.execute(invoice: invoice, step: "due_today")
+    expect(result.data[:status]).to eq("draft")
+  end
+
   it "skips paid invoices, missing email, missing home thread, and duplicate pending steps" do
     add_home_thread!
     paid = described_class.execute(invoice: invoice.tap { |row| row.update!(current_ar_status: "paid", balance_remaining: 0) }, step: "due_today")

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Loader2, RefreshCw, Send, X } from "lucide-react";
 import { toast } from "sonner";
-import { api, extractError } from "@/lib/api";
+import { api, extractError, unwrapData } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
@@ -39,21 +39,21 @@ export function ChaseComposer({
         onDirtyChange?.(dirty);
     }, [dirty, onDirtyChange]);
 
-    async function draft(mode = "regenerate", { intentOverride = null, noteOverride = "" } = {}) {
+    async function draft(_mode = "regenerate", { intentOverride = null, noteOverride = "" } = {}) {
         if (!invoice) return;
         setLoading(true);
         try {
-            const endpoint = mode === "quick" ? "/quick-compose" : `/invoices/${invoice._id}/draft-chase`;
-            const payload = mode === "quick"
-                ? { invoice_id: invoice._id, intent: intentOverride || "" }
-                : { note: noteOverride || "" };
-            const { data } = await api.post(endpoint, payload);
-            setSubject(data.subject);
-            setBody(data.body);
+            const { data } = await api.post(`/v1/invoices/${invoice._id}/draft-chase`, {
+                note: noteOverride || "",
+                intent: intentOverride || "",
+            });
+            const payload = unwrapData(data);
+            setSubject(payload.subject);
+            setBody(payload.body);
             // tone_label is state-derived server-side; regenerate note may nudge for this draft only.
-            setToneLabel(data.tone_label || null);
-            setIsReplyDraft(Boolean(data.is_reply));
-            baselineRef.current = { subject: data.subject || "", body: data.body || "" };
+            setToneLabel(payload.tone_label || null);
+            setIsReplyDraft(Boolean(payload.is_reply));
+            baselineRef.current = { subject: payload.subject || "", body: payload.body || "" };
             onDirtyChange?.(false);
         } catch (e) {
             toast.error(extractError(e));
@@ -99,7 +99,7 @@ export function ChaseComposer({
     async function send() {
         setSending(true);
         try {
-            await api.post(`/invoices/${invoice._id}/send-chase`, { subject, body });
+            await api.post(`/v1/invoices/${invoice._id}/send-chase`, { subject, body });
             toast.success("Sent from your Gmail");
             baselineRef.current = { subject, body };
             onDirtyChange?.(false);

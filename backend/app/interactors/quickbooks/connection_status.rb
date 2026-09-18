@@ -26,8 +26,8 @@ class Quickbooks::ConnectionStatus
       {
         connected: connected,
         status: integration&.connection_status || "disconnected",
-        realm_id: connected ? integration.external_account_id : nil,
-        company_name: connected ? integration.account_name : nil,
+        realm_id: integration&.external_account_id,
+        company_name: integration&.account_name,
         env: ENV.fetch("QBO_ENV", "sandbox"),
         last_invoice_import_at: connected ? integration.last_synced_at : nil,
         import_progress: import_progress(integration)

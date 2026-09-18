@@ -28,7 +28,7 @@ class Auth::SignUp
 
       user = nil
       ActiveRecord::Base.transaction do
-        organization = Organization.create!(name: derived_organization_name)
+        organization = Organization.create!(name: derived_organization_name, time_zone: resolved_time_zone)
         user = User.new(
           organization: organization,
           email: email,
@@ -49,6 +49,11 @@ class Auth::SignUp
   private
 
   attr_reader :email, :password, :name, :timezone
+
+  def resolved_time_zone
+    candidate = timezone.to_s.strip
+    Time.find_zone(candidate).present? ? candidate : "UTC"
+  end
 
   def derived_organization_name
     return "#{name}'s workspace" if name.present?

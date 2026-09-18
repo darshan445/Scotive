@@ -9,6 +9,7 @@ class Quickbooks::ImportOpenInvoices
   include ExecuteMethodHelper
   include LogHelper
   include Quickbooks::BooksPersistence
+  include Quickbooks::TokenRefresh
 
   def self.execute(organization:, client: Quickbooks::QuickbookClient.new)
     new(organization: organization, client: client).execute
@@ -42,28 +43,8 @@ class Quickbooks::ImportOpenInvoices
   attr_reader :organization, :client
 
   def ensure_fresh_token!(integration)
-    token = integration.access_token
-    needs_refresh = integration.refresh_token.present? &&
-      (integration.token_expires_at.blank? || integration.token_expires_at <= 10.minutes.from_now)
-
-    if needs_refresh
-      tokens = client.refresh_access_token(refresh_token: integration.refresh_token)
-      token = tokens["access_token"] || tokens[:access_token]
-      refresh = tokens["refresh_token"] || tokens[:refresh_token]
-      expires_in = (tokens["expires_in"] || tokens[:expires_in]).to_i
-      raise_string_error("QuickBooks did not return an access token") if token.blank?
-
-      integration.update!(
-        access_token: token,
-        refresh_token: refresh.presence || integration.refresh_token,
-        token_expires_at: expires_in.positive? ? Time.current + expires_in.seconds : integration.token_expires_at
-      )
-    end
-
-    raise_string_error("QuickBooks access token is missing") if token.blank?
-    token
-  rescue Faraday::Error => e
-    mark_reauth!(integration) if e.message.match?(/invalid_grant|401/)
+    super
+  rescue Faraday::Error
     raise_string_error("QuickBooks authorization expired — reconnect QuickBooks")
   end
 
@@ -74,7 +55,7 @@ class Quickbooks::ImportOpenInvoices
       since_date: 365.days.ago.to_date.iso8601
     )
   rescue Faraday::Error => e
-    mark_reauth!(integration) if e.message.match?(/invalid_grant|401/)
+    mark_reauth!(integration) if qbo_grant_error?(e)
     raise_string_error("QuickBooks invoice import failed")
   end
 
@@ -89,9 +70,5 @@ class Quickbooks::ImportOpenInvoices
     ).index_by { |row| row["Id"].to_s }
   rescue Faraday::Error
     raise_string_error("QuickBooks customer import failed")
-  end
-
-  def mark_reauth!(integration)
-    integration.update!(connection_status: "reauth_required")
   end
 end
