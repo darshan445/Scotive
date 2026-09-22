@@ -39,6 +39,7 @@ const STATUS_STYLES = {
     paid: "bg-green-50 text-green-700 border-green-200",
     written_off: "bg-gray-100 text-gray-500 border-gray-200",
     stale: "bg-stone-100 text-stone-600 border-stone-200",
+    unmatched: "bg-amber-50 text-amber-800 border-amber-200",
 };
 
 function StatusPill({ inv }) {
@@ -46,7 +47,8 @@ function StatusPill({ inv }) {
     const hasClaim = inv?.disputed_claim_amount != null && Number(inv.disputed_claim_amount) > 0;
     const pendingPay = hasPendingPaymentClaim(inv);
     let styleKey = status;
-    if (pendingPay && (status === "disputed" || hasClaim)) styleKey = "paid_unconfirmed";
+    if (inv?.unmatched && !pendingPay && status !== "disputed" && !hasClaim) styleKey = "unmatched";
+    else if (pendingPay && (status === "disputed" || hasClaim)) styleKey = "paid_unconfirmed";
     else if (status === "partially_paid" && hasClaim) styleKey = "disputed";
     const cls = STATUS_STYLES[styleKey] || STATUS_STYLES.invoiced;
     return (

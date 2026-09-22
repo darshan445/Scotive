@@ -72,7 +72,7 @@ RSpec.describe Quickbooks::ImportOpenInvoices do
     invoice = organization.invoices.find_by!(external_id: "101")
     expect(invoice.invoice_number).to eq("INV-101")
     expect(invoice.current_ar_status).to eq("overdue")
-    expect(invoice.pay_link_token).to eq("INV-101")
+    expect(invoice.pay_link_token).to eq("https://pay.example.com/inv/INV-101")
     expect(invoice.cc_emails).to eq([ "ap@acme.com" ])
     expect(invoice.invoice_state_transitions.first.trigger_source).to eq("books_sync")
     expect(integration.reload.last_synced_at).to be_present
@@ -117,6 +117,72 @@ RSpec.describe Quickbooks::ImportOpenInvoices do
     expect(invoice.reload.current_ar_status).to eq("paid")
     expect(invoice.active_promise_date).to be_nil
     expect(invoice.invoice_state_transitions.last.to_status).to eq("paid")
+  end
+
+  it "keeps an existing pay link when a later QBO payload omits InvoiceLink" do
+    client_row = organization.clients.create!(
+      integration: integration,
+      external_id: "58",
+      name: "Acme Co"
+    )
+    invoice = organization.invoices.create!(
+      integration: integration,
+      client: client_row,
+      external_id: "101",
+      invoice_number: "INV-101",
+      issue_date: 20.days.ago,
+      due_date: 10.days.ago,
+      total_amount: 250,
+      balance_remaining: 250,
+      pay_link_token: "https://pay.example.com/inv/INV-101",
+      current_ar_status: "overdue"
+    )
+    payload = invoice_payload(
+      id: "101",
+      customer_id: "58",
+      doc: "INV-101",
+      balance: "250.00",
+      total: "250.00",
+      txn_date: 20.days.ago.to_date.iso8601,
+      due_date: 10.days.ago.to_date.iso8601
+    )
+    payload.delete("InvoiceLink")
+    allow(qbo_client).to receive(:query_open_invoices).and_return([ payload ])
+    allow(qbo_client).to receive(:get_invoice).and_return(payload)
+    allow(qbo_client).to receive(:query_customers).and_return([
+      { "Id" => "58", "DisplayName" => "Acme Co" }
+    ])
+
+    result = described_class.execute(organization: organization, client: qbo_client)
+
+    expect(result).to be_success
+    expect(invoice.reload.pay_link_token).to eq("https://pay.example.com/inv/INV-101")
+  end
+
+  it "loads InvoiceLink from invoice GET when the query omits it" do
+    payload = invoice_payload(
+      id: "101",
+      customer_id: "58",
+      doc: "INV-101",
+      balance: "250.00",
+      total: "250.00",
+      txn_date: 10.days.ago.to_date.iso8601,
+      due_date: 5.days.ago.to_date.iso8601,
+      email: "billing@acme.com"
+    )
+    payload.delete("InvoiceLink")
+    url = "https://developer.intuit.com/comingSoon/scs-v1-29956e6ab4f9466a9974af4d6a5208d6f3c0b3ca31cc45e6a6c2f6464d42bb210a8ef3af47eb4022929574e5e19569ce-0?locale=en_US&cta=v3invoicelink"
+    allow(qbo_client).to receive(:query_open_invoices).and_return([ payload ])
+    allow(qbo_client).to receive(:get_invoice).and_return(payload.merge("InvoiceLink" => url))
+    allow(qbo_client).to receive(:query_customers).and_return([
+      { "Id" => "58", "DisplayName" => "Acme Co", "PrimaryEmailAddr" => { "Address" => "billing@acme.com" } }
+    ])
+
+    result = described_class.execute(organization: organization, client: qbo_client)
+
+    expect(result).to be_success
+    expect(organization.invoices.find_by!(external_id: "101").pay_link_token).to eq(url)
+    expect(qbo_client).to have_received(:get_invoice).with(hash_including(id: "101"))
   end
 
   it "does not fetch customers when there are no open invoices" do

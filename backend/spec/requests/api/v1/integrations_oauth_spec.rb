@@ -71,6 +71,22 @@ RSpec.describe "API v1 integrations OAuth", type: :request do
 
       expect(response).to redirect_to(%r{qbo=access_denied})
     end
+
+    it "redirects with qbo=error when company info fails after token exchange" do
+      allow(qbo_client).to receive(:get_company_info).and_raise(
+        Faraday::Error, "QBO company info failed (401): message=AuthenticationFailed; errorCode=003200; statusCode=401"
+      )
+      state = Rails.application.message_verifier("oauth").generate(
+        { "organization_id" => organization.id, "provider" => "qbo" },
+        expires_in: 15.minutes,
+        purpose: :oauth
+      )
+
+      get "/api/qbo/oauth/callback", params: { code: "auth-code", realmId: "realm-99", state: state }
+
+      expect(response).to redirect_to(%r{qbo=error})
+      expect(organization.integrations.accounting.find_by(provider: "qbo")).to be_blank
+    end
   end
 
   describe "GET /api/v1/qbo/status" do

@@ -62,4 +62,24 @@ RSpec.describe Integration, type: :model do
     expect(integration).not_to be_valid
     expect(integration.errors[:provider]).to be_present
   end
+
+  it "destroys webhook_events when the integration is removed" do
+    integration = described_class.create!(
+      organization: organization,
+      category: "mailbox",
+      provider: "gmail",
+      external_account_id: "acc-gmail"
+    )
+    WebhookEvent.create!(
+      organization: organization,
+      integration: integration,
+      provider: "gmail",
+      external_event_id: "evt-1",
+      payload: { "event" => "mail_received" },
+      created_at: Time.current
+    )
+
+    integration.destroy!
+    expect(WebhookEvent.where(integration_id: integration.id)).to be_empty
+  end
 end

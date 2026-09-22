@@ -1,0 +1,48 @@
+# ==============================================================================
+# Pass 2 with exactly one open invoice
+#
+# Unlabeled payment talk + a single open invoice → link that invoice (not a miss).
+# Also covers unlabeled OOO / other_payment on the same client so those threads
+# stay off the row.
+#
+# Expect:
+#   SIM-2301 send = HOME
+#   "Payment released" = split on 2301 only
+#   OOO subject thread = not attached
+#   Quote/budget thread = not attached
+# ==============================================================================
+user_email: testuser@gmail.com
+user_mailbox: wherewasthis.contact@gmail.com
+client_email: rp9900821@gmail.com
+client_name: AR Sim rp9900821
+company_name: "Craig's Design and Landscaping Services"
+unique_subjects: true
+wait_seconds: 8
+send_from_qbo: true
+
+invoices:
+  - number: SIM-2301
+    amount: 325.00
+    due_in_days: -6
+    description: Single-invoice leftover
+    send:
+      via: mailbox
+      from: wherewasthis.contact@gmail.com
+      subject: "Invoice {{invoice_number}} from Craig's Design and Landscaping Services"
+      message: Invoice {{invoice_number}} for ${{amount}} was due {{due_date}}.
+    conversations:
+      - from: client
+        thread: new
+        as: unlabeled_payment
+        subject: "Payment released"
+        body: We will pay this week. Please confirm banking details.
+      - from: client
+        thread: new
+        as: ooo_subject
+        subject: "Out of Office: back next week"
+        body: This is an automatic reply. I have no access to email.
+      - from: client
+        thread: new
+        as: other_payment
+        subject: "Quote for a new landing page"
+        body: Can you send a new estimate for a marketing landing page? Budget is $4,000. Not related to the existing invoice.

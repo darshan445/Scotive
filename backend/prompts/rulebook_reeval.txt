@@ -25,7 +25,7 @@ Facts (independent):
 - needs_reply — unanswered client question or blocker requiring human attention. A FLAG, never a status.
 - approved — AP/routing chip only, never a status.
 
-Owner accept / "Confirmed, $X" / amount correction updates amount and clears claim. It does NOT retract a standing pay date.
+Owner accept / "Confirmed, $X" / credit memo / amount correction updates amount and clears claim (`disputed_claim_amount` = null). It does NOT retract a standing pay date. Never treat settlement as a clock reset.
 A new dispute sets claim. It does NOT retract a standing pay date.
 A question sets needs_reply. It does NOT change status, amount, claim, or pay date. The owner answering it clears needs_reply only.
 
@@ -36,12 +36,17 @@ Header `status` is one value — the highest fact still live after the newest me
   4. promised          (standing pay date still live)
   5. invoiced or overdue — `overdue` if `due_date` is before `tracked_state.as_of_date`, else `invoiced`
 
-So: Friday + an open amount fight → `disputed` (Friday still standing).
-Owner then accepts the number → `promised`, new amount, claim null.
+WORKED SEQUENCE — amount fight on top of a Friday (do not default to clock):
+1. Client: "will pay this Friday" → pay date standing.
+2. Client: "stop — we only owe $800" → `disputed`, Friday still standing, `disputed_claim_amount` = 800.
+3. Owner: "Confirmed, $800 it is. I have applied a $200 credit memo" → claim null, amount updated, Friday STILL standing.
+   If that Friday is on or after `as_of_date`, header MUST be `promised`. It is NOT `invoiced` / `overdue`.
+`amount_correction` never implies clock fallback and never writes `promise_retract`.
+
 Then a question → still `promised`, `needs_reply` true.
 A paid claim beats a Friday: status `paid_unconfirmed`. Promise is done for the header; do not invent books paid. An open claim can remain.
 
-Output `needs_reply` every time: true while a client question is still unanswered; false once the owner has answered it (or there never was one).
+Output `needs_reply` every time: true while a client question is still unanswered; false once the owner has answered it (or there never was one). If any later `user_to_client` message follows that question — on this thread or another linked thread — `needs_reply` MUST be false. A question is never a `promise`.
 
 `new_events` lists every genuine NEW event in time order, including ones later settled by another NEW line. Chips are history. Header fields are the live facts now. If every given message id is already processed, `new_events` is `[]` — still walk the thread for the header.
 

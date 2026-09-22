@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Email::FindInvoiceThread Interactor
-# Purpose: AR Step 4 — bounded A→E mailbox fallback for one missed invoice.
+# Purpose: Fallback for one unmatched invoice — outbound home thread, then client Pass 1/2.
 # Methods:
 # - execute
 
@@ -13,13 +13,14 @@ class Email::FindInvoiceThread
   PAGE_SIZE = 100
   MAX_PAGES = 5
 
-  def self.execute(invoice:, client: Email::EmailClient.new)
-    new(invoice: invoice, client: client).execute
+  def self.execute(invoice:, client: Email::EmailClient.new, llm: Email::LlmClient.new)
+    new(invoice: invoice, client: client, llm: llm).execute
   end
 
-  def initialize(invoice:, client:)
+  def initialize(invoice:, client:, llm:)
     @invoice = invoice
     @client = client
+    @llm = llm
   end
 
   def execute
@@ -27,18 +28,18 @@ class Email::FindInvoiceThread
       raise_string_error("Invoice is required") if invoice.blank?
 
       if skip_search?
-        { matched: linked?, query: nil, unmatched: invoice.current_ar_status == "unmatched" }
+        { matched: linked?, query: nil, unmatched: !linked? }
       else
         query = search_mailboxes!
-        mark_unmatched! if query.blank? && !linked?
-        { matched: query.present?, query: query, unmatched: invoice.current_ar_status == "unmatched" }
+        apply_clock_if_missed! if query.blank? && !linked?
+        { matched: query.present? || linked?, query: query, unmatched: !linked? }
       end
     end
   end
 
   private
 
-  attr_reader :invoice, :client
+  attr_reader :invoice, :client, :llm
 
   def organization
     invoice.organization
@@ -70,107 +71,86 @@ class Email::FindInvoiceThread
   end
 
   def search_mailbox!(mailbox)
-    hit = query_a!(mailbox)
-    hit = query_b!(mailbox) if hit.blank?
-    hit = query_c!(mailbox) if hit.blank?
-    hit = query_d!(mailbox) if hit.blank?
+    hit = query_outbound_home!(mailbox)
+    hit = query_client_cluster!(mailbox) if hit.blank?
     hit
   end
 
-  def query_a!(mailbox)
-    token = invoice.pay_link_token.to_s.strip
-    return if token.blank?
-
-    messages = fetch_query(mailbox, gmail: gmail_token_query(token), outlook: { search: token })
-    matched = messages.select { |message| match_token?(invoice, message) }
-    persist_hit!(mailbox, messages, matched, "A")
-  end
-
-  def query_b!(mailbox)
-    number = invoice.invoice_number.to_s.strip
-    contacts = contact_clause
-    return if number.blank? || contacts.blank?
-
-    messages = fetch_query(
-      mailbox,
-      gmail: "#{contacts} #{gmail_quote(number)} after:#{gmail_after}",
-      outlook: { search: number }
-    )
-    matched = messages.select { |message| message_for_client?(message, invoice.client) && match_number?(invoice, message) }
-    persist_hit!(mailbox, messages, matched, "B")
-  end
-
-  def query_c!(mailbox)
-    token = invoice.pay_link_token.to_s.strip
-    number = invoice.invoice_number.to_s.strip
-    terms = [ token, number ].filter_map { |value| gmail_quote(value) if value.present? }
+  def query_outbound_home!(mailbox)
     owner = normalize_email(mailbox.account_name)
-    return if terms.empty? || (mailbox.provider != "gmail" && owner.blank?)
+    terms = outbound_home_terms
+    return if terms.blank? || (mailbox.provider != "gmail" && owner.blank?)
 
+    gmail_terms = terms.map { |term| gmail_quote(term) }.join(" OR ")
     messages = fetch_query(
       mailbox,
-      gmail: "from:me (#{terms.join(' OR ')}) after:#{gmail_after}",
+      gmail: "from:me (#{gmail_terms}) after:#{gmail_after}",
       outlook: { from: owner, after: after_iso }
     )
-    matched = messages.select { |message| sent_by_owner?(message, owner) && (match_token?(invoice, message) || match_number?(invoice, message)) }
-    persist_hit!(mailbox, messages, matched, "C")
+    matched = messages.select { |message| identifying_owner_message?(message, invoice, owner) }
+    persist_hit!(mailbox, messages, matched, "home")
   end
 
-  def query_d!(mailbox)
+  def outbound_home_terms
+    [
+      invoice.invoice_number.to_s.strip.presence,
+      *Invoices::PayLink.search_terms(invoice.pay_link_token)
+    ].compact.uniq
+  end
+
+  def query_client_cluster!(mailbox)
     contacts = contact_clause
-    return if contacts.blank? || invoice.total_amount.blank?
+    return if contacts.blank?
 
     messages = fetch_query(
       mailbox,
-      gmail: "#{contacts} #{gmail_quote(amount_text)} after:#{gmail_after}",
+      gmail: "#{contacts} after:#{gmail_after}",
       outlook: { any_email: contact_emails([ invoice.client ]).join(","), after: after_iso }
     )
-    matched = messages.select { |message| message_for_client?(message, invoice.client) && match_amount?(invoice, message) }
-    persist_hit!(mailbox, messages, matched, "D")
+    invoices = [ invoice ] + sibling_invoices
+    counts = empty_cluster_counts
+    clustered = link_clustered_threads!(mailbox, invoice.client, invoices, messages, counts)
+    return if clustered[:invoice_ids].exclude?(invoice.id)
+
+    "client"
+  end
+
+  def empty_cluster_counts
+    { matched_invoices: 0, outbound_clocked: 0, ai_queued: 0 }
   end
 
   def persist_hit!(mailbox, messages, matched, query)
     thread_ids = matched.map { |message| message[:thread_id] }.uniq
     return if thread_ids.empty?
 
-    thread_ids.each_with_index do |thread_id, index|
-      persist_thread!(
-        mailbox,
-        invoice,
-        thread_id,
-        messages,
-        primary: index.zero? && !invoice_has_home_thread?(invoice)
-      )
+    thread_ids.each do |thread_id|
+      persist_thread!(mailbox, invoice, thread_id, messages, primary: false)
     end
+    owner = normalize_email(mailbox.account_name)
+    scoped = thread_ids.index_with { |thread_id| messages.select { |message| message[:thread_id] == thread_id } }
+    assign_home_thread!(mailbox, invoice, scoped, owner)
     clock_outbound_only!([ invoice.id ], Hash.new(0))
     enqueue_inbound_eval!([ invoice.id ])
-    remember_unknown_participants!(mailbox, matched) if query == "A"
     query
   end
 
-  def remember_unknown_participants!(mailbox, messages)
-    owner = normalize_email(mailbox.account_name)
-    extras = messages.flat_map { |message| [ message[:from] ] + message[:to] + message[:cc] }
-      .map { |value| normalize_email(value) }
-      .compact
-      .uniq
-      .reject { |email| email == owner }
-    return if extras.empty?
-
-    client_row = invoice.client
-    current = Array(client_row.associated_emails).map { |value| normalize_email(value) }.compact
-    merged = (current + extras).uniq
-    client_row.update!(associated_emails: merged) if merged != current
+  def sibling_invoices
+    invoice.client.invoices
+      .where("balance_remaining > ?", 0)
+      .where.not(id: invoice.id)
+      .where.not(current_ar_status: %w[paid voided])
+      .to_a
   end
 
-  def mark_unmatched!
-    return if invoice.current_ar_status == "unmatched" || terminal?
-
+  def apply_clock_if_missed!
+    clock = invoice.due_date < Date.current ? "overdue" : "invoiced"
     previous = invoice.current_ar_status
-    invoice.update!(current_ar_status: "unmatched")
+    return if previous == clock || %w[promised broken_promise disputed paid_unconfirmed partially_paid].include?(previous)
+
+    invoice.update!(current_ar_status: clock)
     invoice.invoice_state_transitions.create!(
       from_status: previous,
-      to_status: "unmatched",
+      to_status: clock,
       trigger_source: "mailbox_match",
       created_at: Time.current
     )
@@ -212,21 +192,13 @@ class Email::FindInvoiceThread
     message[:sent_at] >= invoice.issue_date.in_time_zone.beginning_of_day
   end
 
-  def sent_by_owner?(message, owner)
-    return true if owner.blank?
-
-    normalize_email(message[:from]) == owner
-  end
-
   def contact_clause
     parts = contact_emails([ invoice.client ]).flat_map { |email| [ "from:#{email}", "to:#{email}" ] }
+    domain = invoice.client.domain.to_s.downcase.presence
+    parts.concat([ "from:#{domain}", "to:#{domain}" ]) if domain.present?
     return if parts.empty?
 
     "(#{parts.join(' OR ')})"
-  end
-
-  def gmail_token_query(token)
-    "#{gmail_quote(token)} after:#{gmail_after}"
   end
 
   def gmail_quote(value)
@@ -239,9 +211,5 @@ class Email::FindInvoiceThread
 
   def after_iso
     invoice.issue_date.beginning_of_day.utc.iso8601(3)
-  end
-
-  def amount_text
-    format("%.2f", invoice.total_amount)
   end
 end

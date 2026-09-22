@@ -41,7 +41,7 @@ module Email::MailboxThreadPersistence
     record.to_addresses = message[:to]
     record.cc_addresses = message[:cc]
     record.sent_at = message[:sent_at]
-    record.clean_body = message[:clean_body]
+    record.clean_body = message[:clean_body].to_s.delete("\u0000")
     record.is_anchor = true if anchor || record.is_anchor?
     record.created_at ||= Time.current
     raise_string_error(record.errors.full_messages.to_sentence) unless record.save
@@ -94,38 +94,244 @@ module Email::MailboxThreadPersistence
       .pluck(:id)
   end
 
-  def match_invoice?(invoice, message, client_invoices)
-    match_token?(invoice, message) || match_number?(invoice, message) || match_exclusive_amount?(invoice, message, client_invoices)
+  def link_clustered_threads!(mailbox, client_row, invoices, messages, counts)
+    owner = normalize_email(mailbox.account_name)
+    matched_invoice_ids = Set.new
+    matched_thread_ids = Set.new
+    candidates = messages.select { |message| message_for_client?(message, client_row) }
+
+    linked = Hash.new { |hash, key| hash[key] = Set.new }
+    candidates.group_by { |message| message[:thread_id] }.each do |thread_id, thread_messages|
+      targets = pass_one_invoices(thread_messages, invoices)
+      if targets.empty? && client_inbound?(thread_messages, owner)
+        next if automatic_inbound_only?(thread_messages, owner)
+        next unless invoice_payment_intent?(thread_messages)
+
+        targets = pass_two_invoices(thread_messages, invoices, candidates, owner)
+      elsif targets.empty?
+        targets = outbound_home_invoices(thread_messages, invoices, owner)
+      end
+
+      targets.each do |invoice|
+        persist_thread!(mailbox, invoice, thread_id, messages, primary: false)
+        linked[invoice.id] << thread_id
+        matched_invoice_ids << invoice.id
+        matched_thread_ids << thread_id
+      end
+    end
+
+    assign_home_threads!(mailbox, invoices, messages, owner, linked)
+    counts[:matched_invoices] += matched_invoice_ids.size
+    clock_outbound_only!(matched_invoice_ids, counts)
+    enqueue_inbound_eval!(matched_invoice_ids, counts)
+    { invoice_ids: matched_invoice_ids, thread_ids: matched_thread_ids }
+  end
+
+  # Pass 1: number, else pay-link, else unique $ among invoices that already existed at this thread.
+  def pass_one_invoices(thread_messages, invoices)
+    existed = invoices_existing_at(invoices, thread_messages)
+
+    named = existed.select { |invoice| thread_messages.any? { |message| match_number?(invoice, message) } }
+    return named if named.any?
+
+    linked = existed.select { |invoice| thread_messages.any? { |message| match_token?(invoice, message) } }
+    return linked if linked.any?
+
+    existed.select { |invoice| thread_messages.any? { |message| match_exclusive_amount?(invoice, message, existed) } }
+  end
+
+  # Pass 2: unlabeled payment → invoices that existed, had been sent, and were still open at this thread.
+  def pass_two_invoices(thread_messages, invoices, mailbox_messages, owner_email)
+    at = thread_sent_at(thread_messages)
+    invoices.select do |invoice|
+      invoice_existed_at?(invoice, at) && invoice_sent_by?(invoice, at, mailbox_messages, owner_email)
+    end
+  end
+
+  def invoices_existing_at(invoices, thread_messages)
+    at = thread_sent_at(thread_messages)
+    invoices.select { |invoice| invoice_existed_at?(invoice, at) }
+  end
+
+  def thread_sent_at(thread_messages)
+    Array(thread_messages).map { |message| message[:sent_at] }.compact.min
+  end
+
+  def invoice_existed_at?(invoice, at)
+    return false if at.blank? || invoice.issue_date.blank?
+
+    invoice.issue_date <= at.in_time_zone.to_date
+  end
+
+  def invoice_sent_by?(invoice, at, mailbox_messages, owner_email)
+    return false if at.blank?
+
+    Array(mailbox_messages).any? do |message|
+      next false if message[:sent_at].blank? || message[:sent_at] > at
+
+      identifying_owner_message?(message, invoice, owner_email)
+    end || persisted_send_before?(invoice, at)
+  end
+
+  def persisted_send_before?(invoice, at)
+    Message.joins(conversation: :invoice_conversations)
+      .where(invoice_conversations: { invoice_id: invoice.id }, direction: "user_to_client")
+      .where("messages.sent_at <= ?", at)
+      .exists?
+  end
+
+  def outbound_home_invoices(thread_messages, invoices, owner_email)
+    return [] unless thread_messages.any? { |message| sent_by_owner?(message, owner_email) }
+
+    invoices.select { |invoice| thread_messages.any? { |message| match_number?(invoice, message) || match_token?(invoice, message) } }
+  end
+
+  # HOME is the invoice dispatch: the thread that contains the oldest owner-sent
+  # message identifying this invoice (number or pay-link token). A later owner
+  # reply that quotes the number on another thread stays split. Linking is Pass 1/2;
+  # this only sets is_primary after every candidate is attached.
+  def assign_home_threads!(mailbox, invoices, messages, owner_email, linked)
+    by_thread = messages.group_by { |message| message[:thread_id] }
+    invoices.each do |invoice|
+      thread_ids = linked[invoice.id]
+      next if thread_ids.blank?
+
+      scoped = thread_ids.index_with { |thread_id| Array(by_thread[thread_id]) }
+      assign_home_thread!(mailbox, invoice, scoped, owner_email)
+    end
+  end
+
+  def assign_home_thread!(mailbox, invoice, thread_messages_by_id, owner_email)
+    chosen_id = dispatch_home_thread_id(invoice, thread_messages_by_id, owner_email)
+    return if chosen_id.blank? && invoice_has_home_thread?(invoice)
+
+    chosen_id ||= fallback_home_thread_id(thread_messages_by_id)
+    return if chosen_id.blank?
+
+    conversation = organization.conversations.find_by(
+      integration_id: mailbox.id,
+      external_thread_id: chosen_id.to_s
+    )
+    return if conversation.blank?
+
+    set_home_thread!(invoice, conversation)
+  end
+
+  def dispatch_home_thread_id(invoice, thread_messages_by_id, owner_email)
+    best_id = nil
+    best_key = nil
+    thread_messages_by_id.each do |thread_id, thread_messages|
+      Array(thread_messages).each do |message|
+        next unless identifying_owner_message?(message, invoice, owner_email)
+
+        key = [ message[:sent_at], message[:id].to_s, thread_id.to_s ]
+        next if best_key && (key <=> best_key) >= 0
+
+        best_key = key
+        best_id = thread_id
+      end
+    end
+    best_id
+  end
+
+  def identifying_owner_message?(message, invoice, owner_email)
+    sent_by_owner?(message, owner_email) && (match_number?(invoice, message) || match_token?(invoice, message))
+  end
+
+  def fallback_home_thread_id(thread_messages_by_id)
+    thread_messages_by_id.min_by do |thread_id, thread_messages|
+      first_at = Array(thread_messages).map { |message| message[:sent_at] }.compact.min || Time.zone.at(0)
+      [ first_at, thread_id.to_s ]
+    end&.first
+  end
+
+  def set_home_thread!(invoice, conversation)
+    InvoiceConversation.where(invoice_id: invoice.id).find_each do |link|
+      desired = link.conversation_id == conversation.id
+      next if link.is_primary? == desired
+
+      link.is_primary = desired
+      raise_string_error(link.errors.full_messages.to_sentence) unless link.save
+    end
+    invoice.invoice_conversations.reset
+  end
+
+  def client_inbound?(thread_messages, owner_email)
+    thread_messages.any? { |message| direction_for(message, owner_email) == "client_to_user" }
+  end
+
+  def sent_by_owner?(message, owner_email)
+    return true if owner_email.blank?
+
+    normalize_email(message[:from]) == owner_email
+  end
+
+  def automatic_inbound_only?(thread_messages, owner_email)
+    inbound = thread_messages.select { |message| direction_for(message, owner_email) == "client_to_user" }
+    inbound.any? && inbound.all? { |message| automatic_reply?(message) }
+  end
+
+  def automatic_reply?(message)
+    subject = message[:subject].to_s
+    subject.match?(/\A\s*(automatic reply|auto[- ]reply|out of office|ooo:)/i)
+  end
+
+  def invoice_payment_intent?(thread_messages)
+    llm = payment_llm
+    return false if llm.blank?
+
+    haystack = Array(thread_messages).map { |message| [ message[:subject], message[:clean_body] ].compact.join("\n") }.join("\n\n")
+    result = Email::ClassifyPaymentIntent.execute(
+      subject: Array(thread_messages).map { |message| message[:subject] }.find(&:present?).to_s,
+      body: haystack,
+      client: llm
+    )
+    result.success? && result.data[:intent].to_s == "invoice_payment"
+  end
+
+  def payment_llm
+    @llm
   end
 
   def match_token?(invoice, message)
-    token = invoice.pay_link_token.to_s.strip
-    return false if token.blank?
-
-    haystack = "#{message[:subject]} #{message[:raw_body]} #{message[:clean_body]}"
-    haystack.downcase.include?(token.downcase)
+    Invoices::PayLink.match?(invoice.pay_link_token, match_haystack(message))
   end
 
   def match_number?(invoice, message)
     number = invoice.invoice_number.to_s.strip
     return false if number.blank?
 
-    haystack = "#{message[:subject]}\n#{message[:clean_body]}"
-    return true if haystack.match?(/\b#{Regexp.escape(number)}\b/i)
+    haystack = match_haystack(message)
+    return true if number_hit?(haystack, number)
 
     digits = number[/\d{3,}\z/]
     return false if digits.blank?
 
-    haystack.match?(/\b#{Regexp.escape(digits)}\b/)
+    number_hit?(haystack, digits)
+  end
+
+  def number_hit?(haystack, token)
+    haystack.match?(/(?<![A-Za-z0-9])#{Regexp.escape(token)}(?![A-Za-z0-9])/i)
+  end
+
+  def match_haystack(message)
+    raw = message[:raw_body].to_s
+    [
+      message[:subject],
+      message[:clean_body],
+      raw,
+      Invoices::PayLink.urls_in(raw),
+      Array(message[:attachment_names]).join(" ")
+    ].compact.join("\n")
   end
 
   def match_amount?(invoice, message)
-    amounts = quoted_amounts("#{message[:subject]} #{message[:clean_body]}")
+    amounts = quoted_amounts(match_haystack(message))
     amounts.include?(invoice.total_amount.to_d)
   end
 
   def match_exclusive_amount?(invoice, message, client_invoices)
-    amounts = quoted_amounts("#{message[:subject]} #{message[:clean_body]}")
+    amounts = quoted_amounts(match_haystack(message))
     return false if amounts.empty?
 
     amounts.any? do |amount|
@@ -182,7 +388,8 @@ module Email::MailboxThreadPersistence
       cc: cc,
       sent_at: sent_at,
       raw_body: raw,
-      clean_body: sanitize_body(raw)
+      clean_body: sanitize_body(raw),
+      attachment_names: attachment_names(payload)
     }
   end
 
@@ -211,8 +418,17 @@ module Email::MailboxThreadPersistence
     end
   end
 
+  def attachment_names(payload)
+    Array(payload["attachments"]).filter_map do |attachment|
+      next unless attachment.is_a?(Hash)
+
+      attachment["name"].presence || attachment["filename"].presence || attachment["id"]
+    end.map(&:to_s)
+  end
+
   def sanitize_body(raw)
-    text = raw.to_s.gsub(/<style[^>]*>.*?<\/style>/mi, " ")
+    text = raw.to_s.delete("\u0000")
+    text = text.gsub(/<style[^>]*>.*?<\/style>/mi, " ")
     text = text.gsub(/<[^>]+>/, " ")
     text = CGI.unescapeHTML(text)
     text = text.gsub(/\r\n?/, "\n")

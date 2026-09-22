@@ -4,12 +4,12 @@ class Organization < ApplicationRecord
   DEFAULT_OFFSETS = [ -3, 0, 7, 9 ].freeze
 
   has_many :users, dependent: :destroy
-  has_many :integrations, dependent: :destroy
+  has_many :webhook_events, dependent: :destroy
+  has_many :outbox_messages, dependent: :destroy
   has_many :clients, dependent: :destroy
   has_many :invoices, dependent: :destroy
   has_many :conversations, dependent: :destroy
-  has_many :webhook_events, dependent: :destroy
-  has_many :outbox_messages, dependent: :destroy
+  has_many :integrations, dependent: :destroy
 
   validates :name, presence: true
   validates :follow_up_interval_days, numericality: { greater_than_or_equal_to: 1, less_than_or_equal_to: 30 }

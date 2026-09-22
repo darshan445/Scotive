@@ -62,6 +62,9 @@ RSpec.describe "API v1 ledger and clients", type: :request do
     invoices = json_body.dig("data", "invoices")
     expect(invoices.first["invoice_ref"]).to eq("INV-9")
     expect(invoices.first["status"]).to eq("overdue")
+    expect(json_body.dig("data", "client_count")).to eq(1)
+    expect(invoices.first["unmatched"]).to eq(true)
+    expect(invoices.first["has_thread"]).to eq(false)
   end
 
   it "returns the clients list and detail" do

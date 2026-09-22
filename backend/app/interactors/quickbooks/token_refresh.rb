@@ -12,6 +12,9 @@ module Quickbooks::TokenRefresh
     raise_string_error("QuickBooks access token is missing") if token.blank?
 
     token
+  rescue ActiveRecord::Encryption::Errors::Decryption
+    mark_reauth!(record)
+    raise_string_error("QuickBooks credentials could not be decrypted — reconnect QuickBooks")
   end
 
   def needs_token_refresh?(record)

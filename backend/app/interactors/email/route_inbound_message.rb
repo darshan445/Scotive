@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Email::RouteInboundMessage Interactor
-# Purpose: Known-thread persist vs gated unknown match for one normalized message.
+# Purpose: Known-thread persist vs Pass 1 / Pass 2 unknown match for one message.
 # Methods:
 # - execute
 
@@ -12,14 +12,16 @@ class Email::RouteInboundMessage
 
   OPEN_STATUSES = %w[unmatched invoiced overdue promised broken_promise disputed paid_unconfirmed partially_paid].freeze
 
-  def self.execute(organization:, mailbox:, message:)
-    new(organization: organization, mailbox: mailbox, message: message).execute
+  def self.execute(organization:, mailbox:, message:, llm: Email::LlmClient.new, context_messages: nil)
+    new(organization: organization, mailbox: mailbox, message: message, llm: llm, context_messages: context_messages).execute
   end
 
-  def initialize(organization:, mailbox:, message:)
+  def initialize(organization:, mailbox:, message:, llm:, context_messages:)
     @organization = organization
     @mailbox = mailbox
     @message = message
+    @llm = llm
+    @context_messages = Array(context_messages)
   end
 
   def execute
@@ -42,7 +44,7 @@ class Email::RouteInboundMessage
 
   private
 
-  attr_reader :organization, :mailbox, :message
+  attr_reader :organization, :mailbox, :message, :llm, :context_messages
 
   def persist_known!(conversation)
     owner_email = normalize_email(mailbox.account_name)
@@ -55,28 +57,42 @@ class Email::RouteInboundMessage
   def persist_unknown!
     open_invoices = organization.invoices.where(current_ar_status: OPEN_STATUSES).includes(:client).to_a
     return { discarded: true, reason: "no_open_invoices" } if open_invoices.empty?
+    return { discarded: true, reason: "automatic_reply" } if automatic_reply?(message)
 
     clients = organization.clients.to_a
     client_hit = clients.find { |row| message_for_client?(message, row) }
-    token_or_number = open_invoices.any? { |invoice| match_token?(invoice, message) || match_number?(invoice, message) }
-    return { discarded: true, reason: "gated" } if client_hit.blank? && !token_or_number
+    named = open_invoices.select { |invoice| match_number?(invoice, message) }
+    toked = open_invoices.select { |invoice| match_token?(invoice, message) }
+    return { discarded: true, reason: "gated" } if client_hit.blank? && named.empty? && toked.empty?
 
-    candidates = if client_hit
-      open_invoices.select { |invoice| invoice.client_id == client_hit.id }
-    else
-      open_invoices
-    end
-    matched = candidates.select { |invoice| match_invoice?(invoice, message, candidates) }
-    matched = open_invoices.select { |invoice| match_token?(invoice, message) || match_number?(invoice, message) } if matched.empty?
-    return { discarded: true, reason: "no_invoice_match" } if matched.empty?
+    targets = resolve_unknown_targets(client_hit, open_invoices, named)
+    return { discarded: true, reason: "no_invoice_match" } if targets.empty?
 
-    matched.each do |invoice|
+    targets.each do |invoice|
       persist_thread!(mailbox, invoice, message[:thread_id], [ message ], primary: !invoice_has_home_thread?(invoice))
       remember_sender!(invoice.client, message[:from])
       Email::EvaluateInvoiceStateJob.perform_later(invoice.id)
     end
 
-    { routed: "unknown_match", invoices: matched.map(&:id) }
+    { routed: "unknown_match", invoices: targets.map(&:id) }
+  end
+
+  def resolve_unknown_targets(client_hit, open_invoices, named)
+    pool = client_hit ? open_invoices.select { |invoice| invoice.client_id == client_hit.id } : open_invoices
+    scoped_named = named.select { |invoice| pool.map(&:id).include?(invoice.id) }
+    scoped_named = named if scoped_named.empty? && named.any?
+    return scoped_named if scoped_named.any?
+
+    seeded = pass_one_invoices([ message ], pool)
+    return seeded if seeded.any?
+    return [] if client_hit.blank?
+    return [] unless invoice_payment_intent?([ message ])
+
+    pass_two_invoices([ message ], pool, pass_two_context, normalize_email(mailbox.account_name))
+  end
+
+  def pass_two_context
+    context_messages.presence || [ message ]
   end
 
   def remember_sender!(client_row, email)

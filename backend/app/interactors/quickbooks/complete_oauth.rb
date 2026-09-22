@@ -70,7 +70,18 @@ class Quickbooks::CompleteOauth
 
   def fetch_company(access_token)
     client.get_company_info(realm_id: realm_id, access_token: access_token)
-  rescue Faraday::Error
-    raise_string_error("Could not load QuickBooks company")
+  rescue Faraday::Error => e
+    raise_string_error(company_load_error(e))
+  end
+
+  def company_load_error(error)
+    detail = error.message.to_s
+    host = ENV.fetch("QBO_ENV", "sandbox")
+    if detail.match?(/401|403|AuthenticationFailed|AuthorizationFailed/i)
+      "Could not load QuickBooks company (#{host} API rejected the token). " \
+        "Reconnect and confirm QBO_ENV matches the company (sandbox vs production). #{detail}"
+    else
+      "Could not load QuickBooks company: #{detail}"
+    end
   end
 end

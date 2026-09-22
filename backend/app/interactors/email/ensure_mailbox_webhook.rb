@@ -11,7 +11,7 @@ class Email::EnsureMailboxWebhook
   include ExecuteMethodHelper
   include LogHelper
 
-  WEBHOOK_NAME = "scotive-email"
+  WEBHOOK_NAME = "costmydish-email"
 
   def self.execute(organization:, client: Email::EmailClient.new)
     new(organization: organization, client: client).execute
@@ -62,7 +62,8 @@ class Email::EnsureMailboxWebhook
 
   def matching_webhook?(row)
     row["request_url"].to_s.chomp("/") == request_url.chomp("/") &&
-      row["source"].to_s == "email"
+      row["source"].to_s == "email" &&
+      row["name"].to_s == WEBHOOK_NAME
   end
 
   def create_webhook_id!
@@ -75,7 +76,8 @@ class Email::EnsureMailboxWebhook
       headers: webhook_headers
     }
     created = client.create_webhook(payload)
-    id = created.is_a?(Hash) ? (created["id"] || created.dig("webhook", "id")) : nil
+    created = created.stringify_keys if created.is_a?(Hash)
+    id = created.is_a?(Hash) ? (created["id"] || created["webhook_id"] || created.dig("webhook", "id")) : nil
     raise_string_error("Unipile did not return a webhook id") if id.blank?
 
     id

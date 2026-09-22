@@ -35,6 +35,15 @@ class Email::EmailClient
     post("/api/v1/webhooks", payload)
   end
 
+  def delete_webhook(webhook_id)
+    response = connection.delete("/api/v1/webhooks/#{webhook_id}") do |req|
+      req.headers["Accept"] = "application/json"
+    end
+    return if response.success? || response.status == 404
+
+    raise Faraday::Error, "Unipile delete webhook failed (#{response.status}): #{response.body}"
+  end
+
   def send_email(account_id:, to:, subject:, body:, cc: [], reply_to: nil, custom_headers: [])
     payload = {
       account_id: account_id,

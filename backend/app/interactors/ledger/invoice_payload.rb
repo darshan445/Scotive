@@ -4,8 +4,7 @@
 module Ledger::InvoicePayload
   UI_STATUS = {
     "broken_promise" => "promise_broken",
-    "voided" => "written_off",
-    "unmatched" => "invoiced"
+    "voided" => "written_off"
   }.freeze
 
   module_function
@@ -16,7 +15,9 @@ module Ledger::InvoicePayload
     paid_at = paid_at_for(invoice)
     {
       _id: invoice.id,
-      status: ui_status(invoice.current_ar_status),
+      status: ui_status(invoice),
+      unmatched: unmatched?(invoice),
+      has_thread: !unmatched?(invoice),
       amount: invoice.total_amount.to_f,
       balance_remaining: invoice.balance_remaining.to_f,
       paid_amount: (invoice.total_amount.to_d - invoice.balance_remaining.to_d).to_f,
@@ -42,8 +43,20 @@ module Ledger::InvoicePayload
     }
   end
 
-  def ui_status(status)
-    UI_STATUS.fetch(status.to_s, status.to_s)
+  def ui_status(invoice)
+    status = invoice.current_ar_status.to_s
+    if status == "unmatched"
+      invoice.due_date.present? && invoice.due_date < Date.current ? "overdue" : "invoiced"
+    else
+      UI_STATUS.fetch(status, status)
+    end
+  end
+
+  def unmatched?(invoice)
+    return false if invoice.balance_remaining.to_d <= 0
+    return false if %w[paid voided].include?(invoice.current_ar_status.to_s)
+
+    invoice.invoice_conversations.empty?
   end
 
   def primary_conversation(invoice)

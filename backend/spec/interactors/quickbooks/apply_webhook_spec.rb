@@ -94,6 +94,31 @@ RSpec.describe Quickbooks::ApplyWebhook do
     expect(OutboxMessage.last.cancellation_reason).to eq("paid_in_books")
   end
 
+  it "persists InvoiceLink from the invoice GET" do
+    url = "https://developer.intuit.com/comingSoon/scs-v1-abc"
+    allow(qbo_client).to receive(:get_invoice).and_return(
+      "Id" => "95",
+      "DocNumber" => "INV-95",
+      "TxnDate" => "2026-08-01",
+      "DueDate" => "2026-09-01",
+      "TotalAmt" => 400,
+      "Balance" => 400,
+      "CustomerRef" => { "value" => "C1", "name" => "Acme" },
+      "BillEmail" => { "Address" => "ap@acme.com" },
+      "InvoiceLink" => url
+    )
+    allow(qbo_client).to receive(:get_customer).and_return(
+      "Id" => "C1",
+      "DisplayName" => "Acme",
+      "PrimaryEmailAddr" => { "Address" => "ap@acme.com" }
+    )
+
+    result = described_class.execute(webhook_event: event_for(name: "Invoice", id: "95"), client: qbo_client)
+
+    expect(result.success?).to eq(true)
+    expect(invoice.reload.pay_link_token).to eq(url)
+  end
+
   it "voids a deleted invoice" do
     result = described_class.execute(
       webhook_event: event_for(name: "Invoice", id: "95", operation: "Delete"),
@@ -101,5 +126,19 @@ RSpec.describe Quickbooks::ApplyWebhook do
     )
     expect(result.success?).to eq(true)
     expect(invoice.reload.current_ar_status).to eq("voided")
+  end
+
+  it "marks the QBO integration for reauth when tokens cannot be decrypted" do
+    allow_any_instance_of(Integration).to receive(:access_token)
+      .and_raise(ActiveRecord::Encryption::Errors::Decryption)
+
+    result = described_class.execute(
+      webhook_event: event_for(name: "Invoice", id: "95"),
+      client: qbo_client
+    )
+
+    expect(result.success?).to eq(false)
+    expect(result.errors).to match(/decrypt/)
+    expect(integration.reload.connection_status).to eq("reauth_required")
   end
 end

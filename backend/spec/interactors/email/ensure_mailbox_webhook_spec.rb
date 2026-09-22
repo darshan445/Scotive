@@ -39,12 +39,13 @@ RSpec.describe Email::EnsureMailboxWebhook do
       connection_status: "connected"
     )
     allow(client).to receive(:list_webhooks).and_return({ "items" => [] })
-    allow(client).to receive(:create_webhook).and_return({ "id" => "wh-1" })
+    allow(client).to receive(:create_webhook).and_return({ "object" => "WebhookCreated", "webhook_id" => "wh-1" })
 
     result = described_class.execute(organization: organization, client: client)
     expect(result.success?).to eq(true)
     expect(result.data[:registered]).to eq(true)
     expect(client).to have_received(:create_webhook).with(hash_including(
+      name: "costmydish-email",
       source: "email",
       events: %w[mail_received mail_sent],
       request_url: "https://example.ngrok-free.dev/api/v1/gmail/webhooks"

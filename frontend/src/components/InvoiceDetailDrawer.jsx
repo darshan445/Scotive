@@ -30,6 +30,7 @@ const STATUS_STYLES = {
     paid: "bg-green-50 text-green-700 border-green-200",
     written_off: "bg-gray-100 text-gray-500 border-gray-200",
     stale: "bg-stone-100 text-stone-600 border-stone-200",
+    unmatched: "bg-amber-50 text-amber-800 border-amber-200",
 };
 
 function StatusChip({ inv }) {
@@ -37,7 +38,8 @@ function StatusChip({ inv }) {
     const hasClaim = inv?.disputed_claim_amount != null && Number(inv.disputed_claim_amount) > 0;
     const pendingPay = hasPendingPaymentClaim(inv);
     let styleKey = status;
-    if (pendingPay && (status === "disputed" || hasClaim)) styleKey = "paid_unconfirmed";
+    if (inv?.unmatched && !pendingPay && status !== "disputed" && !hasClaim) styleKey = "unmatched";
+    else if (pendingPay && (status === "disputed" || hasClaim)) styleKey = "paid_unconfirmed";
     else if (status === "partially_paid" && hasClaim) styleKey = "disputed";
     const cls = STATUS_STYLES[styleKey] || STATUS_STYLES.invoiced;
     return (
@@ -106,15 +108,6 @@ function clientSenderLabel(m, inv) {
     return from;
 }
 
-function subjectsDiffer(msgSubject, threadSubject) {
-    const a = (msgSubject || "").trim().toLowerCase();
-    const b = (threadSubject || "").trim().toLowerCase();
-    if (!a) return false;
-    if (!b) return true;
-    const stripRe = (s) => s.replace(/^(re|fw|fwd)\s*:\s*/gi, "").trim();
-    return stripRe(a) !== stripRe(b);
-}
-
 function MessageAvatar({ isYou, label }) {
     if (isYou) {
         return (
@@ -156,15 +149,14 @@ function emailBodyToText(raw) {
         if (ta) {
             ta.innerHTML = text;
             text = ta.value;
-        } else {
-            text = text
-                .replace(/&nbsp;/g, " ")
-                .replace(/&lt;/g, "<")
-                .replace(/&gt;/g, ">")
-                .replace(/&amp;/g, "&")
-                .replace(/&quot;/g, '"');
         }
     }
+    text = text
+        .replace(/&nbsp;/g, " ")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&amp;/g, "&")
+        .replace(/&quot;/g, '"');
 
     const cutPatterns = [
         /\nOn .+wrote:\s*$/im,
@@ -189,6 +181,88 @@ function emailBodyToText(raw) {
         lines.push(line);
     }
     return lines.join("\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function conversationMessages(data) {
+    const fromThreads = Array.isArray(data?.threads)
+        ? data.threads.flatMap((thread) => thread.messages || [])
+        : [];
+    const raw = data?.messages?.length ? data.messages : fromThreads;
+    return [...raw].sort((a, b) => new Date(b.date) - new Date(a.date));
+}
+
+function ThreadMessageList({ messages, inv }) {
+    if (!messages?.length) return null;
+    return (
+        <ul className="divide-y divide-border" data-testid="conversation-messages">
+            {messages.map((m, idx, msgs) => {
+                const prev = msgs[idx - 1];
+                const day = calendarDayKey(m.date);
+                const prevDay = prev ? calendarDayKey(prev.date) : null;
+                const showDay = Boolean(day && day !== prevDay);
+                const isYou = m.direction === "you";
+                const sender = isYou ? "You" : clientSenderLabel(m, inv);
+                return (
+                    <li key={m.id} data-testid="conversation-message">
+                        {showDay ? (
+                            <div
+                                className="flex items-center justify-center gap-3 px-5 py-3 bg-muted/20"
+                                data-testid="conversation-day-separator"
+                            >
+                                <span className="h-px flex-1 bg-border" />
+                                <span className="text-[11px] font-medium text-muted-foreground tabular-nums whitespace-nowrap">
+                                    {formatDaySeparator(m.date)}
+                                </span>
+                                <span className="h-px flex-1 bg-border" />
+                            </div>
+                        ) : null}
+                        <div
+                            className={cn(
+                                "px-5 py-4 border-l-[3px]",
+                                isYou
+                                    ? "bg-primary/[0.04] border-l-primary"
+                                    : "bg-white border-l-border",
+                            )}
+                        >
+                            <div className="flex items-start justify-between gap-3">
+                                <div className="flex items-center gap-2.5 min-w-0">
+                                    <MessageAvatar isYou={isYou} label={sender} />
+                                    <div className="min-w-0">
+                                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                                            <span className="text-sm font-semibold truncate">{sender}</span>
+                                            {m.state_markers?.length ? (
+                                                <span className="inline-flex flex-wrap gap-1">
+                                                    {m.state_markers.map((label) => (
+                                                        <span
+                                                            key={label}
+                                                            className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold border border-border bg-background text-muted-foreground"
+                                                        >
+                                                            → {label}
+                                                        </span>
+                                                    ))}
+                                                </span>
+                                            ) : null}
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="text-[11px] font-mono text-muted-foreground tabular-nums flex-shrink-0">
+                                    {formatMsgTime(m.date)}
+                                </div>
+                            </div>
+                            <pre className="mt-3 text-sm text-foreground whitespace-pre-wrap break-words font-sans leading-relaxed" data-testid="conversation-body">
+                                {emailBodyToText(m.body) || "(empty)"}
+                            </pre>
+                            {m.attachment_names?.length ? (
+                                <div className="mt-2 text-[11px] text-muted-foreground">
+                                    Attachments: {m.attachment_names.join(", ")}
+                                </div>
+                            ) : null}
+                        </div>
+                    </li>
+                );
+            })}
+        </ul>
+    );
 }
 
 function headerFactLine(inv) {
@@ -376,12 +450,12 @@ export function InvoiceDetailDrawer({ invoiceId, preview = null, open, onClose, 
         );
     })();
 
-    const threadUrl = gmailThreadUrl(data?.thread_id || inv?.source_thread_id);
     const fact = inv ? headerFactLine(inv) : null;
     const partial = inv && !hasPendingPaymentClaim(inv)
         && Number(inv.paid_amount || 0) > 0.005
         && Number(inv.balance_remaining ?? inv.amount ?? 0) > 0.005;
     const loadingThread = open && invoiceId && !data && !err;
+    const history = conversationMessages(data);
 
     return (
         <SheetPrimitive.Root
@@ -549,125 +623,55 @@ export function InvoiceDetailDrawer({ invoiceId, preview = null, open, onClose, 
                                     <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">{err}</div>
                                 ) : null}
 
-                                <section className="rounded-2xl border border-border bg-card overflow-hidden" data-testid="invoice-conversation">
-                                    <div className="px-5 py-3 border-b border-border flex items-center justify-between sticky top-0 bg-card z-[1]">
-                                        <h2 className="text-sm font-semibold">Conversation</h2>
-                                        {threadUrl ? (
-                                            <a
-                                                href={threadUrl}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
-                                            >
-                                                Open in Gmail <ExternalLink className="w-3 h-3" />
-                                            </a>
-                                        ) : null}
-                                    </div>
-
+                                <div className="space-y-3" data-testid="invoice-conversation">
                                     {loadingThread ? (
-                                        <div className="px-5 py-10 space-y-4">
-                                            <Skeleton className="h-3 w-1/3" />
-                                            <Skeleton className="h-16 w-full" />
-                                            <Skeleton className="h-3 w-1/4" />
-                                            <Skeleton className="h-20 w-full" />
-                                        </div>
+                                        <section className="rounded-2xl border border-border bg-card overflow-hidden">
+                                            <div className="px-5 py-10 space-y-4">
+                                                <Skeleton className="h-3 w-1/3" />
+                                                <Skeleton className="h-16 w-full" />
+                                                <Skeleton className="h-3 w-1/4" />
+                                                <Skeleton className="h-20 w-full" />
+                                            </div>
+                                        </section>
                                     ) : null}
 
                                     {data?.gmail_error ? (
-                                        <div className="px-5 py-4 text-sm text-amber-800 bg-amber-50 border-b border-amber-100">
+                                        <div className="rounded-2xl border border-amber-100 bg-amber-50 px-5 py-4 text-sm text-amber-800">
                                             {data.gmail_error}. Showing what we know from tracking.
                                         </div>
                                     ) : null}
 
-                                    {data && !data.messages?.length ? (
-                                        <div className="px-5 py-10 text-sm text-muted-foreground text-center" data-testid="conversation-empty">
-                                            {inv?.status === "paid" && (inv?.paid_via === "quickbooks" || inv?.qbo_paid_date)
-                                                ? `No client emails — paid in QuickBooks, ${inv.qbo_paid_date || formatDate(inv.paid_at)}`
-                                                : "No client emails on this invoice yet"}
-                                        </div>
+                                    {data && !history.length ? (
+                                        <section className="rounded-2xl border border-border bg-card overflow-hidden">
+                                            <div className="px-5 py-10 text-sm text-muted-foreground text-center" data-testid="conversation-empty">
+                                                {inv?.status === "paid" && (inv?.paid_via === "quickbooks" || inv?.qbo_paid_date)
+                                                    ? `No client emails — paid in QuickBooks, ${inv.qbo_paid_date || formatDate(inv.paid_at)}`
+                                                    : "No client emails on this invoice yet"}
+                                            </div>
+                                        </section>
                                     ) : null}
 
-                                    {data?.messages?.length ? (
-                                        <ul className="divide-y divide-border" data-testid="conversation-messages">
-                                            {[...data.messages].reverse().map((m, idx, msgs) => {
-                                                const prev = msgs[idx - 1];
-                                                const day = calendarDayKey(m.date);
-                                                const prevDay = prev ? calendarDayKey(prev.date) : null;
-                                                const showDay = Boolean(day && day !== prevDay);
-                                                const isYou = m.direction === "you";
-                                                const sender = isYou ? "You" : clientSenderLabel(m, inv);
-                                                const showSubject = subjectsDiffer(m.subject, inv?.source_subject);
-                                                return (
-                                                    <li key={m.id} data-testid="conversation-message">
-                                                        {showDay ? (
-                                                            <div
-                                                                className="flex items-center justify-center gap-3 px-5 py-3 bg-muted/20"
-                                                                data-testid="conversation-day-separator"
-                                                            >
-                                                                <span className="h-px flex-1 bg-border" />
-                                                                <span className="text-[11px] font-medium text-muted-foreground tabular-nums whitespace-nowrap">
-                                                                    {formatDaySeparator(m.date)}
-                                                                </span>
-                                                                <span className="h-px flex-1 bg-border" />
-                                                            </div>
-                                                        ) : null}
-                                                        <div
-                                                            className={cn(
-                                                                "px-5 py-4 border-l-[3px]",
-                                                                isYou
-                                                                    ? "bg-primary/[0.04] border-l-primary"
-                                                                    : "bg-white border-l-border",
-                                                            )}
-                                                        >
-                                                            <div className="flex items-start justify-between gap-3">
-                                                                <div className="flex items-center gap-2.5 min-w-0">
-                                                                    <MessageAvatar isYou={isYou} label={sender} />
-                                                                    <div className="min-w-0">
-                                                                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                                                                            <span className="text-sm font-semibold truncate">{sender}</span>
-                                                                            {m.state_markers?.length ? (
-                                                                                <span className="inline-flex flex-wrap gap-1">
-                                                                                    {m.state_markers.map((label) => (
-                                                                                        <span
-                                                                                            key={label}
-                                                                                            className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold border border-border bg-background text-muted-foreground"
-                                                                                        >
-                                                                                            → {label}
-                                                                                        </span>
-                                                                                    ))}
-                                                                                </span>
-                                                                            ) : null}
-                                                                        </div>
-                                                                        {showSubject ? (
-                                                                            <div className="text-[11px] text-muted-foreground mt-0.5 truncate">{m.subject}</div>
-                                                                        ) : null}
-                                                                    </div>
-                                                                </div>
-                                                                <div className="text-[11px] font-mono text-muted-foreground tabular-nums flex-shrink-0">
-                                                                    {formatMsgTime(m.date)}
-                                                                </div>
-                                                            </div>
-                                                            <pre className="mt-3 text-sm text-foreground whitespace-pre-wrap break-words font-sans leading-relaxed" data-testid="conversation-body">
-                                                                {emailBodyToText(m.body) || "(empty)"}
-                                                            </pre>
-                                                            {m.attachment_names?.length ? (
-                                                                <div className="mt-2 text-[11px] text-muted-foreground">
-                                                                    Attachments: {m.attachment_names.join(", ")}
-                                                                </div>
-                                                            ) : null}
-                                                        </div>
-                                                    </li>
-                                                );
-                                            })}
-                                        </ul>
+                                    {data && history.length ? (
+                                        <section
+                                            className="rounded-2xl border border-border bg-card overflow-hidden"
+                                            data-testid="conversation-home"
+                                        >
+                                            {gmailThreadUrl(data.thread_id) ? (
+                                                <div className="px-5 py-2.5 border-b border-border flex justify-end sticky top-0 bg-card z-[1]">
+                                                    <a
+                                                        href={gmailThreadUrl(data.thread_id)}
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+                                                    >
+                                                        Open in Gmail <ExternalLink className="w-3 h-3" />
+                                                    </a>
+                                                </div>
+                                            ) : null}
+                                            <ThreadMessageList messages={history} inv={inv} />
+                                        </section>
                                     ) : null}
-
-                                    {data?.client_ever_replied === false && data.messages?.length > 0 ? (
-                                        <div className="px-5 py-3 border-t border-border text-xs text-muted-foreground bg-muted/30">
-                                            Client has never responded on this thread.
-                                        </div>
-                                    ) : null}
-                                </section>
+                                </div>
                             </div>
                         </div>
                     </SheetPrimitive.Content>

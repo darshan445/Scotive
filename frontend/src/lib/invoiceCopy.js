@@ -13,6 +13,7 @@ export const STATUS_LABELS = {
     paid: "Paid",
     written_off: "Written off",
     stale: "Gone quiet",
+    unmatched: "Unmatched",
 };
 
 export function statusLabel(status) {
@@ -51,6 +52,9 @@ export function invoiceStatusDisplay(inv) {
             && Number(inv?.balance_remaining ?? inv?.amount ?? 0) > 0.005)
     );
 
+    if (inv?.unmatched && !pendingPay && status !== "disputed" && !hasClaim) {
+        return "Unmatched";
+    }
     if (pendingPay && (status === "disputed" || hasClaim)) {
         return "Disputed · says paid";
     }

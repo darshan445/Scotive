@@ -11,6 +11,9 @@ class Webhooks::ProcessEventJob < ApplicationJob
     return if result.success?
 
     event.update!(status: "failed", error_message: Array(result.errors).join(", "))
+    detail = Array(result.errors).join(" ")
+    return if detail.match?(/decrypt/i)
+
     raise StandardError, result.errors
   end
 end

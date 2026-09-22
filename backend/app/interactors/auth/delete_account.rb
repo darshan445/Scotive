@@ -38,8 +38,8 @@ class Auth::DeleteAccount
       raise_string_error("Organization is required") if organization.blank?
 
       revoke_remote_connections(organization)
-      denylist_current_token
       organization.destroy!
+      denylist_current_token
 
       { deleted: true }
     end

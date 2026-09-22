@@ -111,7 +111,8 @@ class Quickbooks::QuickbookClient
     entity(accounting_get(
       "/v3/company/#{realm_id}/invoice/#{id}",
       access_token: access_token,
-      context: "QBO invoice"
+      context: "QBO invoice",
+      params: { include: "invoiceLink" }
     ), "Invoice")
   end
 
@@ -176,6 +177,7 @@ class Quickbooks::QuickbookClient
     host = production? ? PRODUCTION_API_HOST : SANDBOX_API_HOST
     @accounting_connection ||= Faraday.new(url: host) do |f|
       f.response :json, content_type: /\bjson$/
+      f.headers["User-Agent"] = "Scotive"
       f.options.timeout = 30
       f.adapter Faraday.default_adapter
     end
@@ -185,6 +187,7 @@ class Quickbooks::QuickbookClient
     response = accounting_connection.get(path) do |req|
       req.headers["Authorization"] = "Bearer #{access_token}"
       req.headers["Accept"] = "application/json"
+      req.headers["Content-Type"] = "application/json"
       req.params["minorversion"] = MINOR_VERSION
       params.each { |key, value| req.params[key] = value }
     end
@@ -207,9 +210,21 @@ class Quickbooks::QuickbookClient
 
   def unwrap!(response, context)
     unless response.success?
-      raise Faraday::Error, "#{context} failed (#{response.status}): #{response.body}"
+      raise Faraday::Error, "#{context} failed (#{response.status}): #{fault_text(response.body)}"
     end
 
     response.body
+  end
+
+  def fault_text(body)
+    hash = body.is_a?(Hash) ? body : {}
+    fault = hash["Fault"] || hash["fault"] || {}
+    errors = fault["Error"] || fault["error"] || []
+    first = errors.is_a?(Array) ? errors.first : errors
+    if first.is_a?(Hash)
+      [ first["Message"] || first["message"], first["Detail"] || first["detail"] ].compact_blank.join(" — ").presence || body.to_s
+    else
+      body.to_s
+    end
   end
 end

@@ -9,6 +9,7 @@ class Quickbooks::ImportOpenInvoices
   include ExecuteMethodHelper
   include LogHelper
   include Quickbooks::BooksPersistence
+  include Quickbooks::InvoiceLinkFetch
   include Quickbooks::TokenRefresh
 
   def self.execute(organization:, client: Quickbooks::QuickbookClient.new)
@@ -29,7 +30,7 @@ class Quickbooks::ImportOpenInvoices
       raise_string_error("QuickBooks company id is missing") if integration.external_account_id.blank?
 
       access_token = ensure_fresh_token!(integration)
-      invoices = fetch_open_invoices(integration, access_token)
+      invoices = attach_invoice_links!(integration, access_token, fetch_open_invoices(integration, access_token))
       customers_by_id = fetch_customers(integration, access_token, invoices)
       counts = persist_books!(integration, invoices, customers_by_id)
       integration.update!(last_synced_at: Time.current)

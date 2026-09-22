@@ -61,19 +61,24 @@ class Email::EvaluateInvoiceState
     raise_string_error("State reader returned invalid JSON") unless raw.is_a?(Hash)
 
     raw.stringify_keys
-  rescue Faraday::Error, KeyError
-    raise_string_error("State reader failed")
+  rescue Faraday::Error, KeyError => e
+    raise_string_error("State reader failed: #{e.message.to_s.truncate(240)}")
   end
 
   def commit!(raw)
     status = normalize_status(raw["status"])
-    needs_reply = ActiveModel::Type::Boolean.new.cast(raw["needs_reply"]) || false
-    events = Array(raw["new_events"]).map { |event| event.stringify_keys }
-    promise_date = resolved_promise_date(status, events, raw["promise_date"])
-    status = "broken_promise" if status == "promised" && promise_date.present? && promise_date < Date.current
+    events = normalize_events(Array(raw["new_events"]).map { |event| event.stringify_keys })
     disputed = parse_amount(raw["disputed_claim_amount"])
+    if dispute_settled?(events)
+      disputed = nil
+      status = books_status if status == "disputed"
+    end
+    promise_date = resolved_promise_date(events, raw["promise_date"])
+    status, promise_date = apply_live_promise(status, promise_date)
     disputed = nil unless status == "disputed" || (disputed.present? && status == "partially_paid")
-    promise_date = nil if %w[invoiced overdue paid_unconfirmed].include?(status)
+    status = books_status if status == "disputed" && disputed.blank? && events.none? { |event| event["type"].to_s == "dispute" }
+    promise_date = nil if status == "paid_unconfirmed"
+    needs_reply = resolved_needs_reply(raw["needs_reply"], events)
     trigger_message = message_for(events.last)
     previous_status = invoice.current_ar_status
     previous_needs_reply = invoice.needs_reply
@@ -107,6 +112,57 @@ class Email::EvaluateInvoiceState
     end
   end
 
+  def normalize_events(events)
+    events.filter_map do |event|
+      type = event["type"].to_s
+      if type == "promise" && calendar_date_for(event).blank?
+        next unless question?(event["quote"])
+
+        event.merge("type" => "needs_reply")
+      else
+        event
+      end
+    end
+  end
+
+  def resolved_needs_reply(raw_flag, events)
+    last_client = messages.select { |message| message.direction == "client_to_user" }.last
+    last_user = messages.select { |message| message.direction == "user_to_client" }.last
+    return false if last_client && last_user && last_user.sent_at > last_client.sent_at
+
+    asked_at = last_question_at(events)
+    return !user_replied_after?(asked_at) if asked_at.present?
+    return false if last_message&.direction == "user_to_client"
+
+    ActiveModel::Type::Boolean.new.cast(raw_flag) || false
+  end
+
+  def last_question_at(events)
+    times = events.select { |event| event["type"].to_s == "needs_reply" }.filter_map { |event| message_for(event)&.sent_at }
+    messages.each do |message|
+      next unless message.direction == "client_to_user"
+      next unless question?(message.clean_body)
+
+      times << message.sent_at
+    end
+    times.compact.max
+  end
+
+  def user_replied_after?(asked_at)
+    messages.any? { |message| message.direction == "user_to_client" && message.sent_at > asked_at }
+  end
+
+  def last_message
+    messages.last
+  end
+
+  def question?(text)
+    value = text.to_s
+    return false if value.blank?
+
+    value.include?("?") || value.match?(/\b(can you|could you|please confirm|which |when |did you)\b/i)
+  end
+
   def persist_events!(events)
     events.each do |event|
       type = event["type"].to_s
@@ -132,7 +188,7 @@ class Email::EvaluateInvoiceState
     status
   end
 
-  def resolved_promise_date(status, events, header_date)
+  def resolved_promise_date(events, header_date)
     standing = invoice.active_promise_date
     events.each do |event|
       case event["type"].to_s
@@ -143,7 +199,57 @@ class Email::EvaluateInvoiceState
       end
     end
     standing = parse_date(header_date) if standing.blank?
+    standing = standing_promise_from_thread if standing.blank? && events.none? { |event| %w[promise_retract paid_claim].include?(event["type"].to_s) }
     standing
+  end
+
+  def apply_live_promise(status, promise_date)
+    return [ status, nil ] if status == "paid_unconfirmed"
+    return [ status, promise_date ] if %w[disputed partially_paid].include?(status)
+
+    if promise_date.present?
+      live = promise_date >= Date.current
+      return [ live ? "promised" : "broken_promise", promise_date ]
+    end
+
+    status = books_status if status == "promised"
+    [ status, nil ]
+  end
+
+  def dispute_settled?(events)
+    last_dispute = events.rindex { |event| event["type"].to_s == "dispute" }
+    last_correction = events.rindex { |event| event["type"].to_s == "amount_correction" }
+    last_correction.present? && (last_dispute.nil? || last_correction > last_dispute)
+  end
+
+  def standing_promise_from_thread
+    standing = nil
+    messages.each do |message|
+      text = message.clean_body.to_s
+      if message.direction == "user_to_client"
+        standing = nil if retract_text?(text)
+      else
+        standing = nil if paid_claim_text?(text)
+        next unless promise_text?(text)
+        next if question?(text) && !text.match?(/\bwill pay|we'll pay|we will pay|will remit|remit payment\b/i)
+
+        date = resolve_relative(text, message.sent_at.to_date)
+        standing = date if date
+      end
+    end
+    standing
+  end
+
+  def promise_text?(text)
+    text.to_s.match?(/\b(will pay|we'll pay|we will pay|will remit|remit payment|paying (this|next|on)|scheduled .{0,80}pay)\b/i)
+  end
+
+  def retract_text?(text)
+    text.to_s.match?(/\bforget (that date|friday|monday|tuesday|wednesday|thursday|saturday|sunday)|date does not work|that date is off\b/i)
+  end
+
+  def paid_claim_text?(text)
+    text.to_s.match?(/\b(wire sent|have (already )?paid|processed (combined )?payment|sent it already|paid via|paid on)\b/i)
   end
 
   def calendar_date_for(event)
@@ -187,7 +293,7 @@ class Email::EvaluateInvoiceState
     @messages ||= Message.joins(conversation: :invoice_conversations)
       .where(invoice_conversations: { invoice_id: invoice.id })
       .includes(conversation: :integration)
-      .order(:sent_at)
+      .order(:sent_at, :id)
       .to_a
   end
 

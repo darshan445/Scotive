@@ -3,7 +3,7 @@
 require "set"
 
 # Email::MatchOpenInvoices Interactor
-# Purpose: AR Steps 2–3 — batch mailbox search, in-memory A/B/C match, persist threads.
+# Purpose: Onboarding — one client mailbox window, Pass 1 numbers/amounts, Pass 2 AI joint link.
 # Methods:
 # - execute
 
@@ -15,14 +15,16 @@ class Email::MatchOpenInvoices
   BATCH_SIZE = 10
   PAGE_SIZE = 100
   MAX_PAGES_PER_BATCH = 20
+  HISTORY_DAYS = 365
 
-  def self.execute(organization:, client: Email::EmailClient.new)
-    new(organization: organization, client: client).execute
+  def self.execute(organization:, client: Email::EmailClient.new, llm: Email::LlmClient.new)
+    new(organization: organization, client: client, llm: llm).execute
   end
 
-  def initialize(organization:, client:)
+  def initialize(organization:, client:, llm:)
     @organization = organization
     @client = client
+    @llm = llm
   end
 
   def execute
@@ -48,7 +50,7 @@ class Email::MatchOpenInvoices
 
   private
 
-  attr_reader :organization, :client
+  attr_reader :organization, :client, :llm
 
   def matchable_clients
     organization.clients.includes(invoices: :invoice_conversations).select { |row| open_invoices_for(row).any? }
@@ -75,7 +77,7 @@ class Email::MatchOpenInvoices
   end
 
   def fetch_batch_messages(mailbox, batch)
-    earliest = earliest_issue_date(batch)
+    earliest = search_after_date(batch)
     return [] if earliest.blank?
 
     after = earliest.beginning_of_day.utc.iso8601(3)
@@ -108,42 +110,17 @@ class Email::MatchOpenInvoices
   end
 
   def persist_matches!(mailbox, batch, messages, counts)
-    matched_invoice_ids = Set.new
-    matched_thread_ids = Set.new
-
     batch.each do |client_row|
       invoices = open_invoices_for(client_row)
       next if invoices.empty?
 
-      candidates = messages.select { |message| message_for_client?(message, client_row) }
-      invoices.each do |invoice|
-        thread_ids = candidates.filter_map do |message|
-          message[:thread_id] if match_invoice?(invoice, message, invoices)
-        end.uniq
-        next if thread_ids.empty?
-
-        matched_invoice_ids << invoice.id
-        thread_ids.each_with_index do |thread_id, index|
-          matched_thread_ids << thread_id
-          persist_thread!(
-            mailbox,
-            invoice,
-            thread_id,
-            messages,
-            primary: index.zero? && !invoice_has_home_thread?(invoice)
-          )
-        end
-      end
+      clustered = link_clustered_threads!(mailbox, client_row, invoices, messages, counts)
+      recount_persisted!(mailbox, clustered[:thread_ids], counts)
     end
-
-    counts[:matched_invoices] += matched_invoice_ids.size
-    clock_outbound_only!(matched_invoice_ids, counts)
-    enqueue_inbound_eval!(matched_invoice_ids, counts)
-    recount_persisted!(mailbox, matched_thread_ids, counts)
   end
 
   def recount_persisted!(mailbox, thread_ids, counts)
-    return if thread_ids.empty?
+    return if thread_ids.blank?
 
     conversations = organization.conversations.where(integration_id: mailbox.id, external_thread_id: thread_ids.to_a)
     counts[:conversations] += conversations.count
@@ -179,8 +156,12 @@ class Email::MatchOpenInvoices
       .to_a
   end
 
-  def earliest_issue_date(clients)
-    clients.flat_map { |client_row| open_invoices_for(client_row).map(&:issue_date) }.compact.min
+  def search_after_date(clients)
+    earliest = clients.flat_map { |client_row| open_invoices_for(client_row).map(&:issue_date) }.compact.min
+    return if earliest.blank?
+
+    floor = Date.current - HISTORY_DAYS
+    [ earliest, floor ].max
   end
 
   def gmail_query(clients, earliest)

@@ -102,4 +102,50 @@ RSpec.describe Sync::MailboxDelta do
     expect(Email::EvaluateInvoiceStateJob).to have_been_enqueued.with(invoice.id)
     expect(mailbox.reload.last_synced_at).to be_within(5.seconds).of(Time.current)
   end
+
+  it "uses the same as-of Pass 2 rules when send and unlabeled payment arrive in one window" do
+    llm = instance_double(Email::LlmClient)
+    allow(llm).to receive(:complete_json).and_return("intent" => "invoice_payment")
+    allow(Email::LlmClient).to receive(:new).and_return(llm)
+    later = organization.invoices.create!(
+      integration: qbo,
+      client: client_row,
+      external_id: "INV-99",
+      invoice_number: "INV-99",
+      issue_date: Date.new(2026, 9, 22),
+      due_date: 10.days.from_now,
+      total_amount: 99,
+      balance_remaining: 99,
+      current_ar_status: "invoiced"
+    )
+    allow(email_client).to receive(:list_emails).and_return(
+      "items" => [
+        {
+          "id" => "m-pay",
+          "thread_id" => "t-pay",
+          "subject" => "Payment released",
+          "body" => "We will pay the outstanding invoices this week.",
+          "date" => Time.utc(2026, 9, 18, 14).iso8601,
+          "from_attendee" => { "identifier" => "ap@acme.com" },
+          "to_attendees" => [ { "identifier" => "owner@studio.com" } ]
+        },
+        {
+          "id" => "m-send",
+          "thread_id" => "t-send",
+          "subject" => "Invoice INV-12",
+          "body" => "Invoice INV-12 is attached.",
+          "date" => Time.utc(2026, 9, 18, 12).iso8601,
+          "from_attendee" => { "identifier" => "owner@studio.com" },
+          "to_attendees" => [ { "identifier" => "ap@acme.com" } ]
+        }
+      ]
+    )
+
+    result = described_class.execute(organization: organization, client: email_client)
+    expect(result.success?).to eq(true)
+    expect(invoice.conversations.find_by(external_thread_id: "t-pay")).to be_present
+    expect(later.conversations.find_by(external_thread_id: "t-pay")).to be_blank
+    expect(home = invoice.conversations.find_by(external_thread_id: "t-send")).to be_present
+    expect(invoice.invoice_conversations.find_by(conversation: home).is_primary?).to eq(true)
+  end
 end

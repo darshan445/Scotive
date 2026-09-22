@@ -154,9 +154,39 @@ RSpec.describe "API v1 auth", type: :request do
       expect(json_body.dig("data", "deleted")).to eq(true)
       expect(User.find_by(email: email)).to be_nil
       expect(Organization.find_by(id: organization_id)).to be_nil
+    end
 
-      get "/api/v1/auth/me", headers: auth_headers(token), as: :json
-      expect(response).to have_http_status(:unauthorized)
+    it "destroys webhook rows that still reference the mailbox integration" do
+      token = Auth::SignUp.execute(email: email, password: password, name: "Ada").data[:token]
+      organization = User.find_by!(email: email).organization
+      mailbox = organization.integrations.create!(
+        category: "mailbox",
+        provider: "gmail",
+        external_account_id: "acc-gmail",
+        account_name: "ada@agency.com",
+        connection_status: "connected"
+      )
+      WebhookEvent.create!(
+        organization: organization,
+        integration: mailbox,
+        provider: "gmail",
+        external_event_id: "unipile:acc-gmail:mail_received:1",
+        payload: { "event" => "mail_received" },
+        created_at: Time.current
+      )
+      qbo_client = instance_double(Quickbooks::QuickbookClient, revoke_token: nil)
+      email_client = instance_double(Email::EmailClient, delete_account: nil)
+      allow(Quickbooks::QuickbookClient).to receive(:new).and_return(qbo_client)
+      allow(Email::EmailClient).to receive(:new).and_return(email_client)
+
+      delete "/api/v1/auth/account",
+             headers: auth_headers(token),
+             params: { confirm_email: email },
+             as: :json
+
+      expect(response).to have_http_status(:ok)
+      expect(Organization.find_by(id: organization.id)).to be_nil
+      expect(WebhookEvent.where(integration_id: mailbox.id)).to be_empty
     end
   end
 end

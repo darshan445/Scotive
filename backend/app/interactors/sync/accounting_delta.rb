@@ -9,6 +9,7 @@ class Sync::AccountingDelta
   include ExecuteMethodHelper
   include LogHelper
   include Quickbooks::BooksPersistence
+  include Quickbooks::InvoiceLinkFetch
   include Quickbooks::TokenRefresh
 
   LOOKBACK = 2.hours
@@ -45,10 +46,14 @@ class Sync::AccountingDelta
   def sync_updated_invoices!
     access_token = ensure_fresh_token!(integration)
     since = integration.last_synced_at.presence || LOOKBACK.ago
-    invoices = client.query_invoices_updated_since(
-      realm_id: integration.external_account_id,
-      access_token: access_token,
-      since: since
+    invoices = attach_invoice_links!(
+      integration,
+      access_token,
+      client.query_invoices_updated_since(
+        realm_id: integration.external_account_id,
+        access_token: access_token,
+        since: since
+      )
     )
     customers_by_id = fetch_customers(access_token, invoices)
     counts = persist_books!(integration, invoices, customers_by_id, trigger_source: "books_sync")

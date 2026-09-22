@@ -25,11 +25,23 @@ class Ledger::Build
         .includes(:client, :invoice_state_transitions, invoice_conversations: :conversation)
         .order(due_date: :asc, created_at: :asc)
 
-      { invoices: invoices.map { |invoice| Ledger::InvoicePayload.for(invoice) } }
+      {
+        invoices: invoices.map { |invoice| Ledger::InvoicePayload.for(invoice) },
+        client_count: open_client_count
+      }
     end
   end
 
   private
 
   attr_reader :organization
+
+  def open_client_count
+    organization.clients
+      .joins(:invoices)
+      .where(invoices: { organization_id: organization.id })
+      .where("invoices.balance_remaining > 0")
+      .distinct
+      .count
+  end
 end

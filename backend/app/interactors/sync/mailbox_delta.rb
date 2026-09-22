@@ -45,12 +45,11 @@ class Sync::MailboxDelta
   def sync_mailbox!(mailbox)
     since = mailbox.last_synced_at.presence || LOOKBACK.ago
     items = fetch_since(mailbox, since)
+    messages = items.filter_map { |payload| payload.is_a?(Hash) ? normalize_message(payload.stringify_keys) : nil }
+      .sort_by { |message| [ message[:sent_at] || Time.zone.at(0), message[:id].to_s ] }
     counts = { fetched: items.size, persisted: 0, discarded: 0 }
-    items.each do |payload|
-      next unless payload.is_a?(Hash)
-
-      message = normalize_message(payload.stringify_keys)
-      if message.blank? || already_persisted?(mailbox, message[:id])
+    messages.each do |message|
+      if already_persisted?(mailbox, message[:id])
         counts[:discarded] += 1
         next
       end
@@ -58,7 +57,8 @@ class Sync::MailboxDelta
       outcome = validate_result(Email::RouteInboundMessage.execute(
         organization: organization,
         mailbox: mailbox,
-        message: message
+        message: message,
+        context_messages: messages
       )).data
       if outcome[:discarded]
         counts[:discarded] += 1

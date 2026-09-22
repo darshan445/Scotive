@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require "uri"
-
 # Shared QBO client/invoice upsert used by historical import and accounting webhooks.
 module Quickbooks::BooksPersistence
   PUBLIC_EMAIL_DOMAINS = %w[
@@ -75,11 +73,12 @@ module Quickbooks::BooksPersistence
       currency: payload.dig("CurrencyRef", "value").presence || "USD",
       total_amount: total,
       balance_remaining: balance,
-      pay_link_token: pay_link_token(payload),
       cc_emails: cc,
       bcc_emails: bcc,
       current_ar_status: status
     )
+    token = pay_link_token(payload)
+    invoice.pay_link_token = token if token.present? || !existed
     invoice.active_promise_date = nil if status == "paid"
     invoice.needs_reply = false if status == "paid"
     raise_string_error(invoice.errors.full_messages.to_sentence) unless invoice.save
@@ -108,14 +107,7 @@ module Quickbooks::BooksPersistence
   end
 
   def pay_link_token(payload)
-    url = payload["InvoiceLink"].presence
-    return nil if url.blank?
-
-    uri = URI.parse(url)
-    token = uri.path.to_s.split("/").reject(&:blank?).last
-    token.presence || uri.query
-  rescue URI::InvalidURIError
-    nil
+    Invoices::PayLink.stored_token(payload["InvoiceLink"])
   end
 
   def parse_date(value)

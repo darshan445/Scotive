@@ -11,6 +11,7 @@ class Integration < ApplicationRecord
   has_many :clients, dependent: :destroy
   has_many :invoices, dependent: :destroy
   has_many :conversations, dependent: :destroy
+  has_many :webhook_events, dependent: :destroy
 
   encrypts :access_token, :refresh_token
 

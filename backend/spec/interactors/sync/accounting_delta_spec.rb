@@ -39,12 +39,17 @@ RSpec.describe Sync::AccountingDelta do
     allow(qbo_client).to receive(:query_customers).and_return([
       { "Id" => "C9", "DisplayName" => "Beta", "PrimaryEmailAddr" => { "Address" => "ap@beta.com" } }
     ])
+    allow(qbo_client).to receive(:get_invoice).and_return(
+      "Id" => "201",
+      "InvoiceLink" => "https://pay.example.com/inv/INV-201"
+    )
 
     result = described_class.execute(organization: organization, client: qbo_client)
     expect(result.success?).to eq(true)
     expect(result.data[:created]).to eq(1)
     invoice = organization.invoices.find_by(external_id: "201")
     expect(invoice.invoice_number).to eq("INV-201")
+    expect(invoice.pay_link_token).to eq("https://pay.example.com/inv/INV-201")
     expect(invoice.client.primary_email).to eq("ap@beta.com")
     expect(integration.reload.last_synced_at).to be_within(5.seconds).of(Time.current)
     expect(Email::FindInvoiceThreadJob).to have_been_enqueued.with(invoice.id)
