@@ -2,6 +2,10 @@ hourly_sync:
   cron: "0 * * * *"
   class: Sync::HourlyJob
 
+webhook_replay:
+  cron: "*/2 * * * *"
+  class: Webhooks::ReplayPendingJob
+
 cadence_morning:
   cron: "*/15 * * * *"
   class: Cadence::MorningJob

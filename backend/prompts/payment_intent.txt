@@ -1,8 +1,8 @@
 You classify one email thread from a client to a vendor. Decide whether the client is talking about paying or chasing an existing invoice (accounts receivable), some other kind of money (budget, project cost, salary, a new quote), or nothing financial.
 
-invoice_payment examples: they will pay, they paid, combined remittance, wire sent, remaining balance, stop payment, dispute a billed amount, resend the invoice, W-9 so they can pay, “both outstanding invoices”.
+invoice_payment examples: they will pay, they paid, combined remittance, wire sent, remaining balance, an initial deposit or partial they sent YOU, stop payment, dispute a billed amount, resend the invoice, W-9 so they can pay, “both outstanding invoices”. A wire or deposit to this vendor is invoice_payment even if they mention project completion or a milestone.
 
-other_payment examples: project budget, change-order pricing, a new estimate, payroll for their staff, software subscription cost unrelated to this vendor’s invoice.
+other_payment examples: a new estimate they want before any invoice exists, change-order pricing for work not yet billed, payroll for THEIR staff, software subscription cost unrelated to this vendor’s invoice. “Running payroll Thursday” about their employees is other_payment. “We initiated a deposit / wire to you” is not.
 
 unrelated examples: scheduling, thanks, out of office, hiring, “got it”, project status with no money.
 

@@ -11,7 +11,7 @@ class Email::EnsureMailboxWebhook
   include ExecuteMethodHelper
   include LogHelper
 
-  WEBHOOK_NAME = "costmydish-email"
+  WEBHOOK_NAME = "wherewasthis-email"
 
   def self.execute(organization:, client: Email::EmailClient.new)
     new(organization: organization, client: client).execute
@@ -49,7 +49,16 @@ class Email::EnsureMailboxWebhook
   end
 
   def existing_webhook_id
-    items.find { |row| matching_webhook?(row) }&.dig("id")
+    ours = items.select { |row| matching_webhook?(row) }
+    keeper = ours.find { |row| row["name"].to_s == WEBHOOK_NAME }
+    ours.each do |row|
+      next if keeper.present? && row["id"] == keeper["id"]
+
+      client.delete_webhook(row["id"])
+    rescue Faraday::Error
+      next
+    end
+    keeper&.dig("id")
   end
 
   def items
@@ -62,8 +71,7 @@ class Email::EnsureMailboxWebhook
 
   def matching_webhook?(row)
     row["request_url"].to_s.chomp("/") == request_url.chomp("/") &&
-      row["source"].to_s == "email" &&
-      row["name"].to_s == WEBHOOK_NAME
+      row["source"].to_s == "email"
   end
 
   def create_webhook_id!

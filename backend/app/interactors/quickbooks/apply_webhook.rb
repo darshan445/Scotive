@@ -65,7 +65,7 @@ class Quickbooks::ApplyWebhook
     if name == "Payment"
       apply_payment!(access_token, remote_id)
     else
-      apply_invoice!(access_token, remote_id, operation)
+      apply_invoice!(access_token, remote_id)
     end
   end
 
@@ -74,22 +74,22 @@ class Quickbooks::ApplyWebhook
     ids = linked_invoice_ids(payment)
     raise_string_error("QuickBooks payment has no linked invoices") if ids.empty?
 
-    results = ids.map { |invoice_id| apply_invoice!(access_token, invoice_id, "Update") }
+    results = ids.map { |invoice_id| apply_invoice!(access_token, invoice_id) }
     { applied: "payment", invoices: results }
   rescue Faraday::Error => e
     handle_qbo_error!(e)
   end
 
-  def apply_invoice!(access_token, remote_id, operation)
+  def apply_invoice!(access_token, remote_id)
     payload = client.get_invoice(realm_id: realm_id, access_token: access_token, id: remote_id)
-    persist_one_invoice!(payload, enqueue_match: operation.casecmp("create").zero?)
+    persist_one_invoice!(payload)
   rescue Faraday::Error => e
     return void_remote_invoice!(remote_id) if e.message.match?(/404/)
 
     handle_qbo_error!(e)
   end
 
-  def persist_one_invoice!(payload, enqueue_match:)
+  def persist_one_invoice!(payload)
     customer_id = payload.dig("CustomerRef", "value").to_s
     raise_string_error("QuickBooks invoice is missing a customer") if customer_id.blank?
 
@@ -101,12 +101,16 @@ class Quickbooks::ApplyWebhook
       upsert_invoice!(integration, client_record, payload, trigger_source: "books_webhook")
       invoice = organization.invoices.find_by!(integration_id: integration.id, external_id: payload["Id"].to_s)
     end
-
-    if enqueue_match || (created && invoice.invoice_conversations.empty? && %w[paid voided].exclude?(invoice.current_ar_status))
-      Email::FindInvoiceThreadJob.perform_later(invoice.id) if invoice.invoice_conversations.empty?
-    end
+    enqueue_unmatched_thread!(invoice)
 
     { applied: "invoice", invoice_id: invoice.id, status: invoice.current_ar_status, created: created }
+  end
+
+  def enqueue_unmatched_thread!(invoice)
+    return if invoice.invoice_conversations.exists?
+    return if %w[paid voided].include?(invoice.current_ar_status)
+
+    Email::FindInvoiceThreadJob.perform_later(invoice.id)
   end
 
   def void_remote_invoice!(remote_id)

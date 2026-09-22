@@ -120,6 +120,36 @@ RSpec.describe Invoices::BuildConversation do
     expect(result.data[:threads].last[:messages].first[:body]).to include("confirm whether the wire")
   end
 
+  it "hides a Unipile/Gmail twin of the same send" do
+    sent_at = Time.utc(2026, 9, 22, 6, 57, 43)
+    add_thread!(
+      "t-home",
+      "Invoice 1064",
+      primary: true,
+      messages: [
+        {
+          id: "GdrFaK8zU_yokzYExXyqLA",
+          direction: "user_to_client",
+          from: "owner@studio.com",
+          sent_at: sent_at,
+          body: "Your invoice is attached."
+        },
+        {
+          id: "1a0c7e7f9b9a7a1c",
+          direction: "user_to_client",
+          from: "owner@studio.com",
+          sent_at: sent_at,
+          body: "Your invoice is attached."
+        }
+      ]
+    )
+
+    result = described_class.execute(organization: organization, invoice_id: invoice.id)
+
+    expect(result).to be_success
+    expect(result.data[:messages].map { |row| row[:body] }).to eq([ "Your invoice is attached." ])
+  end
+
   it "returns empty threads when nothing is linked" do
     result = described_class.execute(organization: organization, invoice_id: invoice.id)
 

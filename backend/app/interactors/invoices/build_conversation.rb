@@ -30,7 +30,7 @@ class Invoices::BuildConversation
       raise_string_error("Invoice not found") if invoice.blank?
 
       threads = serialize_threads(invoice)
-      messages = threads.flat_map { |thread| thread[:messages] }
+      messages = uniqued_messages(threads.flat_map { |thread| thread[:messages] })
         .sort_by { |message| message[:date].to_s }
         .reverse
       home = threads.find { |thread| thread[:is_primary] } || threads.first
@@ -59,9 +59,13 @@ class Invoices::BuildConversation
         subject: conversation.subject,
         is_primary: link.is_primary?,
         client_ever_replied: thread_messages.any? { |message| message.direction == "client_to_user" },
-        messages: thread_messages.map { |message| serialize_message(message, conversation) }
+        messages: uniqued_messages(thread_messages.map { |message| serialize_message(message, conversation) })
       }
     end
+  end
+
+  def uniqued_messages(messages)
+    messages.uniq { |message| [ message[:direction], message[:date].to_s, message[:body].to_s[0, 240] ] }
   end
 
   def thread_sort_key(link)

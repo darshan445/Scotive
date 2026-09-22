@@ -2,6 +2,10 @@ Rails.application.routes.draw do
   get "up" => "rails/health#show", as: :rails_health_check
   get "/api/health", to: "api/health#show"
 
+  if Rails.env.local? || (ENV["SIDEKIQ_WEB_USERNAME"].present? && ENV["SIDEKIQ_WEB_PASSWORD"].present?)
+    mount Sidekiq::Web => "/sidekiq"
+  end
+
   devise_for :users, skip: :all
 
   # Intuit app redirect URI is registered at /api/qbo/oauth/callback (see QBO_REDIRECT_URI).

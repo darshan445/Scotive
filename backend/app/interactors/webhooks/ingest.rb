@@ -86,8 +86,7 @@ class Webhooks::Ingest
   end
 
   def persist_events!(payload)
-    rows = expanded_rows(payload)
-    rows.map { |row| find_or_insert!(row) }
+    expanded_rows(payload).compact.map { |row| find_or_insert!(row) }
   end
 
   def expanded_rows(payload)
@@ -127,12 +126,14 @@ class Webhooks::Ingest
   def unipile_row(payload)
     account_id = payload["account_id"].to_s
     integration = Integration.mailbox.connected.find_by(external_account_id: account_id)
+    return if integration.blank?
+
     event = payload["event"].presence || "mail_received"
     email_id = payload["email_id"].presence || Digest::SHA256.hexdigest(raw_body)[0, 32]
     {
-      provider: integration&.provider.presence || "gmail",
+      provider: integration.provider,
       external_event_id: [ "unipile", account_id, event, email_id ].join(":"),
-      organization: integration&.organization,
+      organization: integration.organization,
       integration: integration,
       payload: payload
     }
@@ -142,18 +143,22 @@ class Webhooks::Ingest
     existing = WebhookEvent.find_by(provider: row[:provider], external_event_id: row[:external_event_id])
     return [ existing, false ] if existing.present?
 
-    record = WebhookEvent.create!(
-      organization: row[:organization],
-      integration: row[:integration],
-      provider: row[:provider],
-      external_event_id: row[:external_event_id],
-      payload: row[:payload],
-      status: "pending",
-      created_at: Time.current
+    inserted = WebhookEvent.insert_all(
+      [ {
+        organization_id: row[:organization]&.id,
+        integration_id: row[:integration]&.id,
+        provider: row[:provider],
+        external_event_id: row[:external_event_id],
+        payload: row[:payload],
+        status: "pending",
+        created_at: Time.current
+      } ],
+      unique_by: %i[provider external_event_id],
+      record_timestamps: false,
+      returning: %w[id]
     )
-    [ record, true ]
-  rescue ActiveRecord::RecordNotUnique
-    [ WebhookEvent.find_by!(provider: row[:provider], external_event_id: row[:external_event_id]), false ]
+    record = WebhookEvent.find_by!(provider: row[:provider], external_event_id: row[:external_event_id])
+    [ record, inserted.rows.any? ]
   end
 
   def organization_for_qbo(realm_id)

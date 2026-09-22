@@ -77,6 +77,51 @@ RSpec.describe Webhooks::Ingest do
     expect(WebhookEvent.count).to eq(1)
   end
 
+  it "does not persist Unipile mail from an account that is not connected" do
+    prior = ENV["UNIPILE_WEBHOOK_SECRET"]
+    ENV["UNIPILE_WEBHOOK_SECRET"] = "unipile-secret"
+    body = {
+      "event" => "mail_received",
+      "account_id" => "someone-else",
+      "email_id" => "m-1",
+      "subject" => "Initial deposit initiated"
+    }.to_json
+
+    result = described_class.execute(provider: "gmail", raw_body: body, signature: "unipile-secret")
+    ENV["UNIPILE_WEBHOOK_SECRET"] = prior
+
+    expect(result.success?).to eq(true)
+    expect(result.data[:count]).to eq(0)
+    expect(WebhookEvent.count).to eq(0)
+  end
+
+  it "persists Unipile mail once when two subscriptions deliver the same event" do
+    prior = ENV["UNIPILE_WEBHOOK_SECRET"]
+    ENV["UNIPILE_WEBHOOK_SECRET"] = "unipile-secret"
+    mailbox = organization.integrations.create!(
+      category: "mailbox",
+      provider: "gmail",
+      external_account_id: "acc-gmail",
+      account_name: "owner@studio.com",
+      connection_status: "connected"
+    )
+    body = {
+      "event" => "mail_received",
+      "account_id" => "acc-gmail",
+      "email_id" => "Hpv9CafGVYyMrylLaPPYKA",
+      "subject" => "Initial deposit initiated"
+    }.to_json
+
+    first = described_class.execute(provider: "gmail", raw_body: body, signature: "unipile-secret")
+    second = described_class.execute(provider: "gmail", raw_body: body, signature: "unipile-secret")
+    ENV["UNIPILE_WEBHOOK_SECRET"] = prior
+
+    expect(first.success?).to eq(true)
+    expect(first.data[:count]).to eq(1)
+    expect(second.data[:count]).to eq(0)
+    expect(WebhookEvent.where(integration: mailbox).count).to eq(1)
+  end
+
   it "rejects a bad HMAC" do
     result = described_class.execute(provider: "qbo", raw_body: qbo_body, signature: "nope")
     expect(result.success?).to eq(false)

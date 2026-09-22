@@ -35,8 +35,16 @@ module Email::MailboxThreadPersistence
   end
 
   def persist_message!(conversation, message, owner_email, anchor:)
-    record = conversation.messages.find_or_initialize_by(external_message_id: message[:id])
-    record.direction = direction_for(message, owner_email)
+    direction = direction_for(message, owner_email)
+    record = conversation.messages.find_by(external_message_id: message[:id])
+    record ||= conversation.messages.find_by(
+      sent_at: message[:sent_at],
+      from_address: message[:from],
+      direction: direction
+    )
+    record ||= conversation.messages.new(external_message_id: message[:id])
+    record.external_message_id = message[:id] if record.external_message_id.blank?
+    record.direction = direction
     record.from_address = message[:from]
     record.to_addresses = message[:to]
     record.cc_addresses = message[:cc]
@@ -45,6 +53,15 @@ module Email::MailboxThreadPersistence
     record.is_anchor = true if anchor || record.is_anchor?
     record.created_at ||= Time.current
     raise_string_error(record.errors.full_messages.to_sentence) unless record.save
+    collapse_duplicate_messages!(conversation, record)
+  end
+
+  def collapse_duplicate_messages!(conversation, kept)
+    conversation.messages.where(
+      sent_at: kept.sent_at,
+      from_address: kept.from_address,
+      direction: kept.direction
+    ).where.not(id: kept.id).find_each(&:destroy!)
   end
 
   def invoice_has_home_thread?(invoice)
@@ -375,8 +392,8 @@ module Email::MailboxThreadPersistence
     cc = attendee_emails(payload["cc_attendees"] || payload["cc"])
     sent_at = parse_time(payload["date"] || payload["sent_at"])
     raw = payload["body_plain"].presence || payload["body"].to_s
-    thread_id = payload["thread_id"].presence || payload["id"].to_s
-    id = payload["id"].presence || payload["provider_id"].presence || payload["email_id"].presence
+    thread_id = payload["thread_id"].presence || payload["provider_id"].presence || payload["id"].to_s
+    id = stable_message_id(payload)
     return if id.blank? || from.blank? || sent_at.blank?
 
     {
@@ -391,6 +408,11 @@ module Email::MailboxThreadPersistence
       clean_body: sanitize_body(raw),
       attachment_names: attachment_names(payload)
     }
+  end
+
+  def stable_message_id(payload)
+    rfc = payload["message_id"].to_s.gsub(/[<>]/, "").presence
+    payload["provider_id"].presence || rfc || payload["id"].presence || payload["email_id"].presence
   end
 
   def attendee_emails(value)

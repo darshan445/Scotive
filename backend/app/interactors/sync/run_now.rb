@@ -25,6 +25,7 @@ class Sync::RunNow
 
       counts = empty_counts
       begin
+        Webhooks::ReplayPending.execute(organization: organization)
         outcomes = run_workers
         counts = assemble(outcomes)
         Sync::State.store_counts!(organization.id, counts)

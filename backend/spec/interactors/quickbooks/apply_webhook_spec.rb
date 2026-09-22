@@ -94,6 +94,39 @@ RSpec.describe Quickbooks::ApplyWebhook do
     expect(OutboxMessage.last.cancellation_reason).to eq("paid_in_books")
   end
 
+  it "upserts a new invoice from an Emailed webhook and searches for its thread" do
+    allow(qbo_client).to receive(:get_invoice).and_return(
+      "Id" => "581",
+      "DocNumber" => "1062",
+      "TxnDate" => "2026-09-12",
+      "DueDate" => "2026-09-25",
+      "TotalAmt" => 3240,
+      "Balance" => 3240,
+      "CustomerRef" => { "value" => "C1", "name" => "Acme" },
+      "BillEmail" => { "Address" => "ap@acme.com" },
+      "InvoiceLink" => "https://developer.intuit.com/comingSoon/scs-v1-abc"
+    )
+    allow(qbo_client).to receive(:get_customer).and_return(
+      "Id" => "C1",
+      "DisplayName" => "Acme",
+      "PrimaryEmailAddr" => { "Address" => "ap@acme.com" }
+    )
+
+    result = nil
+    expect {
+      result = described_class.execute(
+        webhook_event: event_for(name: "Invoice", id: "581", operation: "Emailed"),
+        client: qbo_client
+      )
+    }.to have_enqueued_job(Email::FindInvoiceThreadJob)
+
+    expect(result.success?).to eq(true)
+    created = organization.invoices.find_by!(external_id: "581")
+    expect(created.invoice_number).to eq("1062")
+    expect(created.pay_link_token).to include("scs-v1-abc")
+    expect(result.data[:created]).to eq(true)
+  end
+
   it "persists InvoiceLink from the invoice GET" do
     url = "https://developer.intuit.com/comingSoon/scs-v1-abc"
     allow(qbo_client).to receive(:get_invoice).and_return(
