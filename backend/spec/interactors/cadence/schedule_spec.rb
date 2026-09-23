@@ -45,8 +45,8 @@ RSpec.describe Cadence::Schedule do
       due_date: due_date,
       total_amount: 100,
       balance_remaining: 100,
-      current_ar_status: status,
-      active_promise_date: promise_date
+      books_status: (status == "partial" ? "partial" : %w[paid voided].include?(status) ? status : "open"), chase_status: (%w[needs_you stopped].include?(status) ? status : "watching"),
+      expected_pay_date: promise_date
     )
     conversation = organization.conversations.create!(
       integration: mailbox,
@@ -74,19 +74,17 @@ RSpec.describe Cadence::Schedule do
       nudge = create_invoice!(status: "overdue", due_date: Date.new(2026, 9, 11), number: "INV-N7")
       firm = create_invoice!(status: "overdue", due_date: Date.new(2026, 9, 9), number: "INV-F9")
       spec_plus_3 = create_invoice!(status: "overdue", due_date: Date.new(2026, 9, 15), number: "INV-SPEC3")
-      broken = create_invoice!(status: "broken_promise", due_date: Date.new(2026, 9, 1), number: "INV-BP", promise_date: Date.new(2026, 9, 10))
       other = create_invoice!(status: "invoiced", due_date: Date.new(2026, 9, 30), number: "INV-SKIP")
 
       result = described_class.execute(organization: organization)
       expect(result.success?).to eq(true)
-      expect(result.data[:created]).to eq(5)
+      expect(result.data[:created]).to eq(4)
 
       expect(notice.outbox_messages.sole.status).to eq("scheduled")
       expect(notice.outbox_messages.sole.cadence_step).to eq("notice_minus_3")
       expect(due.outbox_messages.sole.cadence_step).to eq("due_today")
       expect(nudge.outbox_messages.sole.cadence_step).to eq("nudge_plus_3")
       expect(firm.outbox_messages.sole).to have_attributes(status: "draft", cadence_step: "firm_plus_7")
-      expect(broken.outbox_messages.sole).to have_attributes(status: "draft", cadence_step: "broken_promise")
       expect(spec_plus_3.outbox_messages).to be_empty
       expect(other.outbox_messages).to be_empty
     end

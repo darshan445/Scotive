@@ -9,7 +9,7 @@ class Clients::Show
   include ExecuteMethodHelper
   include LogHelper
 
-  OPEN_STATUSES = Clients::Index::OPEN_STATUSES
+  OPEN_BOOKS = Clients::Index::OPEN_BOOKS
 
   def self.execute(organization:, email:)
     new(organization: organization, email: email).execute
@@ -29,7 +29,7 @@ class Clients::Show
       raise_string_error("Client not found") if records.empty?
 
       invoices = organization.invoices.where(client_id: records.map(&:id))
-        .includes(:client, :invoice_state_transitions, invoice_conversations: { conversation: :messages })
+        .includes(:organization, :client, :last_human_inbound_message, :invoice_chase_events, :outbox_messages, invoice_conversations: { conversation: :messages })
         .order(due_date: :desc)
 
       {
@@ -56,7 +56,7 @@ class Clients::Show
   end
 
   def open_invoices(invoices)
-    invoices.select { |invoice| OPEN_STATUSES.include?(invoice.current_ar_status) }
+    invoices.select(&:books_open?)
   end
 
   def open_total(invoices)
@@ -93,15 +93,15 @@ class Clients::Show
   end
 
   def stats_for(invoices)
-    paid = invoices.select { |invoice| invoice.current_ar_status == "paid" }
+    paid = invoices.select { |invoice| invoice.books_status == "paid" }
     lateness = paid.filter_map do |invoice|
       paid_on = paid_on_date(invoice)
       next unless paid_on && invoice.due_date
 
       (paid_on - invoice.due_date).to_i
     end
-    promised = invoices.select { |invoice| invoice.invoice_state_transitions.any? { |row| row.to_status == "promised" } }
-    kept = promised.count { |invoice| invoice.current_ar_status == "paid" }
+    promised = invoices.select { |invoice| invoice.invoice_chase_events.any? { |row| row.event_type == "wait_set" } }
+    kept = promised.count { |invoice| invoice.books_status == "paid" }
     avg = lateness.any? ? (lateness.sum.to_f / lateness.size).round : nil
     {
       payment_cycles: paid.size,
@@ -114,7 +114,7 @@ class Clients::Show
   end
 
   def paid_on_date(invoice)
-    invoice.invoice_state_transitions.select { |row| row.to_status == "paid" }
+    invoice.invoice_chase_events.select { |row| row.event_type == "books_paid" }
       .max_by(&:created_at)&.created_at&.to_date || invoice.updated_at&.to_date
   end
 

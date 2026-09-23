@@ -48,7 +48,7 @@ RSpec.describe Email::RouteInboundMessage do
       due_date: 5.days.from_now,
       total_amount: 230,
       balance_remaining: 230,
-      current_ar_status: "invoiced"
+      books_status: "open"
     )
   end
 

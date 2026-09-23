@@ -23,22 +23,26 @@ class Invoices::BuildConversation
       raise_string_error("Organization is required") if organization.blank?
 
       invoice = organization.invoices.includes(
+        :organization,
         :client,
-        :invoice_state_transitions,
+        :last_human_inbound_message,
+        :invoice_chase_events,
+        :outbox_messages,
         invoice_conversations: { conversation: :messages }
       ).find_by(id: invoice_id)
       raise_string_error("Invoice not found") if invoice.blank?
 
       threads = serialize_threads(invoice)
-      messages = uniqued_messages(threads.flat_map { |thread| thread[:messages] })
+      home = threads.find { |thread| thread[:is_primary] } || threads.first
+      messages = uniqued_messages(Array(home&.dig(:messages)))
         .sort_by { |message| message[:date].to_s }
         .reverse
-      home = threads.find { |thread| thread[:is_primary] } || threads.first
       {
         invoice: Ledger::InvoicePayload.for(invoice),
         thread_id: home&.dig(:thread_id),
         client_ever_replied: messages.any? { |message| message[:direction] == "them" },
         messages: messages,
+        split_quote: split_quote_for(threads, home),
         threads: threads
       }
     end
@@ -62,6 +66,21 @@ class Invoices::BuildConversation
         messages: uniqued_messages(thread_messages.map { |message| serialize_message(message, conversation) })
       }
     end
+  end
+
+  def split_quote_for(threads, home)
+    extras = threads.reject { |thread| thread[:thread_id] == home&.dig(:thread_id) }
+    inbound = extras.flat_map { |thread| Array(thread[:messages]) }
+      .select { |message| message[:direction] == "them" }
+      .max_by { |message| message[:date].to_s }
+    return if inbound.blank?
+
+    {
+      quote: inbound[:body].to_s.strip.truncate(220),
+      date: inbound[:date],
+      subject: inbound[:subject],
+      thread_id: inbound[:thread_id]
+    }
   end
 
   def uniqued_messages(messages)

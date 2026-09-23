@@ -37,7 +37,7 @@ class Invoices::DraftChase
 
       invoice = organization.invoices.find_by(id: invoice_id)
       raise_string_error("Invoice not found") if invoice.blank?
-      raise_string_error("Invoice is paid") if %w[paid voided].include?(invoice.current_ar_status)
+      raise_string_error("Invoice is paid") if invoice.books_closed?
 
       conversation = Ledger::InvoicePayload.primary_conversation(invoice)
       pending = pending_draft(invoice)
@@ -66,7 +66,7 @@ class Invoices::DraftChase
 
   def step_for(invoice, pending)
     return pending.cadence_step if pending&.cadence_step.present?
-    return "broken_promise" if invoice.current_ar_status == "broken_promise"
+    return "broken_promise" if invoice.wait_expired?
     return intent_step if intent_step.present?
 
     Cadence::Steps.current_key(organization, invoice)
@@ -82,7 +82,7 @@ class Invoices::DraftChase
   end
 
   def reply?(invoice)
-    invoice.needs_reply || invoice.current_ar_status == "disputed"
+    invoice.list_bucket == "needs_you"
   end
 
   def llm_copy(invoice, conversation, step)
@@ -105,9 +105,11 @@ class Invoices::DraftChase
       remaining: invoice.balance_remaining.to_s,
       currency: invoice.currency,
       due_date: invoice.due_date&.iso8601,
-      promise_date: invoice.active_promise_date&.iso8601,
-      status: invoice.current_ar_status,
-      needs_reply: invoice.needs_reply,
+      expected_pay_date: invoice.expected_pay_date&.iso8601,
+      status: invoice.list_bucket,
+      chase_status: invoice.chase_status,
+      books_status: invoice.books_status,
+      needs_you: invoice.list_bucket == "needs_you",
       pay_link: invoice.pay_link_token,
       client_name: invoice.client&.name,
       client_email: invoice.client&.primary_email,

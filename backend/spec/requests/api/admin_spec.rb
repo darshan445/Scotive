@@ -65,7 +65,7 @@ RSpec.describe "API admin", type: :request do
       due_date: Date.new(2026, 9, 15),
       total_amount: 250,
       balance_remaining: 250,
-      current_ar_status: "overdue"
+      books_status: "open"
     )
     conversation = organization.conversations.create!(
       integration: mailbox,

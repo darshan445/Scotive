@@ -37,7 +37,7 @@ RSpec.describe "API v1 invoice actions", type: :request do
       due_date: Date.new(2026, 9, 1),
       total_amount: 100,
       balance_remaining: 100,
-      current_ar_status: "overdue"
+      books_status: "open"
     )
 
     post "/api/v1/invoices/#{invoice.id}/action",
@@ -47,7 +47,7 @@ RSpec.describe "API v1 invoice actions", type: :request do
 
     expect(response).to have_http_status(:ok)
     expect(json_body.dig("data", "action")).to eq("mark_paid")
-    expect(invoice.reload.current_ar_status).to eq("paid")
+    expect(invoice.reload.books_status).to eq("paid")
   end
 
   it "requires a token" do

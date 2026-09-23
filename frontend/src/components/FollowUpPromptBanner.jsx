@@ -37,8 +37,8 @@ export function FollowUpPromptBanner({ prompt, onDismiss, onChanged, onReview })
     async function stopChasing() {
         setBusy(true);
         try {
-            await api.post(`/v1/invoices/${prompt.invoice_id}/action`, { action: "pause" });
-            toast.success("Chasing paused for this invoice");
+            await api.post(`/v1/invoices/${prompt.invoice_id}/action`, { action: "stop_chasing" });
+            toast.success("Stopped chasing this invoice");
             onDismiss?.();
             await onChanged?.();
         } catch (e) {

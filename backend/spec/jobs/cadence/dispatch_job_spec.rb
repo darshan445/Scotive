@@ -30,7 +30,7 @@ RSpec.describe Cadence::DispatchJob, type: :job do
         due_date: Date.new(2026, 9, 15),
         total_amount: 100,
         balance_remaining: 100,
-        current_ar_status: "overdue"
+        books_status: "open"
       )
       due = invoice.outbox_messages.create!(
         organization: organization,

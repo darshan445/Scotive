@@ -203,6 +203,19 @@ RSpec.describe "API v1 integrations OAuth", type: :request do
       expect(json_body.dig("data", "phase")).to eq("connections")
       expect(json_body.dig("data", "gmail_connected")).to eq(true)
       expect(json_body.dig("data", "qbo_pipeline")).to be_nil
+      expect(json_body.dig("data", "onboarding_modal_dismissed")).to eq(false)
+    end
+  end
+
+  describe "POST /api/v1/onboarding/dismiss-modal" do
+    it "persists the cadence explainer as dismissed" do
+      expect(organization.onboarding_modal_dismissed).to eq(false)
+
+      post "/api/v1/onboarding/dismiss-modal", headers: auth_headers, as: :json
+
+      expect(response).to have_http_status(:ok)
+      expect(json_body.dig("data", "onboarding_modal_dismissed")).to eq(true)
+      expect(organization.reload.onboarding_modal_dismissed).to eq(true)
     end
   end
 

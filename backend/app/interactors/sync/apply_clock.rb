@@ -1,104 +1,93 @@
 # frozen_string_literal: true
 
 # Sync::ApplyClock Interactor
-# Purpose: invoiced→overdue and promised→broken_promise. No provider I/O.
+# Purpose: wait-until date passed → ask QuickBooks, then Needs you only if still unpaid.
 # Methods:
 # - execute
 
 class Sync::ApplyClock
   include ExecuteMethodHelper
   include LogHelper
+  include Quickbooks::BooksPersistence
+  include Quickbooks::TokenRefresh
 
-  def self.execute(organization:)
-    new(organization: organization).execute
+  def self.execute(organization:, client: Quickbooks::QuickbookClient.new)
+    new(organization: organization, client: client).execute
   end
 
-  def initialize(organization:)
+  def initialize(organization:, client:)
     @organization = organization
+    @client = client
   end
 
   def execute
     execute_log_and_return_open_struct do
       raise_string_error("Organization is required") if organization.blank?
 
-      {
-        overdue: transition_due!,
-        broken_promise: transition_promises!
-      }
+      { wait_expired: expire_waits! }
     end
   end
 
   private
 
-  attr_reader :organization
+  attr_reader :organization, :client
 
-  def transition_due!
+  def expire_waits!
     count = 0
-    due_scope.find_each do |invoice|
+    wait_scope.find_each do |invoice|
+      next if reconcile_from_quickbooks!(invoice) == :unavailable
+
       Invoice.transaction do
         row = organization.invoices.lock.find(invoice.id)
-        next unless row.current_ar_status == "invoiced"
-        next unless row.balance_remaining.to_d.positive?
-        next unless row.due_date < Date.current
+        next unless row.books_open? && row.chase_status == "watching" && row.wait_expired?
 
-        row.update!(current_ar_status: "overdue")
-        row.invoice_state_transitions.create!(
-          from_status: "invoiced",
-          to_status: "overdue",
-          trigger_source: "clock_cron",
-          created_at: Time.current
-        )
+        apply_wait_expired!(row)
         count += 1
       end
     end
     count
   end
 
-  def transition_promises!
-    count = 0
-    broken_ids = []
-    promise_scope.find_each do |invoice|
+  def wait_scope
+    organization.invoices.books_open
+      .where(chase_status: "watching")
+      .where("expected_pay_date < ?", Date.current)
+  end
+
+  # :ok — books refreshed (or local-only). :unavailable — do not expire on a stale unpaid.
+  def reconcile_from_quickbooks!(invoice)
+    integration = invoice.integration
+    return :ok unless live_qbo?(integration, invoice)
+
+    access_token = ensure_fresh_token!(integration)
+    payload = client.get_invoice(
+      realm_id: integration.external_account_id,
+      access_token: access_token,
+      id: invoice.external_id
+    )
+    Invoice.transaction do
+      upsert_invoice!(integration, invoice.client, payload, trigger_source: "books_sync")
+    end
+    :ok
+  rescue Faraday::Error => e
+    if e.message.to_s.match?(/404/)
       Invoice.transaction do
-        row = organization.invoices.lock.find(invoice.id)
-        next unless row.current_ar_status == "promised"
-        next unless row.balance_remaining.to_d.positive?
-        next if row.active_promise_date.blank? || row.active_promise_date >= Date.current
-
-        row.update!(current_ar_status: "broken_promise")
-        row.invoice_state_transitions.create!(
-          from_status: "promised",
-          to_status: "broken_promise",
-          trigger_source: "clock_cron",
-          promise_date: row.active_promise_date,
-          created_at: Time.current
-        )
-        broken_ids << row.id
-        count += 1
+        void_local_invoice!(organization.invoices.lock.find(invoice.id))
       end
+      return :ok
     end
-    enqueue_broken_promise_drafts!(broken_ids)
-    count
+
+    mark_reauth!(integration) if qbo_grant_error?(e)
+    :unavailable
+  rescue StandardError
+    :unavailable
   end
 
-  def enqueue_broken_promise_drafts!(invoice_ids)
-    return if invoice_ids.empty?
-
-    Invoice.where(id: invoice_ids, organization_id: organization.id).find_each do |invoice|
-      Cadence::Enqueue.execute(invoice: invoice, step: "broken_promise")
-    end
-  end
-
-  def due_scope
-    organization.invoices
-      .where(current_ar_status: "invoiced")
-      .where("due_date < ?", Date.current)
-      .where("balance_remaining > 0")
-  end
-
-  def promise_scope
-    organization.invoices
-      .where(current_ar_status: "promised")
-      .where("active_promise_date < ?", Date.current)
-      .where("balance_remaining > 0")
+  def live_qbo?(integration, invoice)
+    integration&.provider == "qbo" &&
+      integration.connection_status == "connected" &&
+      integration.access_token.present? &&
+      invoice.external_id.present? &&
+      !invoice.external_id.to_s.start_with?("demo-")
   end
 end

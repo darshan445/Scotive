@@ -1,5 +1,6 @@
 import { ChaseComposer, confirmDiscardComposer } from "@/components/ChaseComposer";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { followUpLabel } from "@/lib/chase";
 import { useRef } from "react";
 
 /** Standalone chase modal (e.g. Follow-up prompt on dashboard). */
@@ -39,7 +40,7 @@ export function ChaseDialog({ invoice, open, onOpenChange, onSent }) {
             >
                 <DialogHeader className="sr-only">
                     <DialogTitle>
-                        {invoice?.status === "disputed" ? "Reply" : "Follow up"}
+                        {followUpLabel(invoice)}
                     </DialogTitle>
                 </DialogHeader>
                 {invoice ? (

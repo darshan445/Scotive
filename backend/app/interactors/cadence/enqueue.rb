@@ -42,8 +42,12 @@ class Cadence::Enqueue
   attr_reader :invoice, :step
 
   def skip_reason
-    if %w[paid voided].include?(invoice.current_ar_status) || invoice.balance_remaining.to_d <= 0
+    if invoice.books_closed?
       "terminal"
+    elsif invoice.last_human_inbound_at.present?
+      "human_conversation"
+    elsif !invoice.cadence_allowed? && !Cadence::Steps.draft?(step)
+      "chase_not_running"
     elsif invoice.client&.primary_email.blank?
       "no_email"
     elsif home_thread.blank?

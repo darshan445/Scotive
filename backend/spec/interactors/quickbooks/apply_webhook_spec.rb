@@ -38,7 +38,7 @@ RSpec.describe Quickbooks::ApplyWebhook do
       due_date: Date.new(2026, 9, 1),
       total_amount: 400,
       balance_remaining: 400,
-      current_ar_status: "overdue"
+      books_status: "open"
     )
   end
   let(:qbo_client) { instance_double(Quickbooks::QuickbookClient) }
@@ -87,9 +87,9 @@ RSpec.describe Quickbooks::ApplyWebhook do
 
     expect(result.success?).to eq(true)
     invoice.reload
-    expect(invoice.current_ar_status).to eq("paid")
+    expect(invoice.books_status).to eq("paid")
     expect(invoice.balance_remaining).to eq(0)
-    expect(invoice.invoice_state_transitions.last.trigger_source).to eq("books_webhook")
+    expect(invoice.invoice_chase_events.last.event_type).to eq("books_paid")
     expect(OutboxMessage.last.status).to eq("cancelled")
     expect(OutboxMessage.last.cancellation_reason).to eq("paid_in_books")
   end
@@ -158,7 +158,7 @@ RSpec.describe Quickbooks::ApplyWebhook do
       client: qbo_client
     )
     expect(result.success?).to eq(true)
-    expect(invoice.reload.current_ar_status).to eq("voided")
+    expect(invoice.reload.books_status).to eq("voided")
   end
 
   it "marks the QBO integration for reauth when tokens cannot be decrypted" do

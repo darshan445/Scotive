@@ -24,7 +24,8 @@ module Api
           organization: current_organization,
           invoice_id: params[:id],
           action: body_param("action"),
-          due_date: body_param("due_date")
+          due_date: body_param("due_date"),
+          wait_until: body_param("wait_until") || body_param("expected_pay_date")
         )
         render_result(result, failure_status: missing_invoice?(result) ? :not_found : :unprocessable_content)
       end
@@ -44,7 +45,8 @@ module Api
           organization: current_organization,
           invoice_id: params[:id],
           subject: body_param("subject"),
-          body: body_param("body")
+          body: body_param("body"),
+          wait_until: body_param("wait_until")
         )
         render_result(result, failure_status: missing_invoice?(result) ? :not_found : :unprocessable_content)
       end

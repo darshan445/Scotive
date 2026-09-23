@@ -9,10 +9,6 @@ class Admin::Dashboard
   include ExecuteMethodHelper
   include LogHelper
 
-  OPEN_STATUSES = %w[
-    unmatched invoiced overdue promised broken_promise disputed paid_unconfirmed partially_paid
-  ].freeze
-
   def self.execute
     new.execute
   end
@@ -65,10 +61,6 @@ class Admin::Dashboard
   end
 
   def open_invoice_counts
-    @open_invoice_counts ||= Invoice
-      .where(current_ar_status: OPEN_STATUSES)
-      .where("balance_remaining > 0")
-      .group(:organization_id)
-      .count
+    @open_invoice_counts ||= Invoice.books_open.group(:organization_id).count
   end
 end

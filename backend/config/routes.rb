@@ -63,6 +63,7 @@ Rails.application.routes.draw do
         get "state", to: "states#show"
         post "continue", to: "continues#create"
         post "qbo-step", to: "qbo_steps#create"
+        post "dismiss-modal", to: "modal_dismissals#create"
       end
     end
 

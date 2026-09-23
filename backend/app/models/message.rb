@@ -7,6 +7,9 @@ class Message < ApplicationRecord
 
   belongs_to :conversation
 
+  has_many :invoice_chase_events, dependent: :nullify
+
   validates :external_message_id, :from_address, :sent_at, presence: true
   validates :direction, inclusion: { in: DIRECTIONS }
 end
+

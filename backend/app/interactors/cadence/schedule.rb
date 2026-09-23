@@ -28,9 +28,6 @@ class Cadence::Schedule
         created += counts[:created]
         skipped += counts[:skipped]
       end
-      broken = enqueue_broken_promises!
-      created += broken[:created]
-      skipped += broken[:skipped]
       follow = enqueue_post_firm_follow_ups!
       created += follow[:created]
       skipped += follow[:skipped]
@@ -45,29 +42,13 @@ class Cadence::Schedule
   def enqueue_due!(config)
     created = 0
     skipped = 0
-    due_scope(config[:statuses], config[:due_date]).find_each do |invoice|
+    due_scope(config[:due_date]).find_each do |invoice|
       if record_created?(invoice, config[:key])
         created += 1
       else
         skipped += 1
       end
     end
-    { created: created, skipped: skipped }
-  end
-
-  def enqueue_broken_promises!
-    created = 0
-    skipped = 0
-    organization.invoices
-      .where(current_ar_status: "broken_promise")
-      .where("balance_remaining > 0")
-      .find_each do |invoice|
-        if record_created?(invoice, "broken_promise")
-          created += 1
-        else
-          skipped += 1
-        end
-      end
     { created: created, skipped: skipped }
   end
 
@@ -99,8 +80,8 @@ class Cadence::Schedule
   end
 
   def skip_final?(invoice, sent_at)
-    %w[paid voided].include?(invoice.current_ar_status) ||
-      invoice.balance_remaining.to_d <= 0 ||
+    invoice.books_closed? ||
+      !invoice.cadence_allowed? ||
       invoice.outbox_messages.pending.where(cadence_step: Cadence::Steps::FINAL).exists? ||
       invoice.outbox_messages.where(status: "sent", cadence_step: Cadence::Steps::FINAL).exists? ||
       client_replied_since?(invoice, sent_at)
@@ -116,10 +97,10 @@ class Cadence::Schedule
       .exists?
   end
 
-  def due_scope(statuses, due_date)
-    organization.invoices
-      .where(current_ar_status: statuses, due_date: due_date)
-      .where("balance_remaining > 0")
+  def due_scope(due_date)
+    organization.invoices.books_open
+      .where(chase_status: "watching", due_date: due_date, last_human_inbound_at: nil)
+      .where("expected_pay_date IS NULL OR expected_pay_date >= ?", Date.current)
   end
 
   def record_created?(invoice, step)

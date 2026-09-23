@@ -33,7 +33,6 @@ export function TopNav() {
                     <nav className="hidden md:flex items-center gap-1" aria-label="App">
                         <NavItem href="/dashboard" testId="nav-dashboard">Home</NavItem>
                         <NavItem href="/clients" testId="nav-clients">Clients</NavItem>
-                        <NavItem href="/review" testId="nav-review">Review</NavItem>
                         <NavItem href="/settings" testId="nav-settings">Settings</NavItem>
                     </nav>
                 </div>

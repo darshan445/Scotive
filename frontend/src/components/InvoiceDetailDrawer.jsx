@@ -1,60 +1,36 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ExternalLink, Send, X } from "lucide-react";
-import { toast } from "sonner";
+import { ExternalLink, X } from "lucide-react";
 import * as SheetPrimitive from "@radix-ui/react-dialog";
 import { ChaseComposer, confirmDiscardComposer } from "@/components/ChaseComposer";
+import { CheckBackSelect, SnoozeControl } from "@/components/WaitUntilControl";
+import { stopInvoiceChase } from "@/components/InvoiceOverflowMenu";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, extractError, unwrapData } from "@/lib/api";
-import { formatDate, formatMoney } from "@/components/LedgerCard";
+import { formatMoney } from "@/components/LedgerCard";
+import { invoiceSubject } from "@/lib/invoiceCopy";
 import {
-    invoiceStatusDisplay,
-    invoiceSubject,
-    isJunkInvoiceRef,
-    factualDigestLine,
-    hasPendingPaymentClaim,
-} from "@/lib/invoiceCopy";
+    cadenceLine,
+    dueMeta,
+    invoiceNumber,
+    invoiceWithWaitSuggestion,
+    isApprovalDraft,
+    isNeedsYouInvoice,
+    isPaidInvoice,
+    latestActivity,
+    plusBusinessDays,
+    remainingLabel,
+} from "@/lib/chase";
 import { gmailThreadUrl } from "@/lib/invoiceTimeline";
 import { cn } from "@/lib/utils";
-
-const STATUS_STYLES = {
-    invoiced: "bg-gray-100 text-gray-700 border-gray-200",
-    overdue: "bg-red-50 text-red-700 border-red-200",
-    promised: "bg-yellow-50 text-yellow-800 border-yellow-200",
-    promise_broken: "bg-orange-50 text-orange-700 border-orange-200",
-    disputed: "bg-purple-50 text-purple-700 border-purple-200",
-    partially_paid: "bg-green-50 text-green-700 border-green-200",
-    paid_unconfirmed: "bg-emerald-50 text-emerald-700 border-emerald-200",
-    paid: "bg-green-50 text-green-700 border-green-200",
-    written_off: "bg-gray-100 text-gray-500 border-gray-200",
-    stale: "bg-stone-100 text-stone-600 border-stone-200",
-    unmatched: "bg-amber-50 text-amber-800 border-amber-200",
-};
-
-function StatusChip({ inv }) {
-    const status = inv?.status || "invoiced";
-    const hasClaim = inv?.disputed_claim_amount != null && Number(inv.disputed_claim_amount) > 0;
-    const pendingPay = hasPendingPaymentClaim(inv);
-    let styleKey = status;
-    if (inv?.unmatched && !pendingPay && status !== "disputed" && !hasClaim) styleKey = "unmatched";
-    else if (pendingPay && (status === "disputed" || hasClaim)) styleKey = "paid_unconfirmed";
-    else if (status === "partially_paid" && hasClaim) styleKey = "disputed";
-    const cls = STATUS_STYLES[styleKey] || STATUS_STYLES.invoiced;
-    return (
-        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-medium border ${cls}`} data-testid="invoice-status-pill">
-            {invoiceStatusDisplay(inv)}
-        </span>
-    );
-}
 
 function formatMsgTime(iso) {
     if (!iso) return "";
     try {
-        const d = new Date(iso);
-        return d.toLocaleString(undefined, {
-            month: "short", day: "numeric", year: "numeric",
+        return new Date(iso).toLocaleString(undefined, {
+            month: "short", day: "numeric",
             hour: "numeric", minute: "2-digit",
         });
     } catch {
@@ -62,74 +38,6 @@ function formatMsgTime(iso) {
     }
 }
 
-function calendarDayKey(iso) {
-    if (!iso) return null;
-    try {
-        const d = new Date(iso);
-        if (Number.isNaN(d.getTime())) return null;
-        return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
-    } catch {
-        return null;
-    }
-}
-
-function formatDaySeparator(iso) {
-    if (!iso) return "";
-    try {
-        const d = new Date(iso);
-        const now = new Date();
-        const opts = { weekday: "short", month: "short", day: "numeric" };
-        if (d.getFullYear() !== now.getFullYear()) opts.year = "numeric";
-        return d.toLocaleDateString(undefined, opts);
-    } catch {
-        return iso;
-    }
-}
-
-function initialsFromName(name) {
-    const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
-    if (!parts.length) return "?";
-    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-    return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
-}
-
-/** Client display name — never the raw email address. */
-function clientSenderLabel(m, inv) {
-    const named = (inv?.counterparty_name || "").trim();
-    if (named) return named;
-    const from = (m?.from || "").trim();
-    if (!from) return "Client";
-    const angled = from.match(/^"?([^"<]+)"?\s*<[^>]+>/);
-    if (angled) {
-        const name = angled[1].trim();
-        if (name && !name.includes("@")) return name;
-    }
-    if (from.includes("@")) return "Client";
-    return from;
-}
-
-function MessageAvatar({ isYou, label }) {
-    if (isYou) {
-        return (
-            <span
-                className="inline-flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-primary text-[9px] font-semibold text-primary-foreground"
-                aria-hidden
-            >
-                You
-            </span>
-        );
-    }
-    return (
-        <span
-            className="inline-flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold text-muted-foreground"
-            aria-hidden
-        >
-            {initialsFromName(label)}
-        </span>
-    );
-}
-
-/** Turn residual HTML / quoted-reply chrome into the new message text only. */
 function emailBodyToText(raw) {
     if (!raw) return "";
     let text = String(raw);
@@ -142,8 +50,6 @@ function emailBodyToText(raw) {
             .replace(/<br\s*\/?>/gi, "\n")
             .replace(/<\/p>/gi, "\n\n")
             .replace(/<\/div>/gi, "\n")
-            .replace(/<\/li>/gi, "\n")
-            .replace(/<\/h[1-6]>/gi, "\n\n")
             .replace(/<[^>]+>/g, "");
         const ta = typeof document !== "undefined" ? document.createElement("textarea") : null;
         if (ta) {
@@ -155,24 +61,15 @@ function emailBodyToText(raw) {
         .replace(/&nbsp;/g, " ")
         .replace(/&lt;/g, "<")
         .replace(/&gt;/g, ">")
-        .replace(/&amp;/g, "&")
-        .replace(/&quot;/g, '"');
-
-    const cutPatterns = [
-        /\nOn .+wrote:\s*$/im,
-        /\nOn .+wrote:\s*\n/i,
-        /\n-{2,}\s*Original Message\s*-{2,}/i,
-        /\nFrom:\s.+\nSent:\s/i,
-        /\nLe .+a écrit\s*:/i,
-    ];
-    for (const pat of cutPatterns) {
+        .replace(/&amp;/g, "&");
+    const cut = [/\nOn .+wrote:\s*\n/i, /\n-{2,}\s*Original Message\s*-{2,}/i, /\nFrom:\s.+\nSent:\s/i];
+    for (const pat of cut) {
         const m = pat.exec(text);
         if (m && m.index > 0) {
             text = text.slice(0, m.index);
             break;
         }
     }
-
     const lines = [];
     for (const line of text.split("\n")) {
         const stripped = line.trimStart();
@@ -184,135 +81,37 @@ function emailBodyToText(raw) {
 }
 
 function conversationMessages(data) {
-    const fromThreads = Array.isArray(data?.threads)
-        ? data.threads.flatMap((thread) => thread.messages || [])
-        : [];
-    const raw = data?.messages?.length ? data.messages : fromThreads;
+    const home = Array.isArray(data?.threads)
+        ? data.threads.find((thread) => thread.is_primary) || data.threads[0]
+        : null;
+    const raw = data?.messages?.length ? data.messages : (home?.messages || []);
     return [...raw].sort((a, b) => new Date(b.date) - new Date(a.date));
 }
 
-function ThreadMessageList({ messages, inv }) {
-    if (!messages?.length) return null;
-    return (
-        <ul className="divide-y divide-border" data-testid="conversation-messages">
-            {messages.map((m, idx, msgs) => {
-                const prev = msgs[idx - 1];
-                const day = calendarDayKey(m.date);
-                const prevDay = prev ? calendarDayKey(prev.date) : null;
-                const showDay = Boolean(day && day !== prevDay);
-                const isYou = m.direction === "you";
-                const sender = isYou ? "You" : clientSenderLabel(m, inv);
-                return (
-                    <li key={m.id} data-testid="conversation-message">
-                        {showDay ? (
-                            <div
-                                className="flex items-center justify-center gap-3 px-5 py-3 bg-muted/20"
-                                data-testid="conversation-day-separator"
-                            >
-                                <span className="h-px flex-1 bg-border" />
-                                <span className="text-[11px] font-medium text-muted-foreground tabular-nums whitespace-nowrap">
-                                    {formatDaySeparator(m.date)}
-                                </span>
-                                <span className="h-px flex-1 bg-border" />
-                            </div>
-                        ) : null}
-                        <div
-                            className={cn(
-                                "px-5 py-4 border-l-[3px]",
-                                isYou
-                                    ? "bg-primary/[0.04] border-l-primary"
-                                    : "bg-white border-l-border",
-                            )}
-                        >
-                            <div className="flex items-start justify-between gap-3">
-                                <div className="flex items-center gap-2.5 min-w-0">
-                                    <MessageAvatar isYou={isYou} label={sender} />
-                                    <div className="min-w-0">
-                                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                                            <span className="text-sm font-semibold truncate">{sender}</span>
-                                            {m.state_markers?.length ? (
-                                                <span className="inline-flex flex-wrap gap-1">
-                                                    {m.state_markers.map((label) => (
-                                                        <span
-                                                            key={label}
-                                                            className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold border border-border bg-background text-muted-foreground"
-                                                        >
-                                                            → {label}
-                                                        </span>
-                                                    ))}
-                                                </span>
-                                            ) : null}
-                                        </div>
-                                    </div>
-                                </div>
-                                <div className="text-[11px] font-mono text-muted-foreground tabular-nums flex-shrink-0">
-                                    {formatMsgTime(m.date)}
-                                </div>
-                            </div>
-                            <pre className="mt-3 text-sm text-foreground whitespace-pre-wrap break-words font-sans leading-relaxed" data-testid="conversation-body">
-                                {emailBodyToText(m.body) || "(empty)"}
-                            </pre>
-                            {m.attachment_names?.length ? (
-                                <div className="mt-2 text-[11px] text-muted-foreground">
-                                    Attachments: {m.attachment_names.join(", ")}
-                                </div>
-                            ) : null}
-                        </div>
-                    </li>
-                );
-            })}
-        </ul>
-    );
+function latestInbound(messages = [], inv) {
+    const inbound = messages.find((m) => m.direction !== "you");
+    if (inbound) {
+        return {
+            from: inbound.from || inv?.counterparty_email,
+            date: inbound.date,
+            body: emailBodyToText(inbound.body),
+        };
+    }
+    const quote = inv?.reason_quote || inv?.last_human_inbound_quote;
+    if (!quote && !inv?.last_human_inbound_at) return null;
+    return {
+        from: inv?.counterparty_email,
+        date: inv?.last_human_inbound_at,
+        body: quote || "",
+    };
 }
 
-function headerFactLine(inv) {
-    if (hasPendingPaymentClaim(inv)) {
-        return factualDigestLine(inv, "confirm_prompts");
-    }
-    if (inv.status === "promise_broken") {
-        return factualDigestLine(inv, "broken_promises");
-    }
-    if (inv.status === "promised" && inv.promise_date) {
-        return `Promise date ${formatDate(inv.promise_date)}`;
-    }
-    if (inv.status === "overdue") return factualDigestLine(inv, "due_overdue");
-    if (
-        inv.status === "disputed"
-        || inv.disputed_claim_amount != null
-        || (inv.payment_claim_amount != null && Number(inv.payment_claim_amount) > 0.005)
-    ) {
-        return factualDigestLine(inv, "needs_reply");
-    }
-    if (inv.due_date) return `Due ${formatDate(inv.due_date)}`;
-    if (inv.promise_date) return `Promised ${formatDate(inv.promise_date)}`;
-    return null;
-}
-
-function HeaderSkeleton() {
-    return (
-        <div className="space-y-3" data-testid="invoice-detail-skeleton">
-            <Skeleton className="h-3 w-40" />
-            <Skeleton className="h-7 w-3/4" />
-            <Skeleton className="h-4 w-24" />
-        </div>
-    );
-}
-
-/**
- * Invoice detail modal. Follow up / Reply / Adjust expand an inline composer
- * (no second modal). Esc/scrim collapses composer first, then closes.
- */
 export function InvoiceDetailDrawer({ invoiceId, preview = null, open, onClose, onChanged }) {
     const [data, setData] = useState(null);
     const [err, setErr] = useState("");
-    const [busy, setBusy] = useState(false);
-    /** Mounted (includes exit animation). */
-    const [composePresent, setComposePresent] = useState(false);
-    /** Expanded = open; false triggers bottom→top collapse. */
-    const [composeExpanded, setComposeExpanded] = useState(false);
-    const [composeIntent, setComposeIntent] = useState(null);
+    const [threadOpen, setThreadOpen] = useState(false);
+    const [followUpDate, setFollowUpDate] = useState(plusBusinessDays(3));
     const composeDirtyRef = useRef(false);
-    const collapseTimerRef = useRef(null);
 
     const refresh = useCallback(() => {
         if (!invoiceId) return;
@@ -326,356 +125,239 @@ export function InvoiceDetailDrawer({ invoiceId, preview = null, open, onClose, 
         if (!open || !invoiceId) return;
         setData(null);
         setErr("");
-        if (collapseTimerRef.current) {
-            clearTimeout(collapseTimerRef.current);
-            collapseTimerRef.current = null;
-        }
-        setComposePresent(false);
-        setComposeExpanded(false);
-        setComposeIntent(null);
+        setThreadOpen(false);
         composeDirtyRef.current = false;
         refresh();
     }, [open, invoiceId, refresh]);
 
     const inv = data?.invoice || (preview && preview._id === invoiceId ? preview : null);
 
-    function finishCollapseComposer() {
-        collapseTimerRef.current = null;
-        setComposePresent(false);
-        setComposeExpanded(false);
-        setComposeIntent(null);
-        composeDirtyRef.current = false;
-    }
+    useEffect(() => {
+        if (!inv) return;
+        const suggested = invoiceWithWaitSuggestion(inv).suggested_wait_date;
+        setFollowUpDate(suggested || plusBusinessDays(3));
+    }, [inv?._id, inv?.suggested_wait_date, inv?.reason_quote]);
 
-    function collapseComposer() {
-        if (!composePresent) return;
-        setComposeExpanded(false);
-        if (collapseTimerRef.current) clearTimeout(collapseTimerRef.current);
-        collapseTimerRef.current = window.setTimeout(finishCollapseComposer, 300);
-    }
-
-    /** Collapse composer only — used by Cancel (and after Send). */
-    function tryCollapseComposer() {
-        if (!composePresent) return true;
-        if (!confirmDiscardComposer(composeDirtyRef.current)) return false;
-        collapseComposer();
-        return true;
-    }
-
-    /** Close the whole invoice modal (Esc / scrim / X). Composer is not collapsed separately. */
-    function requestModalClose() {
-        if (composePresent && !confirmDiscardComposer(composeDirtyRef.current)) return;
+    function requestClose() {
+        if (!confirmDiscardComposer(composeDirtyRef.current)) return;
         onClose?.();
     }
 
-    async function act(action) {
-        if (!inv) return;
-        setBusy(true);
-        try {
-            await api.post(`/v1/invoices/${inv._id}/action`, { action });
-            toast.success(
-                action === "mark_paid" ? "Marked paid"
-                    : action === "deny_payment_claim" ? "Marked not yet received"
-                      : "Updated",
-            );
-            await onChanged?.();
-            if (action === "mark_paid") {
-                onClose?.();
-            } else {
-                refresh();
-            }
-        } catch (e) {
-            toast.error(extractError(e));
-        } finally {
-            setBusy(false);
-        }
+    async function afterAction() {
+        composeDirtyRef.current = false;
+        refresh();
+        await onChanged?.();
+        onClose?.();
     }
 
-    function openComposer(intent = null) {
-        if (collapseTimerRef.current) {
-            clearTimeout(collapseTimerRef.current);
-            collapseTimerRef.current = null;
-        }
-        setComposeIntent(intent);
-        setComposePresent(true);
-        setComposeExpanded(false);
-        requestAnimationFrame(() => {
-            requestAnimationFrame(() => setComposeExpanded(true));
-        });
-    }
-
-    const actions = (() => {
-        if (!inv) return null;
-        const s = inv.status;
-        const composing = composePresent;
-        if (s === "paid" || s === "written_off") return null;
-
-        // Pending payment claim (full or partial, with or without dispute):
-        // Received / Not yet only — never two action sets for one invoice.
-        if (hasPendingPaymentClaim(inv)) {
-            return (
-                <>
-                    <Button onClick={() => act("mark_paid")} disabled={busy} data-testid="detail-received">Received</Button>
-                    <Button variant="outline" onClick={() => act("deny_payment_claim")} disabled={busy} data-testid="detail-not-yet">Not yet</Button>
-                </>
-            );
-        }
-
-        // Owner actions from remaining layers — not the model.
-        // Says-paid → Received / Not yet.
-        // Unanswered question or dispute → Reply.
-        // Else chase → Follow up. Mark paid always secondary.
-        const needsCompose =
-            s === "disputed"
-            || inv.needs_reply
-            || ["overdue", "promise_broken", "invoiced", "promised", "partially_paid", "stale"].includes(s);
-        if (!needsCompose) return null;
-
-        const isReply = s === "disputed" || inv.needs_reply;
-        return (
-            <>
-                <Button
-                    onClick={() => openComposer()}
-                    disabled={busy || composing}
-                    aria-pressed={composing}
-                    data-testid={isReply ? "detail-reply" : "detail-follow-up"}
-                >
-                    <Send className="w-3.5 h-3.5 mr-1.5" />
-                    {isReply ? "Reply" : "Follow up"}
-                </Button>
-                <Button variant="outline" onClick={() => act("mark_paid")} disabled={busy} data-testid="detail-mark-paid">
-                    Mark paid
-                </Button>
-            </>
-        );
-    })();
-
-    const fact = inv ? headerFactLine(inv) : null;
-    const partial = inv && !hasPendingPaymentClaim(inv)
-        && Number(inv.paid_amount || 0) > 0.005
-        && Number(inv.balance_remaining ?? inv.amount ?? 0) > 0.005;
-    const loadingThread = open && invoiceId && !data && !err;
     const history = conversationMessages(data);
+    const inbound = latestInbound(history, inv);
+    const due = inv ? dueMeta(inv) : null;
+    const activity = inv ? latestActivity(inv) : null;
+    const left = remainingLabel(inv);
+    const threadUrl = gmailThreadUrl(data?.thread_id || inv?.source_thread_id);
+    const needsYou = inv && isNeedsYouInvoice(inv);
+    const firm = inv && isApprovalDraft(inv);
+    const conversation = needsYou && !firm;
+    const loading = open && invoiceId && !data && !err && !inv;
 
     return (
         <SheetPrimitive.Root
             open={open}
             onOpenChange={(next) => {
-                if (!next) requestModalClose();
+                if (!next) requestClose();
             }}
         >
             <SheetPrimitive.Portal>
                 <SheetPrimitive.Overlay
                     className={cn(
-                        "fixed inset-0 z-50 bg-[rgba(0,0,0,0.45)]",
+                        "fixed inset-0 z-50 bg-black/40",
                         "data-[state=open]:animate-in data-[state=closed]:animate-out",
                         "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
                     )}
                 />
-                <div className="fixed inset-0 z-50 flex items-stretch justify-center sm:items-center sm:p-4 pointer-events-none">
-                    <SheetPrimitive.Content
-                        className={cn(
-                            "pointer-events-auto relative z-50 bg-background shadow-lg outline-none",
-                            "flex flex-col gap-0 p-0 overflow-hidden",
-                            "w-full h-full rounded-none border-0",
-                            "sm:w-[min(840px,92vw)] sm:min-w-[min(720px,92vw)] sm:max-w-[840px]",
-                            "sm:h-fit sm:max-h-[90vh] sm:rounded-2xl sm:border sm:border-border",
-                            "duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out",
-                            "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
-                            "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
-                        )}
-                        data-testid="invoice-detail-drawer"
-                        aria-describedby={undefined}
-                    >
-                        <SheetPrimitive.Title className="sr-only">
-                            Invoice {inv ? invoiceSubject(inv) : invoiceId || ""}
-                        </SheetPrimitive.Title>
+                <SheetPrimitive.Content
+                    className={cn(
+                        "fixed inset-y-0 right-0 z-50 flex h-full w-full flex-col bg-background shadow-2xl outline-none",
+                        "sm:w-[min(520px,92vw)] sm:border-l sm:border-border",
+                        "data-[state=open]:animate-in data-[state=closed]:animate-out",
+                        "data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right",
+                        "duration-200",
+                    )}
+                    data-testid="invoice-detail-drawer"
+                    aria-describedby={undefined}
+                >
+                    <SheetPrimitive.Title className="sr-only">
+                        Review {inv ? invoiceSubject(inv) : invoiceId || ""}
+                    </SheetPrimitive.Title>
+
+                    <header className="flex-shrink-0 border-b border-border px-5 pt-5 pb-4 pr-12" data-testid="invoice-detail-header">
                         <button
                             type="button"
-                            className="absolute right-4 top-4 z-10 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                            className="absolute right-4 top-4 rounded-sm text-muted-foreground hover:text-foreground"
                             data-testid="invoice-detail-close"
-                            onClick={requestModalClose}
+                            onClick={requestClose}
                         >
                             <X className="h-4 w-4" />
                             <span className="sr-only">Close</span>
                         </button>
+                        {err && !inv ? (
+                            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{err}</div>
+                        ) : null}
+                        {loading ? (
+                            <div className="space-y-2" data-testid="invoice-detail-skeleton">
+                                <Skeleton className="h-4 w-40" />
+                                <Skeleton className="h-6 w-2/3" />
+                            </div>
+                        ) : null}
+                        {inv ? (
+                            <>
+                                <Link
+                                    href={`/clients/${encodeURIComponent(inv.counterparty_email || "")}`}
+                                    className="text-base font-semibold text-foreground hover:underline"
+                                >
+                                    {inv.counterparty_name || inv.counterparty_email || "Client"}
+                                </Link>
+                                <div className="mt-1 flex items-baseline justify-between gap-3 text-sm">
+                                    <div className="tabular-nums text-muted-foreground">
+                                        Invoice {invoiceNumber(inv)}
+                                        <span className="mx-1.5 text-border">·</span>
+                                        <span className="font-medium text-foreground">{formatMoney(inv.amount, inv.currency || "USD")}</span>
+                                        {left ? <span className="ml-1.5 text-xs text-emerald-700">{left}</span> : null}
+                                    </div>
+                                    {due ? (
+                                        <div className={`text-right text-xs ${due.tone === "rose" ? "text-rose-600" : due.tone === "amber" ? "text-amber-700" : "text-muted-foreground"}`}>
+                                            Due {due.due}{due.relative ? ` (${due.relative})` : ""}
+                                        </div>
+                                    ) : null}
+                                </div>
+                            </>
+                        ) : null}
+                    </header>
 
-                        {/* Pinned header */}
-                        <div className="flex-shrink-0 border-b border-border px-6 pt-6 pb-4 pr-12 space-y-3" data-testid="invoice-detail-header">
-                            {err && !inv ? (
-                                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{err}</div>
-                            ) : null}
-                            {!inv && loadingThread ? <HeaderSkeleton /> : null}
-                            {inv ? (
-                                <>
-                                    <div className="flex flex-wrap items-start justify-between gap-3">
-                                        <div className="min-w-0">
-                                            <div className="text-xs text-muted-foreground">
-                                                <Link
-                                                    href={`/clients/${encodeURIComponent(inv.counterparty_email || "")}`}
-                                                    className="hover:underline"
-                                                    onClick={(e) => e.stopPropagation()}
-                                                >
-                                                    {inv.counterparty_name || inv.counterparty_email || "Client"}
-                                                </Link>
-                                                {inv.counterparty_name && inv.counterparty_email ? (
-                                                    <span className="font-mono"> · {inv.counterparty_email}</span>
-                                                ) : null}
-                                            </div>
-                                            <h1 className="type-title text-xl md:text-2xl mt-1 break-words whitespace-normal">
-                                                {invoiceSubject(inv)}
-                                            </h1>
-                                            {inv.invoice_ref && !isJunkInvoiceRef(inv.invoice_ref) && inv.invoice_ref !== inv.source_subject ? (
-                                                <div className="text-xs font-mono text-muted-foreground mt-1">{inv.invoice_ref}</div>
-                                            ) : null}
-                                        </div>
-                                        <div className="text-right flex-shrink-0">
-                                            <div className="stat-number font-bold text-2xl tabular-nums">
-                                                {formatMoney(inv.amount, inv.currency || "USD")}
-                                            </div>
-                                            {partial ? (
-                                                <div className="text-xs text-green-700 mt-0.5">
-                                                    {formatMoney(inv.paid_amount, inv.currency || "USD")} paid ·{" "}
-                                                    {formatMoney(inv.balance_remaining, inv.currency || "USD")} left
-                                                </div>
-                                            ) : null}
-                                        </div>
+                    <div className="flex-1 min-h-0 overflow-y-auto px-5 py-5 space-y-5">
+                        {inv && isPaidInvoice(inv) ? (
+                            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+                                {inv.chase_result || "Collected. Chase is closed."}
+                            </div>
+                        ) : null}
+
+                        {inv && !needsYou && !isPaidInvoice(inv) ? (
+                            <div className="rounded-lg border border-border bg-muted/40 px-4 py-3">
+                                <div className="text-sm font-medium">{cadenceLine(inv).title}</div>
+                                {cadenceLine(inv).detail ? (
+                                    <div className="mt-0.5 text-xs text-muted-foreground">{cadenceLine(inv).detail}</div>
+                                ) : null}
+                            </div>
+                        ) : null}
+
+                        {needsYou && !isPaidInvoice(inv) ? (
+                            <>
+                                <section>
+                                    <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                                        Latest thread context
+                                    </div>
+                                    <div className="rounded-lg border border-border bg-muted/30 px-4 py-3" data-testid="latest-inbound">
+                                        {activity?.title ? (
+                                            <div className="text-sm font-medium">{activity.title}</div>
+                                        ) : null}
+                                        {conversation && inbound?.body ? (
+                                            <blockquote className="mt-2 text-sm leading-relaxed whitespace-pre-wrap text-muted-foreground">
+                                                {inbound.body}
+                                            </blockquote>
+                                        ) : activity?.detail ? (
+                                            <div className="mt-0.5 text-sm text-muted-foreground">{activity.detail}</div>
+                                        ) : null}
+                                    </div>
+                                </section>
+
+                                <section data-testid="invoice-inline-composer">
+                                    <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                                        Email to send
+                                    </div>
+                                    <ChaseComposer
+                                        invoice={inv}
+                                        active={open}
+                                        embedded
+                                        showBack={false}
+                                        autoDraft={false}
+                                        defaultSubject={data?.threads?.[0]?.subject || inv.pending_subject || (inv.invoice_ref ? `Re: Invoice ${inv.invoice_ref}` : "")}
+                                        initialDraft={firm && inv.pending_body ? {
+                                            subject: inv.pending_subject,
+                                            body: inv.pending_body,
+                                            is_reply: false,
+                                        } : null}
+                                        waitUntil={followUpDate}
+                                        sendLabel={firm ? "Approve & send from Gmail" : "Send reply"}
+                                        onDirtyChange={(d) => { composeDirtyRef.current = d; }}
+                                        onCancel={requestClose}
+                                        onSent={afterAction}
+                                        beforeSend={<CheckBackSelect value={followUpDate} onChange={setFollowUpDate} />}
+                                    />
+                                </section>
+
+                                <div className="border-t border-border mt-6 pt-5">
+                                    <div className="mb-2.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                                        Or don’t send an email
                                     </div>
                                     <div className="flex flex-wrap items-center gap-2">
-                                        <StatusChip inv={inv} />
-                                        {fact ? <span className="text-sm text-muted-foreground">{fact}</span> : null}
-                                    </div>
-                                    {(() => {
-                                        let attribution = null;
-                                        if (inv.status === "paid" && (inv.paid_via === "quickbooks" || inv.qbo_paid_date)) {
-                                            attribution = inv.evidence_sentence
-                                                || `Paid in QuickBooks · ${inv.qbo_paid_date || formatDate(inv.paid_at)}`;
-                                        } else if (inv.source === "both") {
-                                            attribution = "Tracked from Gmail · Imported from QuickBooks";
-                                        } else if (inv.source === "quickbooks") {
-                                            attribution = "Imported from QuickBooks";
-                                        } else if (inv.source === "gmail" || inv.source_thread_id) {
-                                            attribution = "Tracked from Gmail";
-                                        }
-                                        return attribution ? (
-                                            <div className="text-xs text-muted-foreground" data-testid="invoice-source-attribution">
-                                                {attribution}
-                                            </div>
-                                        ) : null;
-                                    })()}
-                                    {actions ? (
-                                        <div className="flex flex-wrap gap-2 pt-1" data-testid="invoice-detail-actions">
-                                            {actions}
-                                        </div>
-                                    ) : null}
-                                </>
-                            ) : null}
-                        </div>
-
-                        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-                            {/* Inline composer — expands/collapses above conversation */}
-                            {composePresent && inv ? (
-                                <div
-                                    className={cn(
-                                        "grid transition-[grid-template-rows] duration-300 ease-out",
-                                        composeExpanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
-                                    )}
-                                    data-testid="invoice-inline-composer"
-                                >
-                                    <div className="min-h-0 overflow-hidden">
-                                        <div
-                                            className={cn(
-                                                "border-b border-border bg-background px-6 py-4",
-                                                "sm:max-h-[50vh] sm:overflow-y-auto",
-                                                "transition-opacity duration-300 ease-out",
-                                                composeExpanded ? "opacity-100" : "opacity-0",
-                                            )}
+                                        <SnoozeControl invoice={inv} label="Snooze instead" onChanged={afterAction} />
+                                        <Button
+                                            variant="ghost"
+                                            className="text-rose-700 hover:text-rose-800"
+                                            onClick={() => {
+                                                if (typeof window !== "undefined" && !window.confirm(`Permanently stop reminders for Invoice ${invoiceNumber(inv)}?`)) return;
+                                                stopInvoiceChase(inv._id, { onChanged: afterAction });
+                                            }}
+                                            data-testid="drawer-stop-chasing"
                                         >
-                                            <ChaseComposer
-                                                invoice={inv}
-                                                active={composePresent && composeExpanded}
-                                                initialIntent={composeIntent}
-                                                showBack
-                                                onDirtyChange={(d) => { composeDirtyRef.current = d; }}
-                                                onCancel={() => { tryCollapseComposer(); }}
-                                                onSent={async () => {
-                                                    collapseComposer();
-                                                    refresh();
-                                                    await onChanged?.();
-                                                }}
-                                            />
-                                        </div>
+                                            Stop chasing
+                                        </Button>
                                     </div>
                                 </div>
-                            ) : null}
+                            </>
+                        ) : null}
 
-                            {/* Conversation — hidden on mobile while composing */}
-                            <div
-                                className={cn(
-                                    "min-h-0 overflow-y-auto px-6 py-4",
-                                    composePresent && composeExpanded
-                                        ? "hidden sm:block sm:flex-1 sm:max-h-[40vh]"
-                                        : "flex-1",
-                                )}
-                                data-testid="invoice-conversation-scroll"
-                            >
-                                {err && inv ? (
-                                    <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">{err}</div>
+                        {history.length || threadUrl ? (
+                            <section className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                                {history.length ? (
+                                    <button
+                                        type="button"
+                                        className="text-xs font-medium text-muted-foreground hover:text-foreground"
+                                        onClick={() => setThreadOpen((v) => !v)}
+                                    >
+                                        {threadOpen ? "Hide thread" : `Thread (${history.length})`}
+                                    </button>
                                 ) : null}
-
-                                <div className="space-y-3" data-testid="invoice-conversation">
-                                    {loadingThread ? (
-                                        <section className="rounded-2xl border border-border bg-card overflow-hidden">
-                                            <div className="px-5 py-10 space-y-4">
-                                                <Skeleton className="h-3 w-1/3" />
-                                                <Skeleton className="h-16 w-full" />
-                                                <Skeleton className="h-3 w-1/4" />
-                                                <Skeleton className="h-20 w-full" />
-                                            </div>
-                                        </section>
-                                    ) : null}
-
-                                    {data?.gmail_error ? (
-                                        <div className="rounded-2xl border border-amber-100 bg-amber-50 px-5 py-4 text-sm text-amber-800">
-                                            {data.gmail_error}. Showing what we know from tracking.
-                                        </div>
-                                    ) : null}
-
-                                    {data && !history.length ? (
-                                        <section className="rounded-2xl border border-border bg-card overflow-hidden">
-                                            <div className="px-5 py-10 text-sm text-muted-foreground text-center" data-testid="conversation-empty">
-                                                {inv?.status === "paid" && (inv?.paid_via === "quickbooks" || inv?.qbo_paid_date)
-                                                    ? `No client emails — paid in QuickBooks, ${inv.qbo_paid_date || formatDate(inv.paid_at)}`
-                                                    : "No client emails on this invoice yet"}
-                                            </div>
-                                        </section>
-                                    ) : null}
-
-                                    {data && history.length ? (
-                                        <section
-                                            className="rounded-2xl border border-border bg-card overflow-hidden"
-                                            data-testid="conversation-home"
-                                        >
-                                            {gmailThreadUrl(data.thread_id) ? (
-                                                <div className="px-5 py-2.5 border-b border-border flex justify-end sticky top-0 bg-card z-[1]">
-                                                    <a
-                                                        href={gmailThreadUrl(data.thread_id)}
-                                                        target="_blank"
-                                                        rel="noopener noreferrer"
-                                                        className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
-                                                    >
-                                                        Open in Gmail <ExternalLink className="w-3 h-3" />
-                                                    </a>
+                                {threadUrl ? (
+                                    <a
+                                        href={threadUrl}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+                                    >
+                                        Open in Gmail <ExternalLink className="w-3 h-3" />
+                                    </a>
+                                ) : null}
+                                {threadOpen ? (
+                                    <ul className="mt-3 w-full space-y-3" data-testid="conversation-messages">
+                                        {history.map((m) => (
+                                            <li key={m.id} className="rounded-lg border border-border px-3 py-2.5" data-testid="conversation-message">
+                                                <div className="flex justify-between gap-2 text-[11px] text-muted-foreground">
+                                                    <span className="font-medium text-foreground">{m.direction === "you" ? "You" : (inv?.counterparty_name || "Client")}</span>
+                                                    <span className="tabular-nums">{formatMsgTime(m.date)}</span>
                                                 </div>
-                                            ) : null}
-                                            <ThreadMessageList messages={history} inv={inv} />
-                                        </section>
-                                    ) : null}
-                                </div>
-                            </div>
-                        </div>
-                    </SheetPrimitive.Content>
-                </div>
+                                                <pre className="mt-1.5 text-sm whitespace-pre-wrap font-sans" data-testid="conversation-body">
+                                                    {emailBodyToText(m.body) || "(empty)"}
+                                                </pre>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                ) : null}
+                            </section>
+                        ) : null}
+                    </div>
+                </SheetPrimitive.Content>
             </SheetPrimitive.Portal>
         </SheetPrimitive.Root>
     );

@@ -22,7 +22,7 @@ class Ledger::Build
       raise_string_error("Organization is required") if organization.blank?
 
       invoices = organization.invoices
-        .includes(:client, :invoice_state_transitions, invoice_conversations: :conversation)
+        .includes(:organization, :client, :last_human_inbound_message, :invoice_chase_events, :outbox_messages, invoice_conversations: { conversation: :messages })
         .order(due_date: :asc, created_at: :asc)
 
       {

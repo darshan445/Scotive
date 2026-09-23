@@ -4,11 +4,7 @@ class DigestMailer < ApplicationMailer
   default from: ENV.fetch("DEVISE_MAILER_SENDER", "scotive@localhost")
 
   SECTIONS = [
-    [ :due_overdue, "Past due" ],
-    [ :broken_promises, "Broken promise" ],
-    [ :confirm_prompts, "Confirm payment" ],
-    [ :stale_prompts, "Gone quiet" ],
-    [ :needs_reply, "Needs your reply" ]
+    [ :needs_you, "Needs you" ]
   ].freeze
 
   def daily(user:, groups:)

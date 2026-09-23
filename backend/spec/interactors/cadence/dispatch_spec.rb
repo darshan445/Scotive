@@ -44,8 +44,8 @@ RSpec.describe Cadence::Dispatch do
       due_date: Date.new(2026, 9, 15),
       total_amount: 250,
       balance_remaining: 250,
-      current_ar_status: "overdue",
-      needs_reply: true
+      books_status: "open",
+      chase_status: "needs_you"
     )
   end
   let(:conversation) do
@@ -70,7 +70,7 @@ RSpec.describe Cadence::Dispatch do
   let(:email_client) { instance_double(Email::EmailClient) }
 
   def create_outbox!(status: "scheduled", step: "nudge_plus_3")
-    invoice.update!(needs_reply: false)
+    invoice.update!(chase_status: "watching")
     invoice.outbox_messages.create!(
       organization: organization,
       conversation: conversation,
@@ -94,7 +94,7 @@ RSpec.describe Cadence::Dispatch do
       expect(result.data[:sent]).to eq(true)
       expect(row.reload.status).to eq("sent")
       expect(row.sent_at).to be_present
-      expect(invoice.reload.needs_reply).to eq(false)
+      expect(invoice.reload.chase_status).to eq("watching")
 
       sent = conversation.messages.find_by!(external_message_id: "msg-sent")
       expect(sent.direction).to eq("user_to_client")
@@ -105,10 +105,12 @@ RSpec.describe Cadence::Dispatch do
           to: "ap@acme.com",
           cc: [ "cfo@acme.com" ],
           reply_to: "msg-anchor",
-          custom_headers: [
+          custom_headers: array_including(
             { name: "In-Reply-To", value: "<msg-anchor>" },
-            { name: "References", value: "<msg-anchor>" }
-          ]
+            { name: "References", value: "<msg-anchor>" },
+            { name: "Auto-Submitted", value: "auto-generated" },
+            { name: "X-Auto-Response-Suppress", value: "All" }
+          )
         )
       )
     end
@@ -121,26 +123,28 @@ RSpec.describe Cadence::Dispatch do
       expect(skipped.data[:reason]).to eq("not_scheduled")
 
       paid = create_outbox!(step: "due_today")
-      invoice.update!(current_ar_status: "paid", balance_remaining: 0)
+      invoice.update!(books_status: "paid", balance_remaining: 0)
       cancelled = described_class.execute(outbox_message: paid, client: email_client)
       expect(cancelled.data[:cancelled]).to eq(true)
       expect(cancelled.data[:reason]).to eq("paid_in_books")
       expect(paid.reload.status).to eq("cancelled")
 
-      invoice.update!(current_ar_status: "overdue", balance_remaining: 250, needs_reply: true)
+      invoice.update!(books_status: "open", balance_remaining: 250, chase_status: "needs_you")
       turn = create_outbox!(step: "notice_minus_3")
-      invoice.update!(needs_reply: true)
-      expect(described_class.execute(outbox_message: turn, client: email_client).data[:reason]).to eq("client_awaiting_human_reply")
+      invoice.update!(chase_status: "needs_you")
+      expect(described_class.execute(outbox_message: turn, client: email_client).data[:reason]).to eq("chase_paused")
 
-      invoice.update!(needs_reply: false, current_ar_status: "disputed")
+      invoice.update!(chase_status: "stopped")
       blocked = create_outbox!(step: "nudge_plus_3")
-      expect(described_class.execute(outbox_message: blocked, client: email_client).data[:reason]).to eq("blocked_by_status")
+      invoice.update!(chase_status: "stopped")
+      expect(described_class.execute(outbox_message: blocked, client: email_client).data[:reason]).to eq("stopped_by_user")
 
-      invoice.update!(current_ar_status: "overdue", snoozed_until: 2.days.from_now)
+      invoice.update!(books_status: "open", chase_status: "watching", expected_pay_date: 2.days.from_now.to_date)
       snoozed = create_outbox!(step: "due_today")
-      expect(described_class.execute(outbox_message: snoozed, client: email_client).data[:reason]).to eq("invoice_snoozed_by_user")
+      invoice.update!(expected_pay_date: 2.days.from_now.to_date)
+      expect(described_class.execute(outbox_message: snoozed, client: email_client).data[:reason]).to eq("waiting_until_date")
 
-      invoice.update!(snoozed_until: nil)
+      invoice.update!(expected_pay_date: nil)
       conversation.messages.create!(
         external_message_id: "msg-recent",
         direction: "user_to_client",

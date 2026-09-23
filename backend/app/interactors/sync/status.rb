@@ -53,10 +53,10 @@ class Sync::Status
   end
 
   def pending_followup_prompts
-    organization.outbox_messages.where(status: "draft").includes(invoice: [ :client, :invoice_state_transitions, { invoice_conversations: :conversation } ]).filter_map do |row|
+    organization.outbox_messages.where(status: "draft").includes(invoice: [ :client, :invoice_chase_events, { invoice_conversations: :conversation } ]).filter_map do |row|
       invoice = row.invoice
       next if invoice.blank?
-      next if %w[paid voided].include?(invoice.current_ar_status)
+      next if invoice.books_closed?
       next if Ledger::InvoicePayload.paused?(invoice)
 
       payload = Ledger::InvoicePayload.for(invoice)

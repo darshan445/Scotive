@@ -44,7 +44,7 @@ RSpec.describe Cadence::Enqueue do
       due_date: Date.new(2026, 9, 21),
       total_amount: 250,
       balance_remaining: 250,
-      current_ar_status: "invoiced",
+      books_status: "open",
       pay_link_token: "https://pay.qbo.test/inv-12",
       cc_emails: [ "cfo@acme.com" ]
     )
@@ -111,11 +111,11 @@ RSpec.describe Cadence::Enqueue do
 
   it "skips paid invoices, missing email, missing home thread, and duplicate pending steps" do
     add_home_thread!
-    paid = described_class.execute(invoice: invoice.tap { |row| row.update!(current_ar_status: "paid", balance_remaining: 0) }, step: "due_today")
+    paid = described_class.execute(invoice: invoice.tap { |row| row.update!(books_status: "paid", balance_remaining: 0) }, step: "due_today")
     expect(paid.data[:created]).to eq(false)
     expect(paid.data[:reason]).to eq("terminal")
 
-    invoice.update!(current_ar_status: "invoiced", balance_remaining: 250)
+    invoice.update!(books_status: "open", balance_remaining: 250)
     first = described_class.execute(invoice: invoice, step: "due_today")
     dup = described_class.execute(invoice: invoice, step: "due_today")
     expect(first.data[:created]).to eq(true)
@@ -124,6 +124,18 @@ RSpec.describe Cadence::Enqueue do
     invoice.client.update!(primary_email: nil)
     no_email = described_class.execute(invoice: invoice, step: "nudge_plus_3")
     expect(no_email.data[:reason]).to eq("no_email")
+  end
+
+  it "never enqueues the ladder after a human reply" do
+    add_home_thread!
+    invoice.update!(chase_status: "watching", last_human_inbound_at: Time.utc(2026, 9, 17, 12))
+    result = described_class.execute(invoice: invoice, step: "due_today")
+    expect(result.data[:created]).to eq(false)
+    expect(result.data[:reason]).to eq("human_conversation")
+
+    firm = described_class.execute(invoice: invoice, step: "firm_plus_7")
+    expect(firm.data[:created]).to eq(false)
+    expect(firm.data[:reason]).to eq("human_conversation")
   end
 
   it "skips when there is no Home Thread" do

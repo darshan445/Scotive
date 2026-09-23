@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Invoices::BuildTimeline Interactor
-# Purpose: Chronological invoice events for the drawer timeline.
+# Purpose: Chronological chase events for the drawer timeline.
 # Methods:
 # - execute
 
@@ -10,11 +10,18 @@ class Invoices::BuildTimeline
   include LogHelper
 
   EVENT_KINDS = {
-    "promise" => "payment_promise",
-    "paid_claim" => "payment_claim",
-    "dispute" => "dispute",
-    "partial" => "partial_payment",
-    "reply_request" => "note"
+    "human_inbound" => "replied",
+    "auto_reply_ignored" => "auto_reply",
+    "bounce_ignored" => "bounce",
+    "wait_set" => "waiting_until",
+    "wait_expired" => "wait_date_passed",
+    "resumed" => "resumed",
+    "stopped" => "stopped",
+    "books_paid" => "receipt",
+    "books_voided" => "written_off",
+    "books_partial" => "partial_payment",
+    "friendly_sent" => "friendly_sent",
+    "draft_sent" => "draft_sent"
   }.freeze
 
   def self.execute(organization:, invoice_id:)
@@ -32,8 +39,7 @@ class Invoices::BuildTimeline
 
       invoice = organization.invoices.includes(
         :client,
-        :invoice_events,
-        :invoice_state_transitions,
+        :invoice_chase_events,
         invoice_conversations: :conversation
       ).find_by(id: invoice_id)
       raise_string_error("Invoice not found") if invoice.blank?
@@ -60,24 +66,14 @@ class Invoices::BuildTimeline
         thread_id: thread_id
       }
     ]
-    invoice.invoice_events.sort_by(&:created_at).each do |event|
+    invoice.invoice_chase_events.sort_by(&:created_at).each do |event|
       rows << {
         kind: EVENT_KINDS.fetch(event.event_type, event.event_type),
         date: event.created_at.iso8601,
         quote: event.quote,
-        promise_date: event.event_data.is_a?(Hash) ? event.event_data["promise_date"] : nil,
-        amount: event.event_data.is_a?(Hash) ? event.event_data["amount"] : nil,
+        expected_pay_date: event.expected_pay_date&.iso8601,
         thread_id: thread_id,
         message_id: event.message_id
-      }
-    end
-    paid = invoice.invoice_state_transitions.select { |row| row.to_status == "paid" }.max_by(&:created_at)
-    if paid
-      rows << {
-        kind: "receipt",
-        date: paid.created_at.iso8601,
-        amount: invoice.total_amount.to_f,
-        thread_id: thread_id
       }
     end
     rows.sort_by { |row| row[:date].to_s }

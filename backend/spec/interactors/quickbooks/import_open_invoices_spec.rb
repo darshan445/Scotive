@@ -71,10 +71,9 @@ RSpec.describe Quickbooks::ImportOpenInvoices do
 
     invoice = organization.invoices.find_by!(external_id: "101")
     expect(invoice.invoice_number).to eq("INV-101")
-    expect(invoice.current_ar_status).to eq("overdue")
+    expect(invoice.books_status).to eq("open")
     expect(invoice.pay_link_token).to eq("https://pay.example.com/inv/INV-101")
     expect(invoice.cc_emails).to eq([ "ap@acme.com" ])
-    expect(invoice.invoice_state_transitions.first.trigger_source).to eq("books_sync")
     expect(integration.reload.last_synced_at).to be_present
   end
 
@@ -93,8 +92,8 @@ RSpec.describe Quickbooks::ImportOpenInvoices do
       due_date: 10.days.ago,
       total_amount: 250,
       balance_remaining: 250,
-      current_ar_status: "promised",
-      active_promise_date: Date.current
+      chase_status: "watching",
+      expected_pay_date: Date.current
     )
     allow(qbo_client).to receive(:query_open_invoices).and_return([
       invoice_payload(
@@ -114,9 +113,9 @@ RSpec.describe Quickbooks::ImportOpenInvoices do
     result = described_class.execute(organization: organization, client: qbo_client)
 
     expect(result).to be_success
-    expect(invoice.reload.current_ar_status).to eq("paid")
-    expect(invoice.active_promise_date).to be_nil
-    expect(invoice.invoice_state_transitions.last.to_status).to eq("paid")
+    expect(invoice.reload.books_status).to eq("paid")
+    expect(invoice.expected_pay_date).to be_nil
+    expect(invoice.invoice_chase_events.last.event_type).to eq("books_paid")
   end
 
   it "keeps an existing pay link when a later QBO payload omits InvoiceLink" do
@@ -135,7 +134,7 @@ RSpec.describe Quickbooks::ImportOpenInvoices do
       total_amount: 250,
       balance_remaining: 250,
       pay_link_token: "https://pay.example.com/inv/INV-101",
-      current_ar_status: "overdue"
+      books_status: "open"
     )
     payload = invoice_payload(
       id: "101",

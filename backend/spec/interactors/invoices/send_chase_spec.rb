@@ -42,8 +42,7 @@ RSpec.describe Invoices::SendChase do
       due_date: Date.new(2026, 9, 4),
       total_amount: 250,
       balance_remaining: 250,
-      current_ar_status: "disputed",
-      needs_reply: true,
+      chase_status: "needs_you",
       cc_emails: [ "cfo@acme.com" ]
     )
   end
@@ -102,7 +101,8 @@ RSpec.describe Invoices::SendChase do
         client: email_client
       )
       expect(result.success?).to eq(true)
-      expect(invoice.reload.needs_reply).to eq(false)
+      expect(invoice.reload.chase_status).to eq("watching")
+      expect(invoice.expected_pay_date).to be_nil
       expect(draft.reload.status).to eq("sent")
       expect(draft.body).to eq("Edited firm follow-up")
       expect(invoice.outbox_messages.find_by(cadence_step: "nudge_plus_3").status).to eq("cancelled")
@@ -110,9 +110,76 @@ RSpec.describe Invoices::SendChase do
     end
   end
 
+  it "does not restart the ladder after a human reply" do
+    travel_to Time.utc(2026, 9, 18, 12) do
+      conversation = add_home_thread!
+      inbound = conversation.messages.create!(
+        external_message_id: "msg-reply",
+        direction: "client_to_user",
+        from_address: "ap@acme.com",
+        to_addresses: [ "owner@studio.com" ],
+        sent_at: Time.utc(2026, 9, 17, 15),
+        clean_body: "Checking with accounting",
+        created_at: Time.current
+      )
+      invoice.update!(
+        chase_status: "needs_you",
+        last_human_inbound_at: inbound.sent_at,
+        last_human_inbound_message: inbound
+      )
+      allow(email_client).to receive(:send_email).and_return("id" => "msg-reply-sent")
+
+      result = described_class.execute(
+        organization: organization,
+        invoice_id: invoice.id,
+        subject: "Re: INV-12",
+        body: "Any update from accounting?",
+        client: email_client
+      )
+
+      expect(result.success?).to eq(true)
+      expect(invoice.reload.chase_status).to eq("needs_you")
+      expect(invoice.expected_pay_date).to be_nil
+    end
+  end
+
+  it "sends a reply and sleeps until the follow-up date" do
+    travel_to Time.utc(2026, 9, 18, 12) do
+      conversation = add_home_thread!
+      inbound = conversation.messages.create!(
+        external_message_id: "msg-reply",
+        direction: "client_to_user",
+        from_address: "ap@acme.com",
+        to_addresses: [ "owner@studio.com" ],
+        sent_at: Time.utc(2026, 9, 17, 15),
+        clean_body: "Checking with accounting",
+        created_at: Time.current
+      )
+      invoice.update!(
+        chase_status: "needs_you",
+        last_human_inbound_at: inbound.sent_at,
+        last_human_inbound_message: inbound
+      )
+      allow(email_client).to receive(:send_email).and_return("id" => "msg-reply-sent")
+
+      result = described_class.execute(
+        organization: organization,
+        invoice_id: invoice.id,
+        subject: "Re: INV-12",
+        body: "Any update from accounting?",
+        wait_until: "2026-09-23",
+        client: email_client
+      )
+
+      expect(result.success?).to eq(true)
+      expect(invoice.reload.chase_status).to eq("watching")
+      expect(invoice.expected_pay_date).to eq(Date.new(2026, 9, 23))
+    end
+  end
+
   it "refuses to send when books show the invoice paid" do
     add_home_thread!
-    invoice.update!(current_ar_status: "paid", balance_remaining: 0)
+    invoice.update!(books_status: "paid", balance_remaining: 0)
     result = described_class.execute(
       organization: organization,
       invoice_id: invoice.id,

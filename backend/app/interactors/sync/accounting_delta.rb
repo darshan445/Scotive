@@ -84,7 +84,7 @@ class Sync::AccountingDelta
 
     organization.invoices
       .where(integration_id: integration.id, external_id: ids)
-      .where.not(current_ar_status: %w[paid voided])
+      .books_open
       .left_outer_joins(:invoice_conversations)
       .where(invoice_conversations: { invoice_id: nil })
       .find_each { |invoice| Email::FindInvoiceThreadJob.perform_later(invoice.id) }

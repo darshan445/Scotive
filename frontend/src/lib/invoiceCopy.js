@@ -1,19 +1,23 @@
 import { formatDate } from "@/components/LedgerCard";
+import { chaseReason, invoiceBucket, BUCKET_LABELS } from "@/lib/chase";
 
-/** User-facing status labels — internal key `overdue` displays as Past due. */
+/** User-facing status labels — chase buckets, plus leftover keys. */
 export const STATUS_LABELS = {
-    invoiced: "Invoiced",
-    overdue: "Past due",
-    promised: "Promised",
-    promise_broken: "Promise broken",
-    broken_promise: "Promise broken",
-    disputed: "Disputed",
-    partially_paid: "Partially paid",
-    paid_unconfirmed: "Says paid",
+    needs_you: "Needs you",
+    watching: "Watching",
     paid: "Paid",
-    written_off: "Written off",
-    stale: "Gone quiet",
-    unmatched: "Unmatched",
+    stopped: "Stopped",
+    invoiced: "Watching",
+    overdue: "Watching",
+    promised: "Watching",
+    promise_broken: "Needs you",
+    broken_promise: "Needs you",
+    disputed: "Needs you",
+    partially_paid: "Watching",
+    paid_unconfirmed: "Needs you",
+    written_off: "Paid",
+    stale: "Watching",
+    unmatched: "Watching",
 };
 
 export function statusLabel(status) {
@@ -42,35 +46,11 @@ function formatCurrency(amount, currency = "USD") {
 
 /** Combined status when an invoice is both disputed and partially paid / says paid. */
 export function invoiceStatusDisplay(inv) {
-    const status = inv?.status;
-    const claimed = inv?.disputed_claim_amount;
-    const hasClaim = claimed != null && Number(claimed) > 0;
-    const pendingPay = hasPendingPaymentClaim(inv);
-    const confirmedPartial = !pendingPay && (
-        status === "partially_paid"
-        || (Number(inv?.paid_amount || 0) > 0.005
-            && Number(inv?.balance_remaining ?? inv?.amount ?? 0) > 0.005)
-    );
-
-    if (inv?.unmatched && !pendingPay && status !== "disputed" && !hasClaim) {
-        return "Unmatched";
-    }
-    if (pendingPay && (status === "disputed" || hasClaim)) {
-        return "Disputed · says paid";
-    }
-    if (pendingPay || status === "paid_unconfirmed") {
-        return "Says paid";
-    }
-    if ((status === "disputed" || hasClaim) && confirmedPartial) {
-        return "Disputed · partially paid";
-    }
-    if (status === "partially_paid" && hasClaim) {
-        return "Disputed · partially paid";
-    }
-    if (status === "disputed" && hasClaim) {
-        return statusLabel(status);
-    }
-    return statusLabel(status);
+    if (inv?.status === "needs_you" || inv?.chase_status === "needs_you") return "Needs you";
+    if (inv?.status === "stopped" || inv?.chase_status === "stopped") return "Stopped";
+    if (inv?.status === "paid" || inv?.books_status === "paid") return "Paid";
+    if (inv?.books_status === "voided") return "Paid";
+    return "Watching";
 }
 
 export function pastDueQuestion(inv) {
@@ -193,19 +173,13 @@ export function invoiceDisplayRef(inv) {
 
 /** Status + key date line for invoice cards (promise/due/sent). */
 export function invoiceStatusDateLine(inv) {
-    const status = invoiceStatusDisplay(inv);
-    if (inv?.status === "stale") return `${status} · No activity 120+ days`;
-    if (inv?.promise_date) return `${status} · ${formatDate(inv.promise_date)}`;
-    if (inv?.due_date) {
-        const due = formatDate(inv.due_date);
-        if (inv.status === "overdue") {
-            const late = pastDueDaysLabel(inv.due_date);
-            return late ? `${status} · ${due} (${late})` : `${status} · ${due}`;
-        }
-        return `${status} · Due ${due}`;
+    const bucket = invoiceBucket(inv);
+    const reason = chaseReason(inv);
+    const due = inv?.due_date ? `Due ${formatDate(inv.due_date)}` : null;
+    if (reason.title && reason.title !== BUCKET_LABELS[bucket]) {
+        return due ? `${reason.title} · ${due}` : reason.title;
     }
-    const sent = inv?.source_date || inv?.created_at;
-    return sent ? `${status} · ${formatDate(sent)}` : status;
+    return due ? `${BUCKET_LABELS[bucket]} · ${due}` : BUCKET_LABELS[bucket];
 }
 
 export function pastDueDaysLabel(dueDateIso) {

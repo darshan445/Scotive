@@ -31,9 +31,20 @@ module Cadence::Steps
         key: LADDER.fetch(index),
         offset: offset,
         due_date: today - offset,
-        statuses: offset.positive? ? %w[overdue partially_paid] : %w[invoiced overdue partially_paid]
+        books_statuses: %w[open partial]
       }
     end
+  end
+
+  # Next ladder step whose calendar date is strictly after today. Never rewinds.
+  def next_future_step(organization, invoice)
+    today = organization.today
+    offsets = organization.ladder_offsets
+    LADDER.each_with_index do |key, index|
+      milestone = invoice.due_date + offsets.fetch(index)
+      return { key: key, date: milestone, offset: offsets.fetch(index) } if milestone > today
+    end
+    nil
   end
 
   def current_key(organization, invoice)

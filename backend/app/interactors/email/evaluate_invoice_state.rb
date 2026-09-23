@@ -1,20 +1,14 @@
 # frozen_string_literal: true
 
 # Email::EvaluateInvoiceState Interactor
-# Purpose: AR Step 5 — one-invoice AI State Reader (rulebook_reeval). No cadence.
+# Purpose: human inbound pauses chase. Auto-reply / bounce does not. No status LLM.
 # Methods:
 # - execute
 
 class Email::EvaluateInvoiceState
   include ExecuteMethodHelper
   include LogHelper
-
-  PROMPT_PATH = Rails.root.join("prompts/rulebook_reeval.txt")
-  ALLOWED_STATUSES = %w[invoiced overdue promised broken_promise disputed paid_unconfirmed partially_paid].freeze
-  WEEKDAYS = {
-    "sunday" => 0, "monday" => 1, "tuesday" => 2, "wednesday" => 3,
-    "thursday" => 4, "friday" => 5, "saturday" => 6
-  }.freeze
+  include Invoices::ChaseWrite
 
   def self.execute(invoice:, client: Email::LlmClient.new)
     new(invoice: invoice, client: client).execute
@@ -29,16 +23,14 @@ class Email::EvaluateInvoiceState
     execute_log_and_return_open_struct do
       raise_string_error("Invoice is required") if invoice.blank?
 
-      if skip?
-        { skipped: true, status: invoice.current_ar_status }
+      if invoice.books_closed?
+        { skipped: true, reason: "books_closed", chase_status: invoice.chase_status }
       else
-        raw = call_reader!
-        commit!(raw)
+        apply_inbound!
         {
           skipped: false,
-          status: invoice.current_ar_status,
-          needs_reply: invoice.needs_reply,
-          events: Array(raw["new_events"]).size
+          chase_status: invoice.chase_status,
+          list_bucket: invoice.list_bucket
         }
       end
     end
@@ -48,329 +40,53 @@ class Email::EvaluateInvoiceState
 
   attr_reader :invoice, :client
 
-  def skip?
-    terminal? || messages.none? { |message| message.direction == "client_to_user" }
-  end
+  def apply_inbound!
+    inbound = invoice_messages.select { |message| message.direction == "client_to_user" }
+    inbound.each do |message|
+      next unless message.automatic?
 
-  def terminal?
-    invoice.balance_remaining.to_d <= 0 || %w[paid voided].include?(invoice.current_ar_status)
-  end
-
-  def call_reader!
-    raw = client.complete_json(system: prompt, user: payload.to_json)
-    raise_string_error("State reader returned invalid JSON") unless raw.is_a?(Hash)
-
-    raw.stringify_keys
-  rescue Faraday::Error, KeyError => e
-    raise_string_error("State reader failed: #{e.message.to_s.truncate(240)}")
-  end
-
-  def commit!(raw)
-    status = normalize_status(raw["status"])
-    events = normalize_events(Array(raw["new_events"]).map { |event| event.stringify_keys })
-    disputed = parse_amount(raw["disputed_claim_amount"])
-    if dispute_settled?(events)
-      disputed = nil
-      status = books_status if status == "disputed"
-    end
-    promise_date = resolved_promise_date(events, raw["promise_date"])
-    status, promise_date = apply_live_promise(status, promise_date)
-    disputed = nil unless status == "disputed" || (disputed.present? && status == "partially_paid")
-    status = books_status if status == "disputed" && disputed.blank? && events.none? { |event| event["type"].to_s == "dispute" }
-    promise_date = nil if status == "paid_unconfirmed"
-    needs_reply = resolved_needs_reply(raw["needs_reply"], events)
-    trigger_message = message_for(events.last)
-    previous_status = invoice.current_ar_status
-    previous_needs_reply = invoice.needs_reply
-    previous_promise = invoice.active_promise_date
-    previous_disputed = invoice.disputed_claim_amount
-
-    ActiveRecord::Base.transaction do
-      persist_events!(events)
-      invoice.update!(
-        current_ar_status: status,
-        needs_reply: needs_reply,
-        active_promise_date: promise_date,
-        disputed_claim_amount: disputed
-      )
-      changed = previous_status != status || previous_needs_reply != needs_reply ||
-        previous_promise != promise_date || previous_disputed != disputed
-      if changed || events.any?
-        invoice.invoice_state_transitions.create!(
-          from_status: previous_status,
-          to_status: status,
-          trigger_source: "ai_reader",
-          triggered_by_message: trigger_message,
-          promise_date: promise_date,
-          disputed_amount: disputed,
-          needs_reply: needs_reply,
-          reason_quote: events.last&.dig("quote").to_s.presence,
-          created_at: Time.current
-        )
-      end
-      messages.each { |message| message.update!(processed_by_ai: true) unless message.processed_by_ai? }
-    end
-  end
-
-  def normalize_events(events)
-    events.filter_map do |event|
-      type = event["type"].to_s
-      if type == "promise" && calendar_date_for(event).blank?
-        next unless question?(event["quote"])
-
-        event.merge("type" => "needs_reply")
-      else
-        event
-      end
-    end
-  end
-
-  def resolved_needs_reply(raw_flag, events)
-    last_client = messages.select { |message| message.direction == "client_to_user" }.last
-    last_user = messages.select { |message| message.direction == "user_to_client" }.last
-    return false if last_client && last_user && last_user.sent_at > last_client.sent_at
-
-    asked_at = last_question_at(events)
-    return !user_replied_after?(asked_at) if asked_at.present?
-    return false if last_message&.direction == "user_to_client"
-
-    ActiveModel::Type::Boolean.new.cast(raw_flag) || false
-  end
-
-  def last_question_at(events)
-    times = events.select { |event| event["type"].to_s == "needs_reply" }.filter_map { |event| message_for(event)&.sent_at }
-    messages.each do |message|
-      next unless message.direction == "client_to_user"
-      next unless question?(message.clean_body)
-
-      times << message.sent_at
-    end
-    times.compact.max
-  end
-
-  def user_replied_after?(asked_at)
-    messages.any? { |message| message.direction == "user_to_client" && message.sent_at > asked_at }
-  end
-
-  def last_message
-    messages.last
-  end
-
-  def question?(text)
-    value = text.to_s
-    return false if value.blank?
-
-    value.include?("?") || value.match?(/\b(can you|could you|please confirm|which |when |did you)\b/i)
-  end
-
-  def persist_events!(events)
-    events.each do |event|
-      type = event["type"].to_s
-      next if type.blank?
-
-      sender = event["sender"].to_s == "user" ? "user" : "client"
-      invoice.invoice_events.create!(
-        message: message_for(event),
-        event_type: type,
-        sender: sender,
-        quote: event["quote"].to_s.presence,
-        event_data: event["data"].is_a?(Hash) ? event["data"] : {},
-        confidence: event["confidence"],
-        created_at: Time.current
-      )
-    end
-  end
-
-  def normalize_status(value)
-    status = value.to_s
-    status = "paid_unconfirmed" if status == "paid"
-    status = books_status if status.blank? || status == "unmatched" || !ALLOWED_STATUSES.include?(status)
-    status
-  end
-
-  def resolved_promise_date(events, header_date)
-    standing = invoice.active_promise_date
-    events.each do |event|
-      case event["type"].to_s
-      when "promise"
-        standing = calendar_date_for(event) || standing
-      when "promise_retract", "paid_claim"
-        standing = nil
-      end
-    end
-    standing = parse_date(header_date) if standing.blank?
-    standing = standing_promise_from_thread if standing.blank? && events.none? { |event| %w[promise_retract paid_claim].include?(event["type"].to_s) }
-    standing
-  end
-
-  def apply_live_promise(status, promise_date)
-    return [ status, nil ] if status == "paid_unconfirmed"
-    return [ status, promise_date ] if %w[disputed partially_paid].include?(status)
-
-    if promise_date.present?
-      live = promise_date >= Date.current
-      return [ live ? "promised" : "broken_promise", promise_date ]
+      record_ignored!(message) unless already_event?(message)
     end
 
-    status = books_status if status == "promised"
-    [ status, nil ]
+    human = inbound.reject(&:automatic?).max_by(&:sent_at)
+    return if human.blank?
+    return if invoice.last_human_inbound_message_id == human.id
+
+    apply_human_inbound!(invoice, human)
+    suggest_wait!(human)
   end
 
-  def dispute_settled?(events)
-    last_dispute = events.rindex { |event| event["type"].to_s == "dispute" }
-    last_correction = events.rindex { |event| event["type"].to_s == "amount_correction" }
-    last_correction.present? && (last_dispute.nil? || last_correction > last_dispute)
+  def record_ignored!(message)
+    type = bounce?(message) ? "bounce_ignored" : "auto_reply_ignored"
+    record_chase_event!(invoice, type: type, message: message, quote: message.clean_body.to_s.strip.truncate(160))
   end
 
-  def standing_promise_from_thread
-    standing = nil
-    messages.each do |message|
-      text = message.clean_body.to_s
-      if message.direction == "user_to_client"
-        standing = nil if retract_text?(text)
-      else
-        standing = nil if paid_claim_text?(text)
-        next unless promise_text?(text)
-        next if question?(text) && !text.match?(/\bwill pay|we'll pay|we will pay|will remit|remit payment\b/i)
-
-        date = resolve_relative(text, message.sent_at.to_date)
-        standing = date if date
-      end
-    end
-    standing
+  def already_event?(message)
+    invoice.invoice_chase_events.exists?(message_id: message.id)
   end
 
-  def promise_text?(text)
-    text.to_s.match?(/\b(will pay|we'll pay|we will pay|will remit|remit payment|paying (this|next|on)|scheduled .{0,80}pay)\b/i)
+  def bounce?(message)
+    message.from_address.to_s.match?(/mailer-daemon|postmaster/i) ||
+      message.clean_body.to_s.match?(/delivery status notification|undeliverable/i)
   end
 
-  def retract_text?(text)
-    text.to_s.match?(/\bforget (that date|friday|monday|tuesday|wednesday|thursday|saturday|sunday)|date does not work|that date is off\b/i)
+  def suggest_wait!(message)
+    parsed = Email::ParseWaitDate.extract(message.clean_body, as_of: message.sent_at)
+    return if parsed.blank?
+
+    draft = pending_draft
+    return if draft.blank?
+
+    draft.update!(suggested_wait_date: parsed[:date], suggested_wait_quote: parsed[:quote])
   end
 
-  def paid_claim_text?(text)
-    text.to_s.match?(/\b(wire sent|have (already )?paid|processed (combined )?payment|sent it already|paid via|paid on)\b/i)
+  def pending_draft
+    invoice.outbox_messages.pending.order(created_at: :desc).first
   end
 
-  def calendar_date_for(event)
-    data = event["data"].is_a?(Hash) ? event["data"].stringify_keys : {}
-    explicit = parse_date(data["date"])
-    return explicit if explicit
-
-    anchor = parse_date(data["anchor_date"]) || message_for(event)&.sent_at&.to_date
-    resolve_relative(data["relative_phrase"].to_s, anchor)
-  end
-
-  def resolve_relative(phrase, anchor)
-    return if phrase.blank? || anchor.blank?
-
-    text = phrase.downcase
-    return anchor if text.match?(/\btoday\b|\btonight\b|\beod\b/)
-    return anchor + 1 if text.match?(/\btomorrow\b/)
-    return (anchor + (text.include?("next") ? 7 : 0)).end_of_week(:sunday) if text.match?(/end of (the )?week|this week|next week/) && WEEKDAYS.keys.none? { |day| text.include?(day) }
-
-    WEEKDAYS.each do |name, wday|
-      next unless text.include?(name)
-
-      delta = (wday - anchor.wday) % 7
-      delta = 7 if delta.zero? && text.include?("next")
-      return anchor + delta
-    end
-
-    parse_date(phrase)
-  end
-
-  def message_for(event)
-    return if event.blank?
-
-    id = event["message_id"].to_s
-    return if id.blank?
-
-    messages.find { |message| message.external_message_id == id }
-  end
-
-  def messages
-    @messages ||= Message.joins(conversation: :invoice_conversations)
+  def invoice_messages
+    Message.joins(conversation: :invoice_conversations)
       .where(invoice_conversations: { invoice_id: invoice.id })
-      .includes(conversation: :integration)
-      .order(:sent_at, :id)
-      .to_a
-  end
-
-  def payload
-    client_row = invoice.client
-    {
-      user_email: user_email,
-      client_email: client_row.primary_email,
-      associated_client_emails: Array(client_row.associated_emails).map { |email| email.to_s.downcase } - [ client_row.primary_email.to_s.downcase ],
-      anchor_invoice_ref: invoice.invoice_number,
-      tracked_state: {
-        invoice_ref: invoice.invoice_number,
-        amount: invoice.total_amount.to_f,
-        currency: invoice.currency,
-        due_date: invoice.due_date.iso8601,
-        due_date_status: "explicit",
-        status: books_status,
-        promise_date: nil,
-        paid_amount: paid_amount.to_f,
-        balance_remaining: invoice.balance_remaining.to_f,
-        disputed_claim_amount: nil,
-        as_of_date: Date.current.iso8601,
-        processed_message_ids: messages.select(&:processed_by_ai?).map(&:external_message_id)
-      },
-      messages: messages.map { |message| message_payload(message) }
-    }
-  end
-
-  def message_payload(message)
-    {
-      id: message.external_message_id,
-      thread_id: message.conversation.external_thread_id,
-      date: message.sent_at.utc.iso8601,
-      direction: message.direction,
-      from: message.from_address,
-      to: Array(message.to_addresses),
-      cc: Array(message.cc_addresses),
-      subject: message.conversation.subject.to_s,
-      body: message.clean_body.to_s,
-      attachment_names: [],
-      pdf_text: nil,
-      is_anchor: message.is_anchor?
-    }
-  end
-
-  def user_email
-    mailbox = messages.first&.conversation&.integration
-    mailbox&.account_name.presence || invoice.organization.users.order(:created_at).first&.email
-  end
-
-  def books_status
-    invoice.due_date < Date.current ? "overdue" : "invoiced"
-  end
-
-  def paid_amount
-    amount = invoice.total_amount.to_d - invoice.balance_remaining.to_d
-    amount.negative? ? 0 : amount
-  end
-
-  def prompt
-    File.read(PROMPT_PATH)
-  end
-
-  def parse_date(value)
-    return if value.blank?
-    return value if value.is_a?(Date)
-
-    Date.iso8601(value.to_s)
-  rescue ArgumentError
-    Date.parse(value.to_s) rescue nil
-  end
-
-  def parse_amount(value)
-    return if value.blank?
-
-    BigDecimal(value.to_s)
-  rescue ArgumentError
-    nil
+      .order(:sent_at)
   end
 end

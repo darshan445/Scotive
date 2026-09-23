@@ -10,8 +10,6 @@ class Email::RouteInboundMessage
   include LogHelper
   include Email::MailboxThreadPersistence
 
-  OPEN_STATUSES = %w[unmatched invoiced overdue promised broken_promise disputed paid_unconfirmed partially_paid].freeze
-
   def self.execute(organization:, mailbox:, message:, llm: Email::LlmClient.new, context_messages: nil)
     new(organization: organization, mailbox: mailbox, message: message, llm: llm, context_messages: context_messages).execute
   end
@@ -55,7 +53,7 @@ class Email::RouteInboundMessage
   end
 
   def persist_unknown!
-    open_invoices = organization.invoices.where(current_ar_status: OPEN_STATUSES).includes(:client).to_a
+    open_invoices = organization.invoices.books_open.includes(:client).to_a
     return { discarded: true, reason: "no_open_invoices" } if open_invoices.empty?
     return { discarded: true, reason: "automatic_reply" } if automatic_reply?(message)
 

@@ -44,7 +44,8 @@ RSpec.describe Digests::Send do
       due_date: Date.new(2026, 9, 1),
       total_amount: 100,
       balance_remaining: 100,
-      current_ar_status: "overdue"
+      books_status: "open",
+      chase_status: "needs_you"
     )
   end
 

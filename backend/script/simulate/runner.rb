@@ -577,9 +577,9 @@ module Simulate
         .count
       log [
         invoice.invoice_number,
-        "status=#{invoice.current_ar_status}",
-        "needs_reply=#{invoice.needs_reply}",
-        "promise=#{invoice.active_promise_date}",
+        "books=#{invoice.books_status}",
+        "chase=#{invoice.chase_status}",
+        "wait=#{invoice.expected_pay_date}",
         "balance=#{invoice.balance_remaining}",
         "threads=#{invoice.invoice_conversations.size}",
         "messages=#{message_count}"

@@ -7,7 +7,8 @@ import { AppShell } from "@/components/AppShell";
 import { ClientDetailSkeleton } from "@/components/PageSkeletons";
 import { api, extractError, unwrapData } from "@/lib/api";
 import { formatMoney, formatOpenTotals } from "@/components/LedgerCard";
-import { invoiceStatusDateLine, invoiceSubject, isJunkInvoiceRef } from "@/lib/invoiceCopy";
+import { invoiceSubject, isJunkInvoiceRef } from "@/lib/invoiceCopy";
+import { BUCKET_LABELS, BUCKET_PILL, chaseReason, invoiceBucket } from "@/lib/chase";
 import { navigateToInvoice } from "@/lib/invoiceNavigation";
 
 const RISK_STYLES = {
@@ -150,9 +151,15 @@ export default function ClientDetailPage() {
                                             {ref && !isJunkInvoiceRef(ref) && ref !== subject ? (
                                                 <div className="text-[11px] font-mono text-muted-foreground mt-0.5">{ref}</div>
                                             ) : null}
-                                            <div className="mt-1 text-[11px] font-mono text-muted-foreground">
-                                                {invoiceStatusDateLine(inv)}
+                                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border ${BUCKET_PILL[invoiceBucket(inv)]}`}>
+                                                    {BUCKET_LABELS[invoiceBucket(inv)]}
+                                                </span>
+                                                <span className="text-[12px] text-muted-foreground">{chaseReason(inv).title}</span>
                                             </div>
+                                            {inv.reason_quote ? (
+                                                <div className="mt-1 text-[12px] text-muted-foreground italic line-clamp-2">“{inv.reason_quote}”</div>
+                                            ) : null}
                                         </button>
                                     );
                                 })}

@@ -1,15 +1,10 @@
-import ReviewQueuePage from "@/views/ReviewQueue";
-import { ProtectedRoute } from "@/components/ProtectedRoute";
+import { redirect } from "next/navigation";
 
 export const metadata = {
-    title: "Review",
+    title: "Home",
     robots: { index: false, follow: false },
 };
 
 export default function Page() {
-    return (
-        <ProtectedRoute>
-            <ReviewQueuePage />
-        </ProtectedRoute>
-    );
+    redirect("/dashboard");
 }

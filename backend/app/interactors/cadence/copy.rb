@@ -23,7 +23,7 @@ module Cadence::Copy
     amount = money(invoice, invoice.total_amount)
     due = format_date(invoice.due_date)
     remaining = money(invoice, invoice.balance_remaining)
-    promise = format_date(invoice.active_promise_date)
+    promise = format_date(invoice.expected_pay_date)
 
     case step
     when "notice_minus_3"

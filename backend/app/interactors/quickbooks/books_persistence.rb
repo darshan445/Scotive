@@ -2,6 +2,8 @@
 
 # Shared QBO client/invoice upsert used by historical import and accounting webhooks.
 module Quickbooks::BooksPersistence
+  include Invoices::ChaseWrite
+
   PUBLIC_EMAIL_DOMAINS = %w[
     gmail.com googlemail.com yahoo.com ymail.com outlook.com hotmail.com
     live.com msn.com icloud.com me.com mac.com aol.com proton.me protonmail.com
@@ -60,8 +62,7 @@ module Quickbooks::BooksPersistence
     balance = BigDecimal(payload["Balance"].to_s)
     cc = parse_emails(payload.dig("BillEmailCc", "Address"))
     bcc = parse_emails(payload.dig("BillEmailBcc", "Address"))
-    status = next_status(invoice, total, balance, due_date)
-    previous_status = invoice.current_ar_status if existed
+    status = books_status_for(total, balance)
 
     invoice.assign_attributes(
       organization: organization,
@@ -74,36 +75,19 @@ module Quickbooks::BooksPersistence
       total_amount: total,
       balance_remaining: balance,
       cc_emails: cc,
-      bcc_emails: bcc,
-      current_ar_status: status
+      bcc_emails: bcc
     )
     token = pay_link_token(payload)
     invoice.pay_link_token = token if token.present? || !existed
-    invoice.active_promise_date = nil if status == "paid"
-    invoice.needs_reply = false if status == "paid"
-    raise_string_error(invoice.errors.full_messages.to_sentence) unless invoice.save
-
-    if !existed || previous_status != status
-      invoice.invoice_state_transitions.create!(
-        from_status: existed ? previous_status : nil,
-        to_status: status,
-        trigger_source: trigger_source,
-        created_at: Time.current
-      )
-    end
-
-    cancel_pending_outbox!(invoice, "paid_in_books") if status == "paid"
+    apply_books_status!(invoice, status)
     existed ? :updated : :created
   end
 
-  def next_status(invoice, total, balance, due_date)
+  def books_status_for(total, balance)
     return "paid" if balance <= 0
-    return "partially_paid" if total.positive? && balance < total
-    if invoice.persisted? && %w[promised disputed paid_unconfirmed broken_promise].include?(invoice.current_ar_status)
-      return invoice.current_ar_status
-    end
+    return "partial" if total.positive? && balance < total
 
-    due_date < Date.current ? "overdue" : "invoiced"
+    "open"
   end
 
   def pay_link_token(payload)
@@ -145,17 +129,10 @@ module Quickbooks::BooksPersistence
   end
 
   def void_local_invoice!(invoice, trigger_source: "books_webhook")
-    previous = invoice.current_ar_status
-    return invoice if previous == "voided"
+    return invoice if invoice.books_status == "voided"
 
-    invoice.update!(current_ar_status: "voided", balance_remaining: 0, needs_reply: false, active_promise_date: nil)
-    invoice.invoice_state_transitions.create!(
-      from_status: previous,
-      to_status: "voided",
-      trigger_source: trigger_source,
-      created_at: Time.current
-    )
-    cancel_pending_outbox!(invoice, "invoice_voided")
+    invoice.balance_remaining = 0
+    apply_books_status!(invoice, "voided")
     invoice
   end
 end

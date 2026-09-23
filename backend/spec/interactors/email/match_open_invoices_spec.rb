@@ -54,7 +54,7 @@ RSpec.describe Email::MatchOpenInvoices do
       balance_remaining: balance.nil? ? amount : balance,
       pay_link_token: token,
       cc_emails: cc_emails,
-      current_ar_status: status
+      books_status: (status == "partial" ? "partial" : %w[paid voided].include?(status) ? status : "open"), chase_status: (%w[needs_you stopped].include?(status) ? status : "watching")
     )
   end
 
@@ -203,8 +203,8 @@ RSpec.describe Email::MatchOpenInvoices do
       [ "t-home", true ],
       [ "t-split", false ]
     )
-    expect(invoice.reload.current_ar_status).to eq("overdue")
-    expect(invoice.invoice_state_transitions.last.trigger_source).to eq("clock_cron")
+    expect(invoice.reload.books_status).to eq("open")
+    expect(invoice.chase_status).to eq("watching")
     expect(Message.joins(:conversation).where(conversations: { organization_id: organization.id }).pluck(:direction).uniq).to eq([ "user_to_client" ])
   end
 
@@ -225,7 +225,7 @@ RSpec.describe Email::MatchOpenInvoices do
     result = run_match
 
     expect(result).to be_success
-    expect(invoice.reload.current_ar_status).to eq("invoiced")
+    expect(invoice.reload.books_status).to eq("open")
     expect(invoice.reload.conversations.first.messages.first.direction).to eq("client_to_user")
     expect(result.data.dig(:counts, :ai_queued)).to eq(1)
     expect(Email::EvaluateInvoiceStateJob).to have_been_enqueued.with(invoice.id)
@@ -284,7 +284,7 @@ RSpec.describe Email::MatchOpenInvoices do
     expect(result).to be_success
     expect(first.conversations.find_by(external_thread_id: "t-qbo")).to be_present
     expect(second.conversations.find_by(external_thread_id: "t-qbo")).to be_present
-    expect(first.reload.current_ar_status).to eq("overdue")
+    expect(first.reload.books_status).to eq("open")
     expect(Email::FindInvoiceThreadJob).not_to have_been_enqueued
     expect(Email::EvaluateInvoiceStateJob).to have_been_enqueued.with(first.id)
   end
@@ -643,7 +643,7 @@ RSpec.describe Email::MatchOpenInvoices do
 
     expect(result).to be_success
     expect(home_thread_id(invoice)).to eq("t-token-home")
-    expect(invoice.reload.current_ar_status).to eq("overdue")
+    expect(invoice.reload.books_status).to eq("open")
     expect(Email::EvaluateInvoiceStateJob).not_to have_been_enqueued
   end
 
@@ -690,7 +690,7 @@ RSpec.describe Email::MatchOpenInvoices do
 
     expect(result).to be_success
     expect(home_thread_id(invoice)).to eq("t-qbo-link")
-    expect(invoice.reload.current_ar_status).to eq("overdue")
+    expect(invoice.reload.books_status).to eq("open")
     expect(Email::EvaluateInvoiceStateJob).not_to have_been_enqueued
   end
 
@@ -910,7 +910,7 @@ RSpec.describe Email::MatchOpenInvoices do
     result = run_match
 
     expect(result).to be_success
-    expect(clocked.reload.current_ar_status).to eq("overdue")
+    expect(clocked.reload.books_status).to eq("open")
     expect(clocked.conversations.find_by(external_thread_id: "t-clock")).to be_present
     expect(missed.conversations).to be_empty
     expect(result.data.dig(:counts, :fallback_queued)).to eq(1)

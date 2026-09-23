@@ -40,7 +40,7 @@ RSpec.describe Email::MailboxThreadPersistence do
       due_date: Date.new(2026, 9, 25),
       total_amount: 3240,
       balance_remaining: 3240,
-      current_ar_status: "invoiced"
+      books_status: "open"
     )
   end
   let(:helper) do

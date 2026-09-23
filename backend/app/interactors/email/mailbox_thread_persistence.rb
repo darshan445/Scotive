@@ -50,6 +50,7 @@ module Email::MailboxThreadPersistence
     record.cc_addresses = message[:cc]
     record.sent_at = message[:sent_at]
     record.clean_body = message[:clean_body].to_s.delete("\u0000")
+    record.automatic = true if automatic_message?(message)
     record.is_anchor = true if anchor || record.is_anchor?
     record.created_at ||= Time.current
     raise_string_error(record.errors.full_messages.to_sentence) unless record.save
@@ -72,7 +73,7 @@ module Email::MailboxThreadPersistence
     return if invoice_ids.empty?
 
     Invoice.where(id: invoice_ids.to_a, organization_id: organization.id).find_each do |invoice|
-      next if %w[paid voided partially_paid promised disputed paid_unconfirmed broken_promise].include?(invoice.current_ar_status)
+      next if invoice.books_closed?
 
       directions = Message.joins(conversation: :invoice_conversations)
         .where(invoice_conversations: { invoice_id: invoice.id })
@@ -80,17 +81,6 @@ module Email::MailboxThreadPersistence
       next if directions.empty?
       next unless directions.all? { |direction| direction == "user_to_client" }
 
-      clock_status = invoice.due_date < Date.current ? "overdue" : "invoiced"
-      previous = invoice.current_ar_status
-      invoice.update!(current_ar_status: clock_status, needs_reply: false)
-      next if previous == clock_status
-
-      invoice.invoice_state_transitions.create!(
-        from_status: previous,
-        to_status: clock_status,
-        trigger_source: "clock_cron",
-        created_at: Time.current
-      )
       counts[:outbound_clocked] += 1
     end
   end
@@ -289,8 +279,28 @@ module Email::MailboxThreadPersistence
   end
 
   def automatic_reply?(message)
+    automatic_message?(message)
+  end
+
+  def automatic_message?(message)
+    return true if message[:automatic]
+    return true if bounce_from?(message)
+
     subject = message[:subject].to_s
-    subject.match?(/\A\s*(automatic reply|auto[- ]reply|out of office|ooo:)/i)
+    return true if subject.match?(/\A\s*(automatic reply|auto[- ]reply|out of office|ooo:)/i)
+
+    headers = message[:headers].is_a?(Hash) ? message[:headers] : {}
+    auto = headers["auto-submitted"].to_s.presence || headers["Auto-Submitted"].to_s
+    return true if auto.present? && !auto.match?(/\Ano\z/i)
+    return true if headers["x-autoreply"].present? || headers["X-Autoreply"].present?
+    return true if headers["x-autorespond"].present? || headers["X-Autorespond"].present?
+
+    false
+  end
+
+  def bounce_from?(message)
+    message[:from].to_s.match?(/mailer-daemon|postmaster/i) ||
+      message[:subject].to_s.match?(/delivery status|undeliverable|returned mail/i)
   end
 
   def invoice_payment_intent?(thread_messages)
@@ -406,7 +416,9 @@ module Email::MailboxThreadPersistence
       sent_at: sent_at,
       raw_body: raw,
       clean_body: sanitize_body(raw),
-      attachment_names: attachment_names(payload)
+      attachment_names: attachment_names(payload),
+      headers: payload["headers"].is_a?(Hash) ? payload["headers"] : {},
+      automatic: payload["is_auto_reply"] == true || payload["auto_reply"] == true
     }
   end
 

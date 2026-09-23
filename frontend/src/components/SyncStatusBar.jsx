@@ -49,7 +49,7 @@ async function waitForSyncIdle(prevLastSyncedAt, { maxMs = LONG_JOB_TIMEOUT_MS }
 /**
  * Sync strip + live sent-mail watching indicator.
  */
-export function SyncStatusBar({ onSynced, watching = false, openInvoiceCount = 0 }) {
+export function SyncStatusBar({ onSynced, watching = false, openInvoiceCount = 0, openTotal = null }) {
     const [state, setState] = useState(null);
     const [busy, setBusy] = useState(false);
     const [nowTick, setNowTick] = useState(0);
@@ -135,7 +135,8 @@ export function SyncStatusBar({ onSynced, watching = false, openInvoiceCount = 0
                         <span className="inline-flex items-center gap-1.5 min-w-0">
                             <Eye className="w-3.5 h-3.5 flex-shrink-0 text-emerald-700" />
                             <span className="truncate text-emerald-700">
-                                Watching {openInvoiceCount} open invoice{openInvoiceCount === 1 ? "" : "s"}
+                                {openInvoiceCount} open invoice{openInvoiceCount === 1 ? "" : "s"}
+                                {openTotal ? ` · ${openTotal}` : ""}
                             </span>
                             {syncedAgo ? (
                                 <span className="truncate text-muted-foreground" data-testid="sync-last-ago">

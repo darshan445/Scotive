@@ -40,7 +40,7 @@ RSpec.describe Invoices::BuildConversation do
       due_date: Date.new(2026, 10, 1),
       total_amount: 500,
       balance_remaining: 500,
-      current_ar_status: "promised"
+      chase_status: "watching"
     )
   end
 

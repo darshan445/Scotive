@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_09_18_193000) do
+ActiveRecord::Schema[8.1].define(version: 2026_09_23_154500) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -77,6 +77,18 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_18_193000) do
     t.index ["organization_id"], name: "index_integrations_on_organization_id"
   end
 
+  create_table "invoice_chase_events", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.string "actor", default: "system", null: false
+    t.datetime "created_at", null: false
+    t.string "event_type", null: false
+    t.date "expected_pay_date"
+    t.uuid "invoice_id", null: false
+    t.uuid "message_id"
+    t.text "quote"
+    t.index ["invoice_id", "created_at"], name: "idx_invoice_chase_events"
+    t.index ["invoice_id"], name: "index_invoice_chase_events_on_invoice_id"
+  end
+
   create_table "invoice_conversations", primary_key: ["invoice_id", "conversation_id"], force: :cascade do |t|
     t.uuid "conversation_id", null: false
     t.datetime "created_at", null: false
@@ -85,60 +97,31 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_18_193000) do
     t.index ["conversation_id"], name: "idx_invoice_conversations_conv"
   end
 
-  create_table "invoice_events", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
-    t.decimal "confidence", precision: 3, scale: 2
-    t.datetime "created_at", null: false
-    t.jsonb "event_data", default: {}, null: false
-    t.string "event_type", null: false
-    t.uuid "invoice_id", null: false
-    t.uuid "message_id"
-    t.text "quote"
-    t.string "sender", null: false
-    t.index ["invoice_id", "created_at"], name: "idx_invoice_events_invoice"
-    t.index ["invoice_id"], name: "index_invoice_events_on_invoice_id"
-  end
-
-  create_table "invoice_state_transitions", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
-    t.datetime "created_at", null: false
-    t.decimal "disputed_amount", precision: 12, scale: 2
-    t.string "from_status"
-    t.uuid "invoice_id", null: false
-    t.boolean "is_reverted", default: false, null: false
-    t.boolean "needs_reply", default: false, null: false
-    t.date "promise_date"
-    t.text "reason_quote"
-    t.string "to_status", null: false
-    t.string "trigger_source", null: false
-    t.uuid "triggered_by_message_id"
-    t.index ["invoice_id", "created_at"], name: "idx_state_transitions_audit", order: { created_at: :desc }
-    t.index ["invoice_id"], name: "index_invoice_state_transitions_on_invoice_id"
-  end
-
   create_table "invoices", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
-    t.date "active_promise_date"
     t.decimal "balance_remaining", precision: 12, scale: 2, null: false
     t.jsonb "bcc_emails", default: [], null: false
+    t.string "books_status", default: "open", null: false
     t.jsonb "cc_emails", default: [], null: false
+    t.string "chase_status", default: "watching", null: false
     t.uuid "client_id", null: false
     t.datetime "created_at", null: false
     t.string "currency", default: "USD", null: false
-    t.string "current_ar_status", default: "invoiced", null: false
-    t.decimal "disputed_claim_amount", precision: 12, scale: 2
     t.date "due_date", null: false
+    t.date "expected_pay_date"
     t.string "external_id", null: false
     t.uuid "integration_id", null: false
     t.string "invoice_number", null: false
     t.date "issue_date", null: false
-    t.boolean "needs_reply", default: false, null: false
+    t.datetime "last_human_inbound_at"
+    t.uuid "last_human_inbound_message_id"
     t.uuid "organization_id", null: false
     t.string "pay_link_token"
-    t.datetime "snoozed_until"
     t.decimal "total_amount", precision: 12, scale: 2, null: false
     t.datetime "updated_at", null: false
     t.index ["client_id"], name: "index_invoices_on_client_id"
     t.index ["integration_id", "external_id"], name: "uq_invoices_integration_external", unique: true
     t.index ["integration_id"], name: "index_invoices_on_integration_id"
-    t.index ["organization_id", "current_ar_status", "due_date"], name: "idx_invoices_status_dates"
+    t.index ["organization_id", "books_status", "chase_status", "expected_pay_date"], name: "idx_invoices_chase_list"
     t.index ["organization_id", "invoice_number"], name: "idx_invoices_number"
     t.index ["organization_id", "pay_link_token"], name: "idx_invoices_token", where: "(pay_link_token IS NOT NULL)"
     t.index ["organization_id"], name: "index_invoices_on_organization_id"
@@ -153,6 +136,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_18_193000) do
   end
 
   create_table "messages", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.boolean "automatic", default: false, null: false
     t.jsonb "cc_addresses", default: [], null: false
     t.text "clean_body"
     t.uuid "conversation_id", null: false
@@ -161,7 +145,6 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_18_193000) do
     t.string "external_message_id", null: false
     t.string "from_address", null: false
     t.boolean "is_anchor", default: false, null: false
-    t.boolean "processed_by_ai", default: false, null: false
     t.datetime "sent_at", null: false
     t.jsonb "to_addresses", default: [], null: false
     t.index ["conversation_id", "external_message_id"], name: "uq_messages_conversation_ext_id", unique: true
@@ -178,6 +161,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_18_193000) do
     t.boolean "friendly_auto_send", default: true, null: false
     t.datetime "last_digest_sent_at"
     t.string "name", null: false
+    t.boolean "onboarding_modal_dismissed", default: false, null: false
     t.string "time_zone", default: "UTC", null: false
     t.datetime "updated_at", null: false
   end
@@ -195,6 +179,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_18_193000) do
     t.datetime "sent_at"
     t.string "status", default: "scheduled", null: false
     t.text "subject", null: false
+    t.date "suggested_wait_date"
+    t.text "suggested_wait_quote"
     t.string "to_address", null: false
     t.datetime "updated_at", null: false
     t.index ["conversation_id"], name: "index_outbox_messages_on_conversation_id"
@@ -248,14 +234,13 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_18_193000) do
   add_foreign_key "conversations", "integrations"
   add_foreign_key "conversations", "organizations"
   add_foreign_key "integrations", "organizations"
+  add_foreign_key "invoice_chase_events", "invoices"
+  add_foreign_key "invoice_chase_events", "messages", on_delete: :nullify
   add_foreign_key "invoice_conversations", "conversations"
   add_foreign_key "invoice_conversations", "invoices"
-  add_foreign_key "invoice_events", "invoices"
-  add_foreign_key "invoice_events", "messages", on_delete: :nullify
-  add_foreign_key "invoice_state_transitions", "invoices"
-  add_foreign_key "invoice_state_transitions", "messages", column: "triggered_by_message_id", on_delete: :nullify
   add_foreign_key "invoices", "clients"
   add_foreign_key "invoices", "integrations"
+  add_foreign_key "invoices", "messages", column: "last_human_inbound_message_id", on_delete: :nullify
   add_foreign_key "invoices", "organizations"
   add_foreign_key "messages", "conversations"
   add_foreign_key "outbox_messages", "conversations", on_delete: :nullify

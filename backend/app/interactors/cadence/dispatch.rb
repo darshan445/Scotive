@@ -60,14 +60,16 @@ class Cadence::Dispatch
   end
 
   def guard_reason(invoice)
-    if invoice.balance_remaining.to_d <= 0 || %w[paid voided].include?(invoice.current_ar_status)
+    if invoice.books_closed?
       "paid_in_books"
-    elsif invoice.needs_reply
-      "client_awaiting_human_reply"
-    elsif %w[disputed paid_unconfirmed promised].include?(invoice.current_ar_status)
-      "blocked_by_status"
-    elsif invoice.snoozed_until.present? && invoice.snoozed_until > Time.current
-      "invoice_snoozed_by_user"
+    elsif invoice.last_human_inbound_at.present?
+      "human_conversation"
+    elsif invoice.chase_status == "needs_you"
+      "chase_paused"
+    elsif invoice.chase_status == "stopped"
+      "stopped_by_user"
+    elsif invoice.sleeping?
+      "waiting_until_date"
     elsif fatigue?(invoice)
       "anti_fatigue_cooldown"
     end

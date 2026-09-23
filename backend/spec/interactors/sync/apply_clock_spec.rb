@@ -12,7 +12,6 @@ RSpec.describe Sync::ApplyClock do
       provider: "qbo",
       external_account_id: "realm-1",
       account_name: "Studio",
-      access_token: "at",
       connection_status: "connected"
     )
   end
@@ -21,81 +20,99 @@ RSpec.describe Sync::ApplyClock do
       integration: qbo,
       external_id: "1",
       name: "Acme",
-      primary_email: "ap@acme.com",
-      domain: "acme.com",
-      associated_emails: [ "ap@acme.com" ]
+      primary_email: "ap@acme.com"
     )
   end
+  let(:qbo_client) { instance_double(Quickbooks::QuickbookClient) }
 
-  def create_invoice!(status:, due_date:, promise_date: nil, balance: 100)
+  def create_invoice!(chase:, due_date:, wait: nil, balance: 100, external_id: nil, books: "open")
     organization.invoices.create!(
       integration: qbo,
       client: client_row,
-      external_id: SecureRandom.hex(4),
-      invoice_number: "INV-#{SecureRandom.hex(2)}",
+      external_id: external_id || SecureRandom.uuid,
+      invoice_number: "INV-#{SecureRandom.hex(3)}",
       issue_date: Date.new(2026, 8, 1),
       due_date: due_date,
       total_amount: 100,
       balance_remaining: balance,
-      current_ar_status: status,
-      active_promise_date: promise_date
+      books_status: books,
+      chase_status: chase,
+      expected_pay_date: wait
     )
   end
 
-  it "moves past-due invoiced rows to overdue and expired promises to broken_promise" do
-    travel_to Time.utc(2026, 9, 18, 12) do
-      overdue_row = create_invoice!(status: "invoiced", due_date: Date.new(2026, 9, 17))
-      still_open = create_invoice!(status: "invoiced", due_date: Date.new(2026, 9, 19))
-      broken = create_invoice!(status: "promised", due_date: Date.new(2026, 9, 30), promise_date: Date.new(2026, 9, 17))
-      waiting = create_invoice!(status: "promised", due_date: Date.new(2026, 9, 30), promise_date: Date.new(2026, 9, 20))
-      paid = create_invoice!(status: "invoiced", due_date: Date.new(2026, 9, 1), balance: 0)
+  def qbo_payload(id:, balance:)
+    {
+      "Id" => id,
+      "DocNumber" => "INV-#{id}",
+      "TxnDate" => "2026-08-01",
+      "DueDate" => "2026-09-30",
+      "TotalAmt" => 100,
+      "Balance" => balance,
+      "CustomerRef" => { "value" => "1", "name" => "Acme" }
+    }
+  end
 
-      result = described_class.execute(organization: organization)
+  it "moves an expired wait back to Needs you and leaves a future wait in Watching" do
+    travel_to Time.utc(2026, 9, 18, 12) do
+      expired = create_invoice!(chase: "watching", due_date: Date.new(2026, 9, 30), wait: Date.new(2026, 9, 17))
+      waiting = create_invoice!(chase: "watching", due_date: Date.new(2026, 9, 30), wait: Date.new(2026, 9, 20))
+      open_row = create_invoice!(chase: "watching", due_date: Date.new(2026, 9, 30))
+
+      result = described_class.execute(organization: organization, client: qbo_client)
       expect(result.success?).to eq(true)
-      expect(result.data[:overdue]).to eq(1)
-      expect(result.data[:broken_promise]).to eq(1)
-      expect(overdue_row.reload.current_ar_status).to eq("overdue")
-      expect(overdue_row.invoice_state_transitions.last.trigger_source).to eq("clock_cron")
-      expect(still_open.reload.current_ar_status).to eq("invoiced")
-      expect(broken.reload.current_ar_status).to eq("broken_promise")
-      expect(waiting.reload.current_ar_status).to eq("promised")
-      expect(paid.reload.current_ar_status).to eq("invoiced")
+      expect(result.data[:wait_expired]).to eq(1)
+      expect(expired.reload.chase_status).to eq("needs_you")
+      expect(expired.invoice_chase_events.last.event_type).to eq("wait_expired")
+      expect(waiting.reload.chase_status).to eq("watching")
+      expect(open_row.reload.chase_status).to eq("watching")
     end
   end
 
-  it "enqueues a broken-promise draft when an expired promise flips" do
+  it "asks QuickBooks before flipping and stays Paid when the balance is zero" do
+    qbo.update!(access_token: "at", refresh_token: "rt", token_expires_at: 1.hour.from_now)
     travel_to Time.utc(2026, 9, 18, 12) do
-      mailbox = organization.integrations.create!(
-        category: "mailbox",
-        provider: "gmail",
-        external_account_id: "acc-gmail",
-        account_name: "owner@studio.com",
-        connection_status: "connected"
+      paid = create_invoice!(
+        chase: "watching",
+        due_date: Date.new(2026, 9, 30),
+        wait: Date.new(2026, 9, 17),
+        external_id: "95"
       )
-      invoice = create_invoice!(status: "promised", due_date: Date.new(2026, 9, 30), promise_date: Date.new(2026, 9, 17))
-      conversation = organization.conversations.create!(
-        integration: mailbox,
-        external_thread_id: "t-home",
-        subject: invoice.invoice_number
+      unpaid = create_invoice!(
+        chase: "watching",
+        due_date: Date.new(2026, 9, 30),
+        wait: Date.new(2026, 9, 17),
+        external_id: "96"
       )
-      InvoiceConversation.create!(invoice: invoice, conversation: conversation, is_primary: true, created_at: Time.current)
-      conversation.messages.create!(
-        external_message_id: "msg-1",
-        direction: "user_to_client",
-        from_address: "owner@studio.com",
-        to_addresses: [ "ap@acme.com" ],
-        sent_at: Time.utc(2026, 9, 1, 12),
-        clean_body: "Invoice attached",
-        is_anchor: true,
-        created_at: Time.current
-      )
+      allow(qbo_client).to receive(:get_invoice).with(hash_including(id: "95")).and_return(qbo_payload(id: "95", balance: 0))
+      allow(qbo_client).to receive(:get_invoice).with(hash_including(id: "96")).and_return(qbo_payload(id: "96", balance: 100))
 
-      result = described_class.execute(organization: organization)
+      result = described_class.execute(organization: organization, client: qbo_client)
       expect(result.success?).to eq(true)
-      row = invoice.outbox_messages.sole
-      expect(invoice.reload.current_ar_status).to eq("broken_promise")
-      expect(row.status).to eq("draft")
-      expect(row.cadence_step).to eq("broken_promise")
+      expect(result.data[:wait_expired]).to eq(1)
+      expect(paid.reload.books_status).to eq("paid")
+      expect(paid.chase_status).to eq("watching")
+      expect(paid.list_bucket).to eq("paid")
+      expect(unpaid.reload.chase_status).to eq("needs_you")
+      expect(unpaid.books_status).to eq("open")
+    end
+  end
+
+  it "does not flip when QuickBooks cannot be reached" do
+    qbo.update!(access_token: "at", refresh_token: "rt", token_expires_at: 1.hour.from_now)
+    travel_to Time.utc(2026, 9, 18, 12) do
+      row = create_invoice!(
+        chase: "watching",
+        due_date: Date.new(2026, 9, 30),
+        wait: Date.new(2026, 9, 17),
+        external_id: "97"
+      )
+      allow(qbo_client).to receive(:get_invoice).and_raise(Faraday::TimeoutError.new("timeout"))
+
+      result = described_class.execute(organization: organization, client: qbo_client)
+      expect(result.success?).to eq(true)
+      expect(result.data[:wait_expired]).to eq(0)
+      expect(row.reload.chase_status).to eq("watching")
     end
   end
 end

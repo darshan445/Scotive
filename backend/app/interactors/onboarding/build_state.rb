@@ -32,9 +32,11 @@ class Onboarding::BuildState
         phase: phase,
         qbo_connected: qbo[:connected],
         gmail_connected: mail[:connected],
+        mail_provider: mail[:provider],
         last_invoice_import_at: qbo[:last_invoice_import_at],
         qbo_import_progress: qbo[:import_progress],
-        qbo_pipeline: pipeline
+        qbo_pipeline: pipeline,
+        onboarding_modal_dismissed: organization.onboarding_modal_dismissed
       }
     end
   end

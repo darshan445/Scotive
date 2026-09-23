@@ -1,15 +1,21 @@
+import {
+    isNeedsYouInvoice,
+    isPaidInvoice,
+    isStoppedInvoice,
+    isWatchingInvoice,
+    needsYouInvoices,
+    watchingInvoices,
+    stoppedInvoices,
+} from "@/lib/chase";
+
 /** Closed invoices — hidden from the open ledger tab. */
 export const HISTORY_INVOICE_STATUSES = new Set(["paid", "written_off"]);
 
 export const STATUS_FILTER_CHIPS = [
     { key: "all", label: "All" },
-    { key: "overdue", label: "Overdue" },
-    { key: "promised", label: "Promised" },
-    { key: "disputed", label: "Disputed" },
-    { key: "paid_unconfirmed", label: "Says paid" },
-    { key: "invoiced", label: "Invoiced" },
-    { key: "partially_paid", label: "Partially paid" },
-    { key: "promise_broken", label: "Broken promise" },
+    { key: "needs_you", label: "Needs you" },
+    { key: "watching", label: "Watching" },
+    { key: "stopped", label: "Stopped" },
 ];
 
 export const SORT_OPTIONS = [
@@ -20,54 +26,26 @@ export const SORT_OPTIONS = [
 ];
 
 export function isTrackingPaused(inv) {
-    return Boolean(inv?.tracking_paused);
+    return isStoppedInvoice(inv);
 }
 
-/** Active open rows — excludes paid/written_off and user-paused. */
 export function isOpenLedgerInvoice(inv) {
-    return inv?.status
-        && !HISTORY_INVOICE_STATUSES.has(inv.status)
-        && !isTrackingPaused(inv);
+    return Boolean(inv) && !isPaidInvoice(inv) && !isStoppedInvoice(inv);
 }
 
 export function isHistoryLedgerInvoice(inv) {
-    return inv?.status && HISTORY_INVOICE_STATUSES.has(inv.status);
+    return isPaidInvoice(inv);
 }
 
-/** User-paused open invoices (Paused tab). */
 export function isPausedLedgerInvoice(inv) {
-    return isTrackingPaused(inv) && inv?.status && !HISTORY_INVOICE_STATUSES.has(inv.status);
+    return isStoppedInvoice(inv);
 }
 
-/**
- * Amount that counts toward Outstanding / You're Owed / client subtotals.
- * Unconfirmed payment claims never reduce this.
- */
 export function outstandingBalance(inv) {
     if (!inv) return 0;
     const amt = Number(inv.amount || 0);
     const bal = inv.balance_remaining != null ? Number(inv.balance_remaining) : amt;
-    const pending = Boolean(inv.payment_claim_pending) || inv.status === "paid_unconfirmed";
-    if (!pending) return bal;
-
-    if (inv.claim_balance_before != null) {
-        return Math.max(0, Number(inv.claim_balance_before));
-    }
-    if (inv.claim_paid_before != null) {
-        return Math.max(0, Math.round((amt - Number(inv.claim_paid_before || 0)) * 100) / 100);
-    }
-    const claim = Number(inv.payment_claim_amount);
-    if (Number.isFinite(claim) && claim > 0.005) {
-        if (bal + 0.005 < amt && Math.abs((bal + claim) - amt) <= Math.max(0.02, amt * 0.001)) {
-            return Math.round((bal + claim) * 100) / 100;
-        }
-        if (bal <= 0.005) {
-            return Math.abs(claim - amt) <= 0.02 ? Math.max(claim, amt) : Math.round((bal + claim) * 100) / 100;
-        }
-        return bal;
-    }
-    if (inv.status === "paid_unconfirmed" && bal <= 0.005) return amt;
-    return bal;
+    return bal > 0 ? bal : 0;
 }
 
 function _ts(iso) {
@@ -86,24 +64,9 @@ function _dayTs(iso) {
 
 function matchesStatusFilter(inv, filter) {
     if (!filter || filter === "all") return true;
-    if (filter === "disputed") {
-        return inv.status === "disputed"
-            || (inv.disputed_claim_amount != null && Number(inv.disputed_claim_amount) > 0);
-    }
-    if (filter === "overdue") {
-        return inv.status === "overdue" || inv.status === "promise_broken";
-    }
-    if (filter === "partially_paid") {
-        return inv.status === "partially_paid"
-            || (Number(inv.paid_amount || 0) > 0.005
-                && Number(inv.balance_remaining ?? inv.amount ?? 0) > 0.005
-                && !inv.payment_claim_pending
-                && inv.status !== "paid_unconfirmed"
-                && !HISTORY_INVOICE_STATUSES.has(inv.status));
-    }
-    if (filter === "paid_unconfirmed") {
-        return inv.status === "paid_unconfirmed" || inv.payment_claim_pending;
-    }
+    if (filter === "needs_you") return isNeedsYouInvoice(inv);
+    if (filter === "watching") return isWatchingInvoice(inv);
+    if (filter === "stopped") return isStoppedInvoice(inv);
     return inv.status === filter;
 }
 
@@ -136,8 +99,8 @@ function sortInvoices(list, sortKey) {
         return rows;
     }
     rows.sort((a, b) => {
-        const ka = _dayTs(a.promise_date) ?? _dayTs(a.due_date);
-        const kb = _dayTs(b.promise_date) ?? _dayTs(b.due_date);
+        const ka = _dayTs(a.expected_pay_date) ?? _dayTs(a.due_date);
+        const kb = _dayTs(b.expected_pay_date) ?? _dayTs(b.due_date);
         if (ka == null && kb == null) return 0;
         if (ka == null) return 1;
         if (kb == null) return -1;
@@ -146,25 +109,15 @@ function sortInvoices(list, sortKey) {
     return rows;
 }
 
-/** Open rows with optional status filter + sort. */
 export function openLedgerInvoices(invoices = [], { statusFilter = "all", sort = "due_soonest" } = {}) {
     const open = invoices.filter(isOpenLedgerInvoice).filter((inv) => matchesStatusFilter(inv, statusFilter));
     return sortInvoices(open, sort);
 }
 
-/** User-paused invoices — most recently paused first. */
 export function pausedLedgerInvoices(invoices = []) {
-    return invoices
-        .filter(isPausedLedgerInvoice)
-        .slice()
-        .sort((a, b) => {
-            const ka = _ts(a.status_updated_at) || _ts(a.source_date) || _ts(a.created_at);
-            const kb = _ts(b.status_updated_at) || _ts(b.source_date) || _ts(b.created_at);
-            return kb - ka;
-        });
+    return stoppedInvoices(invoices);
 }
 
-/** Group open invoices under client headers with subtotals. */
 export function groupInvoicesByClient(invoices = []) {
     const map = new Map();
     for (const inv of invoices) {
@@ -188,7 +141,6 @@ export function groupInvoicesByClient(invoices = []) {
     return [...map.values()];
 }
 
-/** Paid / written-off — most recently closed first. */
 export function historyLedgerInvoices(invoices = []) {
     return invoices
         .filter(isHistoryLedgerInvoice)
@@ -200,11 +152,10 @@ export function historyLedgerInvoices(invoices = []) {
         });
 }
 
-/** Totals for the paid / closed ledger tab. */
 export function historyLedgerSummary(invoices = []) {
     const history = historyLedgerInvoices(invoices);
-    const paid = history.filter((inv) => inv.status === "paid");
-    const writtenOff = history.filter((inv) => inv.status === "written_off");
+    const paid = history.filter((inv) => inv.books_status !== "voided");
+    const writtenOff = history.filter((inv) => inv.books_status === "voided");
 
     const totalsByCurrency = {};
     for (const inv of paid) {
@@ -225,3 +176,5 @@ export function historyLedgerSummary(invoices = []) {
         clientCount: clients.size,
     };
 }
+
+export { needsYouInvoices, watchingInvoices, stoppedInvoices };

@@ -3,6 +3,7 @@
 # Send a reply on the invoice Home Thread (Unipile + RFC In-Reply-To / References).
 module Cadence::HomeThreadSend
   include Email::MailboxThreadPersistence
+  include Invoices::ChaseWrite
 
   def deliver_home_thread!(invoice:, to:, cc:, subject:, body:, client:, outbox: nil)
     conversation = home_thread_for(invoice, outbox)
@@ -44,7 +45,8 @@ module Cadence::HomeThreadSend
       anchor: false
     )
     outbox.update!(status: "sent", sent_at: Time.current, subject: subject, body: body) if outbox
-    invoice.update!(needs_reply: false)
+    type = outbox && Cadence::Steps.friendly?(outbox.cadence_step) ? "friendly_sent" : "draft_sent"
+    record_chase_event!(invoice, type: type)
     { sent: true, message_id: external_id, outbox_id: outbox&.id }
   end
 
@@ -53,7 +55,9 @@ module Cadence::HomeThreadSend
     references = [ anchor&.external_message_id, last_message.external_message_id ].compact.uniq
     [
       { name: "In-Reply-To", value: "<#{last_message.external_message_id}>" },
-      { name: "References", value: references.map { |id| "<#{id}>" }.join(" ") }
+      { name: "References", value: references.map { |id| "<#{id}>" }.join(" ") },
+      { name: "Auto-Submitted", value: "auto-generated" },
+      { name: "X-Auto-Response-Suppress", value: "All" }
     ]
   end
 

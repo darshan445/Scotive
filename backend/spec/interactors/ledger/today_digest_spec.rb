@@ -24,37 +24,30 @@ RSpec.describe Ledger::TodayDigest do
     )
   end
 
-  def create_invoice!(status:, number:, due_date: Date.new(2026, 9, 1), needs_reply: false, promise_date: nil)
+  def create_invoice!(number:, chase: "watching", wait: nil)
     organization.invoices.create!(
       integration: qbo,
       client: client_row,
       external_id: number,
       invoice_number: number,
       issue_date: Date.new(2026, 8, 1),
-      due_date: due_date,
+      due_date: Date.new(2026, 9, 30),
       total_amount: 100,
       balance_remaining: 100,
-      current_ar_status: status,
-      needs_reply: needs_reply,
-      active_promise_date: promise_date
+      chase_status: chase,
+      expected_pay_date: wait
     )
   end
 
-  it "groups overdue, broken promise, says-paid, and needs-reply invoices" do
+  it "returns only Needs you invoices" do
     travel_to Time.utc(2026, 9, 18, 12) do
-      overdue = create_invoice!(status: "overdue", number: "INV-OD")
-      broken = create_invoice!(status: "broken_promise", number: "INV-BP", promise_date: Date.new(2026, 9, 10))
-      claimed = create_invoice!(status: "paid_unconfirmed", number: "INV-PU")
-      reply = create_invoice!(status: "invoiced", number: "INV-NR", due_date: Date.new(2026, 9, 30), needs_reply: true)
-      create_invoice!(status: "invoiced", number: "INV-OK", due_date: Date.new(2026, 9, 30))
+      reply = create_invoice!(number: "INV-NR", chase: "needs_you")
+      create_invoice!(number: "INV-OK")
+      create_invoice!(number: "INV-WAIT", wait: Date.new(2026, 9, 20))
 
       result = described_class.execute(organization: organization)
       expect(result.success?).to eq(true)
-      expect(result.data[:due_overdue].map { |row| row[:_id] }).to eq([ overdue.id ])
-      expect(result.data[:broken_promises].map { |row| row[:_id] }).to eq([ broken.id ])
-      expect(result.data[:confirm_prompts].map { |row| row[:_id] }).to eq([ claimed.id ])
-      expect(result.data[:needs_reply].map { |row| row[:_id] }).to eq([ reply.id ])
-      expect(result.data[:stale_prompts]).to eq([])
+      expect(result.data[:needs_you].map { |row| row[:_id] }).to eq([ reply.id ])
     end
   end
 end

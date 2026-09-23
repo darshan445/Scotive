@@ -57,7 +57,7 @@ class Email::MatchOpenInvoices
   end
 
   def open_invoices_for(client_row)
-    client_row.invoices.select { |invoice| invoice.balance_remaining.to_d.positive? && invoice.current_ar_status != "voided" }
+    client_row.invoices.select(&:books_open?)
   end
 
   def empty_counts
@@ -149,8 +149,7 @@ class Email::MatchOpenInvoices
 
   def missed_invoices
     organization.invoices
-      .where("balance_remaining > ?", 0)
-      .where.not(current_ar_status: %w[paid voided])
+      .books_open
       .left_outer_joins(:invoice_conversations)
       .where(invoice_conversations: { invoice_id: nil })
       .to_a

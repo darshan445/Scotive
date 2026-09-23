@@ -51,7 +51,7 @@ RSpec.describe Email::FindInvoiceThread do
       total_amount: 404.00,
       balance_remaining: 404.00,
       pay_link_token: "tok-404",
-      current_ar_status: "invoiced"
+      books_status: "open"
     )
   end
 
@@ -104,7 +104,8 @@ RSpec.describe Email::FindInvoiceThread do
     expect(result.data[:query]).to eq("home")
     expect(invoice.conversations.find_by(external_thread_id: "t-sent")).to be_present
     expect(invoice.conversations.find_by!(external_thread_id: "t-sent").invoice_conversations.first).to be_is_primary
-    expect(invoice.reload.current_ar_status).to eq("invoiced")
+    expect(invoice.reload.books_status).to eq("open")
+    expect(invoice.chase_status).to eq("watching")
     expect(Email::EvaluateInvoiceStateJob).not_to have_been_enqueued
   end
 
@@ -187,7 +188,7 @@ RSpec.describe Email::FindInvoiceThread do
       due_date: 5.days.from_now,
       total_amount: 405.00,
       balance_remaining: 405.00,
-      current_ar_status: "overdue"
+      books_status: "open"
     )
     allow(llm).to receive(:complete_json).and_return("intent" => "invoice_payment")
     stub_searches do |kwargs|
@@ -246,7 +247,7 @@ RSpec.describe Email::FindInvoiceThread do
       due_date: 5.days.from_now,
       total_amount: 405.00,
       balance_remaining: 405.00,
-      current_ar_status: "overdue"
+      books_status: "open"
     )
     stub_searches do |kwargs|
       search = kwargs[:search].to_s
@@ -276,7 +277,7 @@ RSpec.describe Email::FindInvoiceThread do
   end
 
   it "keeps clock status when search is exhausted" do
-    invoice.update!(due_date: 3.days.ago, current_ar_status: "overdue")
+    invoice.update!(due_date: 3.days.ago, books_status: "open")
     stub_searches { { "items" => [] } }
 
     result = execute
@@ -284,19 +285,20 @@ RSpec.describe Email::FindInvoiceThread do
     expect(result).to be_success
     expect(result.data[:matched]).to eq(false)
     expect(result.data[:unmatched]).to eq(true)
-    expect(invoice.reload.current_ar_status).to eq("overdue")
+    expect(invoice.reload.books_status).to eq("open")
+    expect(invoice.chase_status).to eq("watching")
     expect(invoice.conversations).to be_empty
   end
 
-  it "restores overdue when a missed search had been left invoiced past due" do
-    invoice.update!(due_date: 3.days.ago, current_ar_status: "invoiced")
+  it "leaves chase watching when search is exhausted" do
+    invoice.update!(due_date: 3.days.ago, books_status: "open")
     stub_searches { { "items" => [] } }
 
     result = execute
 
     expect(result).to be_success
-    expect(invoice.reload.current_ar_status).to eq("overdue")
-    expect(invoice.invoice_state_transitions.last.trigger_source).to eq("mailbox_match")
+    expect(invoice.reload.books_status).to eq("open")
+    expect(invoice.chase_status).to eq("watching")
   end
 
   it "matches an invoice number only present in quoted reply text" do
@@ -343,7 +345,7 @@ RSpec.describe Email::FindInvoiceThread do
   end
 
   it "skips search when the invoice is already paid" do
-    invoice.update!(current_ar_status: "paid", balance_remaining: 0)
+    invoice.update!(books_status: "paid", balance_remaining: 0)
     allow(email_client).to receive(:list_emails)
 
     result = execute

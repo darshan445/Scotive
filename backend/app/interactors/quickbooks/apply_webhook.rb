@@ -103,12 +103,12 @@ class Quickbooks::ApplyWebhook
     end
     enqueue_unmatched_thread!(invoice)
 
-    { applied: "invoice", invoice_id: invoice.id, status: invoice.current_ar_status, created: created }
+    { applied: "invoice", invoice_id: invoice.id, status: invoice.books_status, created: created }
   end
 
   def enqueue_unmatched_thread!(invoice)
     return if invoice.invoice_conversations.exists?
-    return if %w[paid voided].include?(invoice.current_ar_status)
+    return if invoice.books_closed?
 
     Email::FindInvoiceThreadJob.perform_later(invoice.id)
   end

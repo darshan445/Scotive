@@ -24,7 +24,7 @@ class Admin::UserInvoices
       raise_string_error("User not found") if user.blank?
 
       invoices = user.organization.invoices
-        .includes(:client, :integration, :invoice_state_transitions, invoice_conversations: { conversation: :messages })
+        .includes(:client, :integration, :invoice_chase_events, invoice_conversations: { conversation: :messages })
         .order(due_date: :desc, created_at: :desc)
         .limit(limit)
 
@@ -45,7 +45,7 @@ class Admin::UserInvoices
   end
 
   def evidence_for(invoice)
-    quote = invoice.invoice_state_transitions.max_by(&:created_at)&.reason_quote
+    quote = invoice.invoice_chase_events.max_by(&:created_at)&.quote
     return quote if quote.present?
 
     conversation = Ledger::InvoicePayload.primary_conversation(invoice)

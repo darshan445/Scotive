@@ -46,7 +46,7 @@ RSpec.describe Sync::MailboxDelta do
       due_date: Date.new(2026, 9, 30),
       total_amount: 250,
       balance_remaining: 250,
-      current_ar_status: "invoiced"
+      books_status: "open"
     )
   end
   let(:email_client) { instance_double(Email::EmailClient) }
@@ -116,7 +116,7 @@ RSpec.describe Sync::MailboxDelta do
       due_date: 10.days.from_now,
       total_amount: 99,
       balance_remaining: 99,
-      current_ar_status: "invoiced"
+      books_status: "open"
     )
     allow(email_client).to receive(:list_emails).and_return(
       "items" => [

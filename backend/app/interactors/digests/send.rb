@@ -9,7 +9,7 @@ class Digests::Send
   include ExecuteMethodHelper
   include LogHelper
 
-  GROUP_KEYS = %i[due_overdue broken_promises confirm_prompts stale_prompts needs_reply].freeze
+  GROUP_KEYS = %i[needs_you].freeze
 
   def self.execute
     new.execute

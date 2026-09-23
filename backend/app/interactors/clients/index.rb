@@ -9,9 +9,7 @@ class Clients::Index
   include ExecuteMethodHelper
   include LogHelper
 
-  OPEN_STATUSES = %w[
-    unmatched invoiced overdue promised broken_promise disputed paid_unconfirmed partially_paid
-  ].freeze
+  OPEN_BOOKS = Invoice::OPEN_BOOKS
 
   def self.execute(organization:)
     new(organization: organization).execute
@@ -44,7 +42,7 @@ class Clients::Index
     return if email.blank?
 
     invoices = client.invoices.to_a
-    open = invoices.select { |invoice| OPEN_STATUSES.include?(invoice.current_ar_status) }
+    open = invoices.select(&:books_open?)
     by_currency = Hash.new(0.0)
     open.each do |invoice|
       by_currency[invoice.currency.to_s.upcase] += invoice.balance_remaining.to_f

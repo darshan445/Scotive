@@ -10,15 +10,23 @@ class Invoices::SendChase
   include LogHelper
   include Cadence::HomeThreadSend
 
-  def self.execute(organization:, invoice_id:, subject:, body:, client: Email::EmailClient.new)
-    new(organization: organization, invoice_id: invoice_id, subject: subject, body: body, client: client).execute
+  def self.execute(organization:, invoice_id:, subject:, body:, wait_until: nil, client: Email::EmailClient.new)
+    new(
+      organization: organization,
+      invoice_id: invoice_id,
+      subject: subject,
+      body: body,
+      wait_until: wait_until,
+      client: client
+    ).execute
   end
 
-  def initialize(organization:, invoice_id:, subject:, body:, client:)
+  def initialize(organization:, invoice_id:, subject:, body:, wait_until:, client:)
     @organization = organization
     @invoice_id = invoice_id
     @subject = subject.to_s.strip
     @body = body.to_s.strip
+    @wait_until = wait_until
     @client = client
   end
 
@@ -32,7 +40,7 @@ class Invoices::SendChase
       Invoice.transaction do
         invoice = organization.invoices.lock.find_by(id: invoice_id)
         raise_string_error("Invoice not found") if invoice.blank?
-        raise_string_error("This invoice is paid") if invoice.balance_remaining.to_d <= 0 || %w[paid voided].include?(invoice.current_ar_status)
+        raise_string_error("This invoice is paid") if invoice.books_closed?
         raise_string_error("Client email is missing") if invoice.client&.primary_email.blank?
 
         draft = invoice.outbox_messages.where(status: "draft").order(created_at: :desc).first
@@ -48,6 +56,11 @@ class Invoices::SendChase
         invoice.outbox_messages.where(status: "scheduled").find_each do |row|
           row.update!(status: "cancelled", cancellation_reason: "human_sent")
         end
+        if parsed_wait
+          apply_wait_until!(invoice, parsed_wait)
+        elsif invoice.last_human_inbound_at.blank?
+          apply_resume!(invoice)
+        end
         outcome[:invoice] = Ledger::InvoicePayload.for(invoice.reload)
       end
       outcome
@@ -56,5 +69,14 @@ class Invoices::SendChase
 
   private
 
-  attr_reader :organization, :invoice_id, :subject, :body, :client
+  attr_reader :organization, :invoice_id, :subject, :body, :wait_until, :client
+
+  def parsed_wait
+    return if wait_until.blank?
+    return wait_until.to_date if wait_until.respond_to?(:to_date) && !wait_until.is_a?(String)
+
+    Date.parse(wait_until.to_s)
+  rescue Date::Error, ArgumentError
+    nil
+  end
 end

@@ -31,7 +31,6 @@ class Email::FindInvoiceThread
         { matched: linked?, query: nil, unmatched: !linked? }
       else
         query = search_mailboxes!
-        apply_clock_if_missed! if query.blank? && !linked?
         { matched: query.present? || linked?, query: query, unmatched: !linked? }
       end
     end
@@ -54,7 +53,7 @@ class Email::FindInvoiceThread
   end
 
   def terminal?
-    invoice.balance_remaining.to_d <= 0 || %w[paid voided].include?(invoice.current_ar_status)
+    invoice.books_closed?
   end
 
   def mailboxes
@@ -135,25 +134,7 @@ class Email::FindInvoiceThread
   end
 
   def sibling_invoices
-    invoice.client.invoices
-      .where("balance_remaining > ?", 0)
-      .where.not(id: invoice.id)
-      .where.not(current_ar_status: %w[paid voided])
-      .to_a
-  end
-
-  def apply_clock_if_missed!
-    clock = invoice.due_date < Date.current ? "overdue" : "invoiced"
-    previous = invoice.current_ar_status
-    return if previous == clock || %w[promised broken_promise disputed paid_unconfirmed partially_paid].include?(previous)
-
-    invoice.update!(current_ar_status: clock)
-    invoice.invoice_state_transitions.create!(
-      from_status: previous,
-      to_status: clock,
-      trigger_source: "mailbox_match",
-      created_at: Time.current
-    )
+    invoice.client.invoices.books_open.where.not(id: invoice.id).to_a
   end
 
   def fetch_query(mailbox, gmail:, outlook:)
