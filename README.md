@@ -42,7 +42,7 @@ cp backend/.env.prod.example backend/.env.prod
 docker compose -f docker-compose.prod.yml up --build -d
 ```
 
-- API: host port 3000
+- API: host port 3000. On boot the entrypoint clears `tmp/pids/server.pid` and runs `db:prepare`.
 - Postgres / Redis: not published (compose network only)
 
 Logs: `docker compose -f docker-compose.prod.yml logs -f api`

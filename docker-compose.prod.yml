@@ -50,7 +50,8 @@ services:
       PORT: "3000"
       DATABASE_URL: postgres://scotive:${POSTGRES_PASSWORD:-scotive}@db:5432/scotive
       REDIS_URL: redis://redis:6379/0
-      RUN_DB_PREPARE: "false"
+      # Entrypoint: wait for Postgres, db:prepare (create + migrate), then rails server.
+      RUN_DB_PREPARE: "true"
     depends_on:
       db:
         condition: service_healthy
