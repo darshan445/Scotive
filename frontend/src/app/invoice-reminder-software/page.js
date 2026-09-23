@@ -13,7 +13,7 @@ import { absoluteUrl } from "@/lib/seo";
 const PATH = "/invoice-reminder-software";
 const TITLE = "Invoice Reminder Software · Scotive";
 const DESCRIPTION =
-    "Invoice reminder software that reads the Gmail or Outlook thread on each invoice from QuickBooks, Xero, or FreshBooks. Automated reminders pause when the client replies or promises a date. 30-day free trial.";
+    "Invoice reminder software that matches each open invoice from QuickBooks, Xero, or FreshBooks to the Gmail or Outlook thread. Friendly reminders send from your inbox and pause the moment they reply. Firm waits for a click. 30-day free trial.";
 
 const FAQS = [
     {
@@ -29,7 +29,7 @@ const FAQS = [
     {
         question: "What happens when a client replies?",
         answer:
-            "The reminder schedule pauses. If they promised a date, Scotive waits until that date. If they asked a question, disputed the invoice, or said they already paid, it waits for you.",
+            "Friendly reminders stop. The invoice moves to Needs you. You write the next email, then pick a date to check back if they still have not paid. Scotive does not send another ‘just checking in’ on an open conversation.",
     },
 ];
 
@@ -65,7 +65,7 @@ export default function InvoiceReminderSoftwarePage() {
             <MarketingHero
                 eyebrow="Software"
                 title="Invoice reminder software that reads the conversation"
-                description="Scotive fetches invoices from invoicing tools like QuickBooks, Xero, or FreshBooks. For each one, it reads the Gmail or Outlook thread, tracks where it stands, and drafts a personalized follow-up in their words."
+                description="Scotive matches each open invoice from QuickBooks, Xero, or FreshBooks to the Gmail or Outlook thread, sends Friendly reminders you approve, and pauses the moment they reply. Firm emails wait for a click."
             >
                 <MarketingHeroCtas
                     primaryLabel={TRIAL_CTA}
@@ -83,8 +83,8 @@ export default function InvoiceReminderSoftwarePage() {
                         </h2>
                         <p className="type-body mt-3">
                             QuickBooks, Xero, and FreshBooks can fire a note on day 7. They cannot see what the
-                            client said in Gmail or Outlook, so they cannot tell promised from ignored, or
-                            “we already paid” from still unpaid.
+                            client said in Gmail or Outlook, so they keep sending after the client already
+                            talked — and they never write the next email from your inbox.
                         </p>
                     </div>
                     <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -101,8 +101,8 @@ export default function InvoiceReminderSoftwarePage() {
                             detail="If the client already replied, the next dated reminder still goes. You are the one who has to notice and pull it back."
                         />
                         <SeoCard
-                            title="Overdue is not a status"
-                            detail="Promised, disputed, says-paid, waiting on your reply — none of that lives in the reminder calendar."
+                            title="After they talk, you are the system"
+                            detail="A reply, a pay date they named, or “we already paid” is not on the reminder calendar. You rebuild the next chase from sent mail."
                         />
                     </div>
                 </div>
@@ -123,23 +123,23 @@ export default function InvoiceReminderSoftwarePage() {
                     <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
                         <SeoCard
                             badge="01"
-                            title="The thread is the context"
-                            detail="Promised Friday, a PO question, and “we already paid” are different states — not the same overdue stamp."
+                            title="The thread is the brake"
+                            detail="A reply, a pay date they named, or “we already paid” is not another overdue stamp. Friendly stops so you are not the one who has to notice."
                         />
                         <SeoCard
                             badge="02"
                             title="The next email is already drafted"
-                            detail="Written from what that client actually said. You review it. One click sends from your address."
+                            detail="Friendly reminders go from your address, on the same thread, with a pay link. When they reply, you write the next email."
                         />
                         <SeoCard
                             badge="03"
                             title="It knows when to hold"
-                            detail="If they replied or named a pay date, the chase waits. Firmer emails still need a click."
+                            detail="If they replied, Friendly stops. You pick a date to check back if still unpaid. Firm emails still need a click."
                         />
                         <SeoCard
                             badge="04"
-                            title="Status from the conversation"
-                            detail="Each invoice has a state from invoiced to paid, so you are not rebuilding it from sent mail."
+                            title="Needs you, Watching, or Paid"
+                            detail="Replies and Firm sit in Needs you. A check-back date sits in Watching. Paid in the books ends the chase."
                         />
                     </div>
                 </div>
@@ -166,8 +166,8 @@ export default function InvoiceReminderSoftwarePage() {
                             a bot that keeps nagging after someone already talked starts to hurt the relationship.
                         </p>
                         <p className="type-body mt-3 text-muted-foreground">
-                            If they reply, the schedule holds. If they promise a day, it waits until that day.
-                            If they dispute, say they paid, or need an answer from you, it waits. When the
+                            If they reply, Friendly stops and the invoice moves to Needs you. You write the
+                            next email, then pick a date to check back if they still have not paid. When the
                             invoicing tool shows paid, the chase stops.
                         </p>
                     </div>
@@ -185,7 +185,7 @@ export default function InvoiceReminderSoftwarePage() {
             <RelatedResources currentPath={PATH} />
             <MarketingCta
                 title="Get paid without the awkward follow-up."
-                description="Invoice reminder software that drafts the next email in their words — from Gmail or Outlook, on invoices from QuickBooks, Xero, or FreshBooks."
+                description="Invoice reminder software that sends Friendly reminders from Gmail or Outlook, pauses the moment they reply, and waits for your click on anything firmer."
             />
         </MarketingShell>
     );

@@ -18,10 +18,10 @@ export const PLAN_FEATURES = [
     "Connect Gmail or Outlook — or both",
     "QuickBooks, Xero, or FreshBooks",
     "Reminder schedule you approve",
-    "Pauses when a client replies or promises a date",
-    "Next follow-up drafted in their words",
+    "Pauses the moment a client replies",
+    "You pick when to check back if still unpaid",
     "Payment link in every draft",
-    "Firmer emails wait for a click",
+    "Firm emails wait for a click",
 ];
 
 export const EMAIL_INTEGRATIONS = [

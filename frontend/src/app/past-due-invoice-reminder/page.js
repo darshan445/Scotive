@@ -12,18 +12,18 @@ import { absoluteUrl } from "@/lib/seo";
 const PATH = "/past-due-invoice-reminder";
 const TITLE = "Past Due Invoice Reminder · Scotive";
 const DESCRIPTION =
-    "A past due invoice reminder should match what the client said — promised Friday, already paid, a dispute — not another overdue stamp from QuickBooks, Xero, or FreshBooks. Scotive reads the Gmail or Outlook thread. 30-day free trial.";
+    "A past due invoice reminder should not land on an open reply. QuickBooks, Xero, and FreshBooks send the same overdue stamp after they promised Friday, said they paid, or already wrote back. Scotive pauses Friendly and puts it in Needs you. 30-day free trial.";
 
 const STATES = [
     {
         title: "I'll pay Friday",
         detail:
-            "They named a date. Hold the reminder until that date. Sending “this is overdue” while they already promised a day is how you look like you are not listening.",
+            "They named a date. Sending “this is overdue” while they already promised a day is how you look like you are not listening. Scotive pauses Friendly. You pick when to check back.",
     },
     {
         title: "Promised and didn’t",
         detail:
-            "That date passed and nothing landed. This needs you — not another generic past due invoice email. A firmer follow-up still waits for a click.",
+            "That date passed and nothing landed. This is Needs you — not another generic past due invoice email. A firmer follow-up still waits for a click.",
     },
     {
         title: "Says paid",
@@ -72,7 +72,7 @@ export default function PastDueInvoiceReminderPage() {
             <MarketingHero
                 eyebrow="Past due"
                 title="Past due invoice reminder"
-                description="When the due date has passed, the next email should know what they said — not only that it is late. Scotive reads the Gmail or Outlook thread on that invoice from QuickBooks, Xero, or FreshBooks, then drafts the overdue follow-up in their words."
+                description="When the due date has passed, the next email should not land on an open reply. Scotive matches the Gmail or Outlook thread to that invoice from QuickBooks, Xero, or FreshBooks, sends Friendly reminders while they stay silent, and pauses the moment they talk."
             >
                 <MarketingHeroCtas
                     primaryLabel={TRIAL_CTA}
@@ -107,7 +107,7 @@ export default function PastDueInvoiceReminderPage() {
                             Five situations a dated reminder treats as the same
                         </h2>
                         <p className="type-body mt-3">
-                            Scotive sets a state from the thread, then holds or drafts accordingly.
+                            These are why a dated reminder is the wrong email. Scotive pauses Friendly and puts the invoice in Needs you.
                         </p>
                     </div>
                     <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -142,8 +142,8 @@ export default function PastDueInvoiceReminderPage() {
 
             <RelatedResources currentPath={PATH} />
             <MarketingCta
-                title="Send the past due email that matches the thread."
-                description="Scotive tracks promised, says-paid, disputed, and waiting on you — then drafts the next overdue invoice reminder from Gmail or Outlook."
+                title="Send the past due email that does not land on an open reply."
+                description="Scotive pauses Friendly the moment they talk, puts the invoice in Needs you, and waits for your click on anything firmer."
             />
         </MarketingShell>
     );

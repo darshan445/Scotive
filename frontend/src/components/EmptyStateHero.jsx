@@ -30,8 +30,8 @@ export function EmptyStateHero() {
                 className="type-body mt-4 text-base md:text-lg"
                 data-testid="empty-state-subhead"
             >
-                You already invoiced them. Scotive watches the thread and the open invoice, and
-                handles the next chase. Firm/Final still a click.
+                You already invoiced them. Scotive matches the thread, sends Friendly reminders
+                you approve, and pauses the moment they reply. Firm still a click.
             </p>
 
             <div className="mt-8 flex flex-col items-center gap-4">

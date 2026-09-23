@@ -71,20 +71,19 @@ export default function PrivacyPage() {
                         QuickBooks identifiers (for example invoice Id, DocNumber, Balance) and
                         paid / not-paid status we sync from QuickBooks
                     </li>
-                    <li>Status (for example invoiced, overdue, promised, disputed, paid)</li>
+                    <li>Chase status (for example Needs you, Watching, Stopped, Paid)</li>
                     <li>
-                        Evidence snippets and quotes (for example a promise date or dispute phrase)
-                        and Gmail message/thread identifiers needed to reopen context
+                        Check-back dates you set, last-sent timestamps, and Gmail or Outlook
+                        message/thread identifiers needed to reopen the conversation
                     </li>
-                    <li>Review-queue items when extraction confidence is low</li>
-                    <li>Chase drafts you generate or that the escalation ladder prepares for review</li>
+                    <li>Chase drafts you generate or that Friendly cadence prepares for review</li>
                     <li>Records of chase emails you chose to send (subject, body, timestamps)</li>
                     <li>Optional suppressed-sender list and client-merge preferences</li>
                 </ul>
                 <p>
                     <strong>We do not store your entire mailbox or your entire QuickBooks company.</strong>{" "}
-                    We store extracted or imported facts needed for the ledger and drafts, evidence
-                    needed for tracking, and references so we can fetch conversation context from
+                    We store extracted or imported facts needed for the ledger and drafts,
+                    check-back dates, and references so we can fetch conversation context from
                     Gmail when you open an invoice and keep open / paid status in sync with
                     QuickBooks when connected.
                 </p>

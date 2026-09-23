@@ -46,11 +46,11 @@ export function JsonLd() {
                 },
                 featureList: [
                     "Match Gmail/Outlook thread to invoice",
-                    "Conversation states from invoiced to paid",
-                    "Next follow-up drafted in the client's own language",
-                    "Approved Friendly cadence that pauses on reply/promise",
+                    "Approved Friendly cadence from your inbox",
+                    "Pauses the moment a client replies",
+                    "Check-back date if still unpaid",
                     "Pay link in the draft",
-                    "Firm/Final still a click",
+                    "Firm emails wait for a click",
                     "Keep QBO/Xero as the ledger",
                 ],
                 offers: [

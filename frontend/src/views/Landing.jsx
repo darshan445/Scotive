@@ -64,7 +64,7 @@ const LANDING_FAQS = [
     {
         question: "What happens when a client replies?",
         answer:
-            "The reminder schedule pauses. If they promised a date, Scotive waits until that date. If they asked a question, disputed the invoice, or said they already paid, it waits for you — it does not send another ‘just checking in’.",
+            "Friendly reminders stop. The invoice moves to Needs you. You write the next email, then pick a date to check back if they still have not paid. Scotive does not send another ‘just checking in’ on an open conversation.",
     },
     {
         question: "Do I still need QuickBooks, Xero, or FreshBooks?",
@@ -113,13 +113,13 @@ function StepConnectMock() {
 
 function StepTodayMock() {
     const items = [
-        { name: "Acme Studio", action: "Past due" },
-        { name: "Meraki Co.", action: "Promise broken" },
-        { name: "Northwind", action: "Needs your reply" },
+        { name: "Acme Studio", action: "Firm to approve" },
+        { name: "Meraki Co.", action: "Check back Monday" },
+        { name: "Northwind", action: "They replied" },
     ];
     return (
         <div className="rounded-xl border border-border bg-background p-4 space-y-2">
-            <div className="text-xs font-semibold mb-1 text-foreground">Needs you today</div>
+            <div className="text-xs font-semibold mb-1 text-foreground">Needs you</div>
             {items.map((it) => (
                 <div key={it.name} className="flex items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2">
                     <span className="text-xs text-foreground truncate">{it.name}</span>
@@ -141,23 +141,19 @@ function StepReplyMock() {
             </div>
             <div className="flex items-center justify-between text-[10px]">
                 <span className="text-muted-foreground">Same invoice</span>
-                <span className="font-semibold text-primary bg-primary/10 rounded-full px-2 py-0.5">Needs your reply</span>
+                <span className="font-semibold text-primary bg-primary/10 rounded-full px-2 py-0.5">Needs you</span>
             </div>
         </div>
     );
 }
 
-const CONVERSATION_STATUSES = [
-    { name: "Invoiced", meaning: "Sent. Waiting on the due date — no chase needed yet." },
-    { name: "Past due", meaning: "The due date passed. No promise, no payment." },
-    { name: "Promised", meaning: "They named a date. The chase holds until then." },
-    { name: "Promise broken", meaning: "That date passed. Needs you — not another generic reminder." },
-    { name: "Disputed", meaning: "A question, a PO, or a disagreement. Hold. You reply." },
-    { name: "Partially paid", meaning: "Some money in. A balance is still open." },
-    { name: "Says paid", meaning: "They said they paid. Not confirmed in your invoicing tool yet." },
-    { name: "Needs your reply", meaning: "They emailed. This invoice waits on you." },
-    { name: "Gone quiet", meaning: "No conversation in a long time. Still unpaid." },
-    { name: "Paid", meaning: "Confirmed. The chase stops. No more follow-ups." },
+const CHASE_RULES = [
+    { name: "Before due", meaning: "A short Friendly heads-up can send from your Gmail or Outlook." },
+    { name: "Due date", meaning: "A Friendly check-in can send the day it is due." },
+    { name: "A week overdue", meaning: "Another Friendly reminder, same thread, same address." },
+    { name: "Firm", meaning: "Scotive drafts it. You read it and click send. Nothing firmer goes out alone." },
+    { name: "They replied", meaning: "The ladder stops. Needs you. You write the next email and pick when to check back if still unpaid." },
+    { name: "Paid in the books", meaning: "QuickBooks, Xero, or FreshBooks hits $0. The chase ends." },
 ];
 
 function StepApproveMock() {
@@ -226,9 +222,9 @@ export default function LandingPage() {
                             className="type-body mt-5 text-base md:text-lg max-w-2xl mx-auto"
                             data-testid="landing-subhead"
                         >
-                            Scotive fetches invoices from invoicing tools like QuickBooks, Xero, or FreshBooks.
-                            For each one, it reads the Gmail or Outlook thread, tracks where it stands, and
-                            drafts a personalized follow-up in their words.
+                            Scotive matches each open invoice from QuickBooks, Xero, or FreshBooks to the
+                            Gmail or Outlook thread, sends Friendly reminders you approve, and pauses the
+                            moment they reply. Firm emails wait for a click.
                         </p>
                         <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3">
                             <Link
@@ -262,9 +258,9 @@ export default function LandingPage() {
                                 and they are dumb.
                             </h2>
                             <p className="type-body mt-3">
-                                QuickBooks, Xero, and FreshBooks send dumb reminders on a schedule. They cannot
-                                see the Gmail or Outlook thread — what the client said — so they cannot tell
-                                where that invoice actually stands, or what to send next.
+                                QuickBooks, Xero, and FreshBooks send reminders on a calendar. They cannot
+                                see the Gmail or Outlook thread, so they keep sending after the client already
+                                talked — and they never write the next email from your inbox.
                             </p>
                         </div>
                         <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -289,8 +285,8 @@ export default function LandingPage() {
                             <GapCard
                                 tone="problem"
                                 icon={ListChecks}
-                                title="Overdue is not a status"
-                                detail="Promised, disputed, says-paid, waiting on your reply — none of that lives in the reminder calendar. You rebuild it from sent mail, every week, across a pile of open invoices."
+                                title="After they talk, you are the system"
+                                detail="A reply, a pay date they named, or “we already paid” is not on the reminder calendar. You rebuild the next chase from sent mail, every week, across a pile of open invoices."
                             />
                         </div>
                         <div className="mt-10 text-center" data-testid="landing-pain-bridge">
@@ -321,34 +317,34 @@ export default function LandingPage() {
                                 Same four gaps. Closed from the thread on that invoice.
                             </h2>
                             <p className="type-body mt-3">
-                                Scotive fetches the invoice, reads the Gmail or Outlook conversation, tracks
-                                where it stands, and drafts what to send next — in their words.
+                                Scotive fetches the invoice, matches the Gmail or Outlook thread, sends Friendly
+                                reminders you approve, and pauses the moment they reply. Firm emails wait for a click.
                             </p>
                         </div>
                         <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
                             <GapCard
                                 tone="solution"
                                 icon={Calendar}
-                                title="The thread is the context"
-                                detail="It reads that invoice’s Gmail or Outlook conversation. Promised Friday, a PO question, and “we already paid” are different states — not the same overdue stamp."
+                                title="The thread is the brake"
+                                detail="It reads that invoice’s Gmail or Outlook conversation. A reply, a pay date they named, or “we already paid” is not another overdue stamp — Friendly stops so you are not the one who has to notice."
                             />
                             <GapCard
                                 tone="solution"
                                 icon={PenLine}
                                 title="The next email is already drafted"
-                                detail="The follow-up is written from what that client actually said, in their language. You are not guessing “just checking in.”"
+                                detail="Friendly reminders go from your address, on the same thread, with a pay link. When they reply, you write the next email — you are not guessing “just checking in” on silence."
                             />
                             <GapCard
                                 tone="solution"
                                 icon={Pause}
                                 title="It knows when to hold"
-                                detail="If they replied or named a pay date, the chase waits. No second reminder on an open conversation. Firmer emails still need a click."
+                                detail="If they replied, Friendly stops. You pick a date to check back if still unpaid. No second reminder on an open conversation. Firm emails still need a click."
                             />
                             <GapCard
                                 tone="solution"
                                 icon={ListChecks}
-                                title="Status from the conversation"
-                                detail="Each invoice has a state from invoiced to paid — promised, disputed, says-paid, waiting on you — so you are not rebuilding it from sent mail."
+                                title="Needs you, Watching, or Paid"
+                                detail="Replies and Firm sit in Needs you. A check-back date sits in Watching. Paid in the books ends the chase. You are not reconstructing next steps from sent mail."
                             />
                         </div>
                     </div>
@@ -359,11 +355,11 @@ export default function LandingPage() {
                         <div className="max-w-2xl mb-12">
                             <SectionEyebrow index={3}>How it works</SectionEyebrow>
                             <h2 className="type-title text-3xl md:text-4xl">
-                                Sign up. Connect. Then every invoice has a state — and a next email.
+                                Sign up. Connect. Friendly reminders run. You approve anything firmer.
                             </h2>
                             <p className="type-body mt-3">
                                 Scotive pulls invoices from your invoicing tools, keeps the Gmail or Outlook
-                                thread on each one in sync, and runs the chase from that conversation.
+                                thread on each one in sync, and runs the chase from your inbox.
                             </p>
                         </div>
                         <div className="space-y-4">
@@ -375,32 +371,32 @@ export default function LandingPage() {
                             />
                             <HowItWorksStep
                                 index={2}
-                                title="See where each invoice stands"
-                                description="From what the client said — a promise, a question, “we already paid,” silence — Scotive sets the state. Not a due-date stamp. Ten states, from invoiced to paid. What needs you today sits at the top: past due, promise broken, says paid, waiting on you, gone quiet."
+                                title="Friendly reminders send while they stay silent"
+                                description="You approve the Friendly ladder once. A heads-up before due, a note on the due date, another a week later — from your Gmail or Outlook, on the same thread. Needs you is for replies, Firm drafts, and a check-back date that came due unpaid."
                                 mock={<StepTodayMock />}
                             />
                             <HowItWorksStep
                                 index={3}
-                                title="The next email, already written"
-                                description="When a follow-up is due, Scotive drafts it from that client’s own messages — their language, their promise, their question. You review it. One click sends from your address. Firmer emails still wait for you."
+                                title="Firm waits for you"
+                                description="After Friendly, Scotive drafts a firmer email. You read it and click send. Nothing firmer goes out alone — a bot that keeps nagging after someone already talked starts to hurt the relationship."
                                 mock={<StepApproveMock />}
                             />
                             <HowItWorksStep
                                 index={4}
-                                title="They reply. The same invoice moves."
-                                description="A reply lands on that invoice, not in a separate pile. Status updates — promised, disputed, says paid, needs your reply. The chase holds while they are talking. You see the thread and the state together."
+                                title="They reply. The ladder stops."
+                                description="A reply lands on that invoice, not in a separate pile. Friendly stops. Needs you. You write the next email and pick a date to check back if they still have not paid. When the books hit $0, the chase ends."
                                 mock={<StepReplyMock />}
                             />
                         </div>
 
                         <div className="mt-14" data-testid="landing-how-statuses">
-                            <h3 className="type-title text-2xl md:text-3xl">Statuses we track — and what they mean</h3>
+                            <h3 className="type-title text-2xl md:text-3xl">How the chase runs — and when it stops</h3>
                             <p className="type-body mt-2 max-w-2xl">
-                                These come from the Gmail or Outlook conversation on that invoice, plus the
-                                due date and paid status from your invoicing tool.
+                                Friendly reminders follow the due date while they stay silent. The Gmail or Outlook
+                                thread is the brake. Paid in QuickBooks, Xero, or FreshBooks ends the chase.
                             </p>
-                            <div className="mt-8 grid sm:grid-cols-2 lg:grid-cols-5 gap-3">
-                                {CONVERSATION_STATUSES.map((item) => (
+                            <div className="mt-8 grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                {CHASE_RULES.map((item) => (
                                     <div key={item.name} className="surface-card p-4">
                                         <div className="text-sm font-semibold text-foreground">{item.name}</div>
                                         <p className="type-body mt-1.5 text-xs">{item.meaning}</p>
@@ -461,7 +457,7 @@ export default function LandingPage() {
                                     href: "/invoice-reminder-software",
                                     icon: BookOpen,
                                     title: "Invoice reminder software",
-                                    detail: "You already have QBO/Xero. Approved cadence, pause on reply/promise, pay link, from Gmail/Outlook.",
+                                    detail: "You already have QBO/Xero. Approved Friendly cadence, pause on reply, pay link, from Gmail/Outlook.",
                                 },
                                 {
                                     href: "/payment-reminder-email-template",
@@ -507,7 +503,7 @@ export default function LandingPage() {
                                     Get paid without the awkward follow-up.
                                 </h2>
                                 <p className="type-body mt-4 text-base md:text-lg opacity-80 max-w-xl mx-auto">
-                                    It fetches invoices from invoicing tools like QuickBooks, Xero, or FreshBooks. For each one, it reads the Gmail or Outlook thread, tracks where it stands, and drafts a personalized follow-up in their words. {TRIAL_LABEL}. {PRICE_AFTER_TRIAL}
+                                    It matches each open invoice from QuickBooks, Xero, or FreshBooks to the Gmail or Outlook thread, sends Friendly reminders you approve, and pauses the moment they reply. Firm emails wait for a click. {TRIAL_LABEL}. {PRICE_AFTER_TRIAL}
                                 </p>
                                 <div className="mt-9 flex flex-col sm:flex-row items-center justify-center gap-4">
                                     <Link

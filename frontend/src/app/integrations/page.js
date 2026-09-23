@@ -16,7 +16,7 @@ import { absoluteUrl } from "@/lib/seo";
 const PATH = "/integrations";
 const TITLE = "Integrations · Scotive";
 const DESCRIPTION =
-    "Connect Gmail or Outlook and QuickBooks, Xero, or FreshBooks. Scotive matches each open invoice to the thread, tracks the state from invoiced to paid, and drafts the next follow-up in that client’s own language.";
+    "Connect Gmail or Outlook and QuickBooks, Xero, or FreshBooks. Scotive matches each open invoice to the thread, sends Friendly reminders you approve, and pauses the moment they reply.";
 
 export const metadata = {
     title: { absolute: TITLE },
@@ -51,13 +51,13 @@ const CONNECT_JOBS = [
     },
     {
         icon: MessageSquareQuote,
-        title: "States from the conversation",
-        body: "From invoiced to paid — unpaid, overdue, promised, replied, disputed, says-paid. The state comes from what they said, not a due-date calendar.",
+        title: "Friendly until they reply",
+        body: "Approved Friendly reminders send from your inbox while they stay silent. The moment they reply, the ladder stops. Firm emails wait for a click.",
     },
     {
         icon: PenLine,
-        title: "The next email, in their words",
-        body: "Scotive drafts the next follow-up from that client’s own messages and language. Highly personal — not a reminder template. A pay link sits in the draft.",
+        title: "The next email, from your inbox",
+        body: "Friendly reminders go on the same thread, with a pay link from the tool you already use. After they reply, you write the next email and pick when to check back.",
     },
 ];
 
@@ -75,7 +75,7 @@ const STACK = [
     {
         step: "03",
         title: "Scotive chases",
-        body: "Match thread to invoice, track the state from that conversation, draft the next follow-up in their language, put a pay link in the draft.",
+        body: "Match thread to invoice, send Friendly reminders you approve, pause the moment they reply, put a pay link in the draft.",
     },
 ];
 
@@ -106,8 +106,8 @@ export default function IntegrationsPage() {
         <MarketingShell testId="seo-integrations" activePath="/integrations">
             <MarketingHero
                 eyebrow="Integrations"
-                title="Connect inbox and invoicing. Scotive reads the conversation."
-                description="Keep QuickBooks, Xero, or FreshBooks as the ledger. Chase from Gmail or Outlook. Matching the thread is how Scotive tracks each invoice from invoiced to paid — and drafts the next follow-up in that client’s own words."
+                title="Connect inbox and invoicing. Scotive runs the chase."
+                description="Keep QuickBooks, Xero, or FreshBooks as the ledger. Chase from Gmail or Outlook. Matching the thread is how Scotive sends Friendly reminders and pauses the moment they reply."
             >
                 <MarketingHeroCtas
                     primaryLabel="Start 30-day free trial"
@@ -121,7 +121,7 @@ export default function IntegrationsPage() {
                     <div className="max-w-2xl mb-10">
                         <h2 className="type-title text-2xl md:text-3xl">What connecting does</h2>
                         <p className="type-body mt-3 text-muted-foreground">
-                            Two connections. Then Scotive can see the state of each invoice from the thread, and write the next follow-up in their language.
+                            Two connections. Then Scotive can send Friendly reminders from your inbox and stop the moment they reply.
                         </p>
                     </div>
                     <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -179,8 +179,8 @@ export default function IntegrationsPage() {
             </section>
 
             <MarketingCta
-                title="Connect once. Then you see the state — and the next email in their words."
-                description="Gmail or Outlook, plus the invoicing tool you already use. Conversation states from invoiced to paid. The next follow-up drafted from what they said."
+                title="Connect once. Then Friendly reminders run from your inbox."
+                description="Gmail or Outlook, plus the invoicing tool you already use. Friendly reminders you approve. Pause the moment they reply. Firm emails wait for a click."
             />
         </MarketingShell>
     );

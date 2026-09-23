@@ -6,14 +6,14 @@ export const RESOURCE_LINKS = [
         title: "Invoice reminder software",
         navLabel: "Invoice reminder software",
         description:
-            "Follow-ups from Gmail or Outlook, matched to invoices from QuickBooks, Xero, or FreshBooks — pausing when the client replies.",
+            "Friendly reminders from Gmail or Outlook, matched to invoices from QuickBooks, Xero, or FreshBooks — pausing the moment the client replies.",
     },
     {
         path: "/past-due-invoice-reminder",
         title: "Past due invoice reminder",
         navLabel: "Past due reminder",
         description:
-            "When the due date passed, the next email should know if they promised Friday, said they paid, or already replied.",
+            "When the due date passed, the next email should not land on an open reply. Scotive pauses Friendly and puts the invoice in Needs you.",
     },
     {
         path: "/payment-reminder-email-template",

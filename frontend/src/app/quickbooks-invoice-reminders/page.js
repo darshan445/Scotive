@@ -56,7 +56,7 @@ export default function QuickBooksInvoiceRemindersPage() {
             <MarketingHero
                 eyebrow="QuickBooks"
                 title="QuickBooks invoice reminders know the date — not the thread"
-                description="QuickBooks Online can send automatic invoice reminders on a schedule. It cannot see that the client promised Friday in Gmail or Outlook. Keep QuickBooks. Scotive fetches the invoice, reads that conversation, and drafts the next follow-up from your address."
+                description="QuickBooks Online can send automatic invoice reminders on a schedule. It cannot see that the client already replied in Gmail or Outlook. Keep QuickBooks. Scotive matches the thread, sends Friendly reminders from your address, and pauses the moment they talk."
             >
                 <MarketingHeroCtas
                     primaryLabel={TRIAL_CTA}
@@ -100,8 +100,8 @@ export default function QuickBooksInvoiceRemindersPage() {
                     </h2>
                     <p className="type-body text-muted-foreground">
                         If the client already replied, the next QuickBooks reminder can still fire. You are
-                        the one who notices. Scotive holds when they talk, waits until a promised date, and
-                        does not chase once QuickBooks — or Xero or FreshBooks — shows paid.
+                        the one who notices. Scotive pauses Friendly when they talk, puts the invoice in
+                        Needs you, and does not chase once QuickBooks — or Xero or FreshBooks — shows paid.
                     </p>
                     <p className="type-body text-muted-foreground">
                         Friendly follow-ups can send on a schedule you approve, from your Gmail or Outlook
@@ -115,7 +115,7 @@ export default function QuickBooksInvoiceRemindersPage() {
             <RelatedResources currentPath={PATH} />
             <MarketingCta
                 title="Keep QuickBooks. Follow up from your inbox."
-                description="Connect Gmail or Outlook and QuickBooks, Xero, or FreshBooks. Scotive drafts the next reminder from what they actually said."
+                description="Connect Gmail or Outlook and QuickBooks, Xero, or FreshBooks. Scotive sends Friendly reminders from your inbox and pauses the moment they reply."
             />
         </MarketingShell>
     );

@@ -53,7 +53,7 @@ export default function FreshBooksInvoiceRemindersPage() {
             <MarketingHero
                 eyebrow="FreshBooks"
                 title="FreshBooks invoice reminders know the date — not the thread"
-                description="FreshBooks can send automatic invoice reminders when something is late. It cannot see that the client promised Friday in Gmail or Outlook. Keep FreshBooks. Scotive fetches the invoice, reads that conversation, and drafts the next follow-up from your address."
+                description="FreshBooks can send automatic invoice reminders when something is late. It cannot see that the client already replied in Gmail or Outlook. Keep FreshBooks. Scotive matches the thread, sends Friendly reminders from your address, and pauses the moment they talk."
             >
                 <MarketingHeroCtas
                     primaryLabel={TRIAL_CTA}
@@ -102,10 +102,10 @@ export default function FreshBooksInvoiceRemindersPage() {
                         “just checking in.”
                     </p>
                     <p className="type-body text-muted-foreground">
-                        Scotive holds when they talk, waits until a promised date, and does not chase once
-                        FreshBooks — or QuickBooks or Xero — shows paid. Friendly follow-ups can send on a
-                        schedule you approve, with the pay link you already use. Firmer emails wait for a
-                        click. {TRIAL_LABEL}.
+                        Scotive pauses Friendly when they talk, puts the invoice in Needs you, and does not
+                        chase once FreshBooks — or QuickBooks or Xero — shows paid. Friendly follow-ups can
+                        send on a schedule you approve, with the pay link you already use. Firmer emails wait
+                        for a click. {TRIAL_LABEL}.
                     </p>
                 </div>
             </section>
@@ -114,7 +114,7 @@ export default function FreshBooksInvoiceRemindersPage() {
             <RelatedResources currentPath={PATH} />
             <MarketingCta
                 title="Keep FreshBooks. Follow up from your inbox."
-                description="Connect Gmail or Outlook and QuickBooks, Xero, or FreshBooks. Scotive drafts the next reminder from what they actually said."
+                description="Connect Gmail or Outlook and QuickBooks, Xero, or FreshBooks. Scotive sends Friendly reminders from your inbox and pauses the moment they reply."
             />
         </MarketingShell>
     );

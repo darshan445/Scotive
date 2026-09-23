@@ -19,7 +19,7 @@ const FAQS = [
     {
         question: "Should I send these if they already replied?",
         answer:
-            "No. If they asked a question, promised a date, or said they paid, do not paste another reminder on that thread. That is the job Scotive pauses for.",
+            "No. If they already replied, do not paste another reminder on that thread. Scotive pauses Friendly and waits for you.",
     },
     {
         question: "Where does the payment link come from?",
@@ -151,10 +151,10 @@ Alex`}
                         Skip the template if they already talked
                     </h2>
                     <p className="type-body text-muted-foreground">
-                        If they promised a date, asked a question, said they paid, or paid in part, a generic
+                        If they already replied, named a pay date, said they paid, or paid in part, a generic
                         outstanding payment reminder is the wrong email. That is when a dated reminder from
-                        QuickBooks, Xero, or FreshBooks feels dumb — and when Scotive holds, then drafts from
-                        what they actually wrote.
+                        QuickBooks, Xero, or FreshBooks feels dumb — and when Scotive pauses Friendly and
+                        puts the invoice in Needs you.
                     </p>
                     <p className="type-body text-muted-foreground">
                         One late invoice: paste a template. A pile of open invoices:{" "}

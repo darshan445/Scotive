@@ -46,7 +46,7 @@ export default function ResourcesIndexPage() {
             <MarketingHero
                 eyebrow="Resources"
                 title="Follow-up that matches the conversation — not just the due date."
-                description="Scotive fetches invoices from invoicing tools like QuickBooks, Xero, or FreshBooks. For each one, it reads the Gmail or Outlook thread, tracks where it stands, and drafts a personalized follow-up in their words."
+                description="Scotive matches each open invoice from QuickBooks, Xero, or FreshBooks to the Gmail or Outlook thread, sends Friendly reminders you approve, and pauses the moment they reply."
             >
                 <MarketingHeroCtas
                     primaryLabel={TRIAL_CTA}

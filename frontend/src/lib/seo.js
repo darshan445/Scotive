@@ -48,7 +48,7 @@ export const PRIMARY_KEYWORDS = [
 export const DEFAULT_TITLE = "Scotive — Get paid without the awkward follow-up";
 
 export const DEFAULT_DESCRIPTION =
-    "Get paid without the awkward follow-up. Scotive fetches invoices from invoicing tools like QuickBooks, Xero, or FreshBooks. For each one, it reads the Gmail or Outlook thread, tracks where it stands, and drafts a personalized follow-up in their words. 30-day free trial.";
+    "Get paid without the awkward follow-up. Scotive matches each open invoice from QuickBooks, Xero, or FreshBooks to the Gmail or Outlook thread, sends Friendly reminders you approve, and pauses the moment they reply. Firm emails wait for a click. 30-day free trial.";
 
 /** Pack §5.2 — who pays. Not “anyone who bills.” */
 export const AUDIENCE_BLURB =

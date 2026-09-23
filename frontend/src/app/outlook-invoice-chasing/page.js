@@ -10,7 +10,7 @@ import { absoluteUrl } from "@/lib/seo";
 const PATH = "/outlook-invoice-chasing";
 const TITLE = "Outlook · Scotive";
 const DESCRIPTION =
-    "Gmail / Outlook is the actual conversation. We match the Gmail/Outlook thread to that invoice so you don't send 'just checking in' on an open reply. Chase from the owner's Outlook, not noreply@ accounting mail. Cadence runs Friendly, pauses on reply/promise, pay link in the draft. $49/month, or $490/year.";
+    "Gmail / Outlook is the actual conversation. We match the thread to that invoice so you don't send 'just checking in' on an open reply. Friendly reminders send from your inbox and pause the moment they talk. Firm waits for a click. $49/month, or $490/year.";
 
 export const metadata = {
     title: { absolute: TITLE },
@@ -50,11 +50,11 @@ export default function OutlookInvoiceChasingPage() {
             <section className="py-14 md:py-16 max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 space-y-12">
                 <MarketingSolveBlock
                     title="Not a new books app. You keep QBO/Xero. We run the chase."
-                    problem="QBO knows it's overdue. It does not know they promised Friday."
+                    problem="QBO knows it's overdue. It does not know they already replied."
                     points={[
                         "We match the Gmail/Outlook thread to that invoice so you don't send 'just checking in' on an open reply.",
-                        "Reminders pause when they talk back. Accounting reminders don't.",
-                        "The next email is in their words, from your address. You approve Firm/Final.",
+                        "Friendly reminders pause when they talk back. Accounting reminders don't.",
+                        "Firm emails wait for your click. Nothing firmer goes out alone.",
                         "Pay link in the draft — their existing QBO/Stripe/PayPal/bank pay URL. Scotive is not a payments company.",
                     ]}
                     ctaLabel="Start 30-day free trial"
@@ -77,10 +77,9 @@ export default function OutlookInvoiceChasingPage() {
                         Gmail/Outlook, same thread, same invoice match.
                     </p>
                     <p className="type-body mt-3 text-muted-foreground">
-                        Client replied → hold. No &quot;just checking in&quot; on an open conversation. Promised
-                        (&quot;paying Friday&quot;) → hold until that date, then needs you (broken promise), not
-                        another generic reminder. Dispute / says paid / partial / needs your reply → hold. Human
-                        Follow-up. Paid → cadence dies. Never chase someone who paid.
+                        Client replied → Friendly stops. No &quot;just checking in&quot; on an open conversation.
+                        Needs you. You write the next email, then pick a date to check back if they still have
+                        not paid. Paid in the books → cadence dies. Never chase someone who paid.
                     </p>
                 </div>
 
@@ -91,7 +90,7 @@ export default function OutlookInvoiceChasingPage() {
                     <pre className="type-body mt-4 overflow-x-auto rounded-xl border border-border bg-muted/40 p-4 text-sm text-muted-foreground whitespace-pre">{`Client work
  → QBO / Xero / Zoho / FreshBooks (create invoice, due date, paid/unpaid, books)
  → Gmail / Outlook (the actual conversation)
- → Scotive (match thread to invoice, state, cadence, pause, pay link, drafts)`}</pre>
+ → Scotive (match thread to invoice, Friendly cadence, pause on reply, pay link, Firm you approve)`}</pre>
                 </div>
 
                 <div>
@@ -102,7 +101,7 @@ export default function OutlookInvoiceChasingPage() {
                         click.
                     </p>
                     <p className="type-body mt-3 text-muted-foreground">
-                        Cadence runs Friendly, pauses on reply/promise, pay link in the draft, keep QBO/Xero.
+                        Cadence runs Friendly, pauses on reply, pay link in the draft, keep QBO/Xero.
                     </p>
                     <p className="type-body mt-3 text-muted-foreground">
                         $49/month, or $490/year (2 months free). Charge when there are more than a handful of open invoices. Agency / studio

@@ -28,7 +28,7 @@ const STEPS = [
     {
         title: "Pause when they talk",
         detail:
-            "A reply, a promised date, a dispute, or “we already paid” is not a cue for the next dated reminder. Hold. If they named Friday, wait until Friday. If that day passes, that is on you — not another canned nudge.",
+            "A reply is not a cue for the next dated reminder. Friendly stops. The invoice moves to Needs you. You write the next email, then pick a date to check back if they still have not paid — not another canned nudge.",
     },
     {
         title: "Write the invoice follow-up email from what they said",
@@ -125,7 +125,7 @@ export default function HowToChaseOutstandingInvoicesPage() {
                         >
                             payment reminder email template
                         </Link>{" "}
-                        page. For promised, says-paid, and after they replied, see{" "}
+                        page. For after they replied, promised Friday, or said they paid, see{" "}
                         <Link
                             href="/past-due-invoice-reminder"
                             className="text-foreground underline underline-offset-2"
@@ -135,9 +135,9 @@ export default function HowToChaseOutstandingInvoicesPage() {
                         .
                     </p>
                     <p className="type-body mt-3 text-muted-foreground">
-                        Scotive does the matching and the draft: invoices from your invoicing tools, conversation
-                        from Gmail or Outlook, next email in their words. Friendly reminders can run on a
-                        schedule you approve. Firmer ones wait for a click. {TRIAL_LABEL}.
+                        Scotive does the matching and the chase: invoices from your invoicing tools, conversation
+                        from Gmail or Outlook, Friendly reminders from your address. They pause the moment someone
+                        replies. Firmer ones wait for a click. {TRIAL_LABEL}.
                     </p>
                 </div>
             </section>
@@ -145,7 +145,7 @@ export default function HowToChaseOutstandingInvoicesPage() {
             <RelatedResources currentPath={PATH} />
             <MarketingCta
                 title="Stop chasing from memory."
-                description="Connect Gmail or Outlook plus QuickBooks, Xero, or FreshBooks. Every outstanding invoice gets a state — and a next email already written."
+                description="Connect Gmail or Outlook plus QuickBooks, Xero, or FreshBooks. Every outstanding invoice gets a next chase — Friendly on a clock, pause when they reply, Firm when you click."
             />
         </MarketingShell>
     );

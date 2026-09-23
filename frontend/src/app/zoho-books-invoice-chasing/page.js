@@ -81,9 +81,9 @@ export default function ZohoBooksInvoiceChasingPage() {
                     <pre className="type-body overflow-x-auto rounded-xl border border-border bg-muted/40 p-4 text-sm text-muted-foreground whitespace-pre">{`Client work
  → QBO / Xero / Zoho / FreshBooks (create invoice, due date, paid/unpaid, books)
  → Gmail / Outlook (the actual conversation)
- → Scotive (match thread to invoice, state, cadence, pause, pay link, drafts)`}</pre>
+ → Scotive (match thread to invoice, Friendly cadence, pause on reply, pay link, Firm you approve)`}</pre>
                     <p className="type-body mt-4 text-muted-foreground">
-                        Cadence runs Friendly, pauses on reply/promise, pay link in the draft, keep QBO/Xero.
+                        Cadence runs Friendly, pauses on reply, pay link in the draft, keep QBO/Xero.
                         $49/month, or $490/year (2 months free). Agency / studio ops or founder, Gmail or Outlook + QBO.
                     </p>
                     <p className="type-body mt-3 text-muted-foreground">

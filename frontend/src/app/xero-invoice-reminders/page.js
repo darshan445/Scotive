@@ -85,7 +85,7 @@ export default function XeroInvoiceRemindersPage() {
                         />
                         <SeoCard
                             title="They do not pause"
-                            detail="If the client already replied or promised a date, the next Xero reminder can still go. Scotive holds until you should actually send."
+                            detail="If the client already replied, the next Xero reminder can still go. Scotive pauses Friendly and waits for you."
                         />
                     </div>
                 </div>
@@ -99,9 +99,8 @@ export default function XeroInvoiceRemindersPage() {
                     </h2>
                     <p className="type-body text-muted-foreground">
                         Connect Xero — or QuickBooks or FreshBooks — plus Gmail or Outlook. Scotive matches
-                        each invoice to its thread, tracks promised, disputed, says-paid, and waiting on you,
-                        and puts your existing pay link in the draft. Friendly reminders can send on a
-                        schedule you approve. Firmer emails wait for a click.
+                        each invoice to its thread, sends Friendly reminders you approve, pauses the moment
+                        they reply, and puts your existing pay link in the draft. Firmer emails wait for a click.
                     </p>
                     <p className="type-body text-muted-foreground">{TRIAL_LABEL}.</p>
                 </div>
