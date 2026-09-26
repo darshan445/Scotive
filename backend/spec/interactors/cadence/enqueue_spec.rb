@@ -86,7 +86,8 @@ RSpec.describe Cadence::Enqueue do
       expect(row.cc_addresses).to eq([ "cfo@acme.com" ])
       expect(row.subject).to eq("Re: INV-12")
       expect(row.body).to include("INV-12")
-      expect(row.body).to include("Pay here: https://pay.qbo.test/inv-12")
+      expect(row.body).to include("INV-12")
+      expect(row.body).not_to include("https://pay.qbo.test/inv-12")
       expect(row.scheduled_send_at).to eq(Time.utc(2026, 9, 18, 10, 15))
     end
   end

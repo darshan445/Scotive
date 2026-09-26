@@ -52,20 +52,82 @@ RSpec.describe Invoices::DraftChase do
     described_class.execute(organization: organization, invoice_id: invoice.id, client: llm, **extra)
   end
 
-  it "uses LLM copy when the reader returns a body" do
+  def add_inbound!(body)
+    conversation = organization.conversations.create!(
+      integration: mailbox,
+      external_thread_id: "t-home",
+      subject: "INV-12"
+    )
+    InvoiceConversation.create!(invoice: invoice, conversation: conversation, is_primary: true, created_at: Time.current)
+    message = conversation.messages.create!(
+      external_message_id: "m-in",
+      direction: "client_to_user",
+      from_address: "ap@acme.com",
+      to_addresses: [ "owner@studio.com" ],
+      sent_at: Time.utc(2026, 9, 17, 15),
+      created_at: Time.utc(2026, 9, 17, 15),
+      clean_body: body
+    )
+    invoice.update!(last_human_inbound_at: message.sent_at, last_human_inbound_message: message, chase_status: "needs_you")
+    conversation
+  end
+
+  it "drafts a chase and appends the formatted pay-link template" do
     allow(llm).to receive(:complete_json).and_return(
+      "job" => "chase",
+      "include_pay_link" => true,
+      "reason" => "A payment reminder.",
       "subject" => "Re: INV-12",
-      "body" => "Hi Acme, checking on INV-12."
+      "body" => "Hi Acme, checking on INV-12.\n\nThanks"
     )
 
     result = execute!
     expect(result.success?).to eq(true)
-    expect(result.data[:body]).to eq("Hi Acme, checking on INV-12.")
-    expect(result.data[:subject]).to eq("Re: INV-12")
-    expect(llm).to have_received(:complete_json).with(hash_including(temperature: 0.3))
+    expect(result.data[:job]).to eq("chase")
+    expect(result.data[:needs_instruction]).to eq(false)
+    expect(result.data[:include_pay_link]).to eq(true)
+    expect(result.data[:body]).to include("Hi Acme, checking on INV-12.")
+    expect(result.data[:body]).not_to include("https://pay.qbo.test/inv-12")
+    expect(result.data[:mail_preview][:pay_label]).to eq("View and pay this invoice")
+    expect(result.data[:mail_preview][:include_pay_link]).to eq(true)
   end
 
-  it "falls back to a pending Firm draft when the LLM fails" do
+  it "does not draft a decision until the owner instructs" do
+    add_inbound!("Can you take $50 off this invoice?")
+    allow(llm).to receive(:complete_json).and_return(
+      "job" => "decision",
+      "include_pay_link" => false,
+      "reason" => "They asked to change the amount.",
+      "subject" => "Re: INV-12",
+      "body" => ""
+    )
+
+    result = execute!
+    expect(result.success?).to eq(true)
+    expect(result.data[:job]).to eq("decision")
+    expect(result.data[:needs_instruction]).to eq(true)
+    expect(result.data[:body]).to eq("")
+    expect(result.data[:reason]).to include("change the amount")
+  end
+
+  it "drafts a decision only from the owner instruction and skips the pay link" do
+    add_inbound!("Can you take $50 off this invoice?")
+    allow(llm).to receive(:complete_json).and_return(
+      "job" => "decision",
+      "include_pay_link" => false,
+      "reason" => "Invoice stands.",
+      "subject" => "Re: INV-12",
+      "body" => "The balance is still $250.\n\nThanks"
+    )
+
+    result = execute!(note: "invoice stands")
+    expect(result.success?).to eq(true)
+    expect(result.data[:needs_instruction]).to eq(false)
+    expect(result.data[:body]).to include("The balance is still $250.")
+    expect(result.data[:body]).not_to include("https://pay.qbo.test/inv-12")
+  end
+
+  it "falls back to a pending Firm draft when the LLM fails on a silent invoice" do
     allow(llm).to receive(:complete_json).and_raise(Faraday::Error, "timeout")
     conversation = organization.conversations.create!(
       integration: mailbox,
@@ -86,9 +148,22 @@ RSpec.describe Invoices::DraftChase do
 
     result = execute!
     expect(result.success?).to eq(true)
-    expect(result.data[:body]).to eq("Firm copy from cadence")
+    expect(result.data[:body]).to include("Firm copy from cadence")
+    expect(result.data[:body]).not_to include("https://pay.qbo.test/inv-12")
     expect(result.data[:tone_label]).to eq("Firm follow-up")
     expect(result.data[:is_reply]).to eq(true)
+    expect(result.data[:job]).to eq("chase")
+  end
+
+  it "does not guess a draft when the LLM fails after a client reply" do
+    add_inbound!("Can you adjust this?")
+    allow(llm).to receive(:complete_json).and_raise(Faraday::Error, "timeout")
+
+    result = execute!
+    expect(result.success?).to eq(true)
+    expect(result.data[:needs_instruction]).to eq(true)
+    expect(result.data[:body]).to eq("")
+    expect(result.data[:job]).to eq("decision")
   end
 
   it "falls back to status templates and prepends a steer note when the LLM fails" do
@@ -99,7 +174,8 @@ RSpec.describe Invoices::DraftChase do
       expect(result.data[:tone_label]).to eq("Firm follow-up")
       expect(result.data[:body]).to include("mention the PO")
       expect(result.data[:body]).to include("INV-12")
-      expect(result.data[:body]).to include("Pay here: https://pay.qbo.test/inv-12")
+      expect(result.data[:include_pay_link]).to eq(true)
+      expect(result.data[:body]).not_to include("https://pay.qbo.test/inv-12")
     end
   end
 

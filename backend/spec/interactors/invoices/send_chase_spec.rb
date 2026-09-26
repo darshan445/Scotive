@@ -180,6 +180,30 @@ RSpec.describe Invoices::SendChase do
     end
   end
 
+  it "resolves a Gmail provider id to Unipile's email id before reply_to" do
+    travel_to Time.utc(2026, 9, 18, 12) do
+      conversation = add_home_thread!
+      conversation.messages.update_all(external_message_id: "1a0c7e7f9b9a7a1c")
+      allow(email_client).to receive(:get_email).and_return("id" => "GdrFaK8zU_yokzYExXyqLA")
+      allow(email_client).to receive(:send_email).and_return("id" => "msg-sent")
+
+      result = described_class.execute(
+        organization: organization,
+        invoice_id: invoice.id,
+        subject: "Re: INV-12",
+        body: "Following up",
+        wait_until: "2026-09-25",
+        client: email_client
+      )
+
+      expect(result.success?).to eq(true)
+      expect(email_client).to have_received(:get_email).with("1a0c7e7f9b9a7a1c", account_id: "acc-gmail")
+      expect(email_client).to have_received(:send_email).with(
+        hash_including(reply_to: "GdrFaK8zU_yokzYExXyqLA")
+      )
+    end
+  end
+
   it "replies on a new client compose thread instead of the Home Thread" do
     travel_to Time.utc(2026, 9, 18, 12) do
       home = add_home_thread!

@@ -279,13 +279,8 @@ export function InvoiceDetailDrawer({ invoiceId, preview = null, open, onClose, 
                                         active={open}
                                         embedded
                                         showBack={false}
-                                        autoDraft={false}
+                                        autoDraft
                                         defaultSubject={data?.threads?.[0]?.subject || inv.pending_subject || (inv.invoice_ref ? `Re: Invoice ${inv.invoice_ref}` : "")}
-                                        initialDraft={firm && inv.pending_body ? {
-                                            subject: inv.pending_subject,
-                                            body: inv.pending_body,
-                                            is_reply: false,
-                                        } : null}
                                         waitUntil={followUpDate}
                                         sendLabel={firm ? "Approve & send from Gmail" : "Send reply"}
                                         onDirtyChange={(d) => { composeDirtyRef.current = d; }}

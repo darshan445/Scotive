@@ -70,7 +70,7 @@ class Cadence::Enqueue
       to_address: invoice.client.primary_email,
       cc_addresses: Array(invoice.cc_emails),
       subject: Cadence::Copy.subject(invoice, home_thread),
-      body: Cadence::Copy.body(invoice, step),
+      body: Cadence::Copy.body_without_pay(invoice, step),
       scheduled_send_at: send_at
     )
   rescue ActiveRecord::RecordNotUnique

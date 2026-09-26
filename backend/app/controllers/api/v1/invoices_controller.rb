@@ -46,7 +46,9 @@ module Api
           invoice_id: params[:id],
           subject: body_param("subject"),
           body: body_param("body"),
-          wait_until: body_param("wait_until")
+          wait_until: body_param("wait_until"),
+          include_pay_link: body_param("include_pay_link"),
+          attachments: uploaded_attachments
         )
         render_result(result, failure_status: missing_invoice?(result) ? :not_found : :unprocessable_content)
       end
@@ -55,6 +57,10 @@ module Api
 
       def body_param(key)
         request.request_parameters[key].presence || params[key]
+      end
+
+      def uploaded_attachments
+        Array(params[:attachments]).presence || Array(params["attachments"])
       end
 
       def missing_invoice?(result)

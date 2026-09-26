@@ -11,11 +11,46 @@ module Cadence::Copy
   end
 
   def body(invoice, step)
-    lines = [ "Hi,", "", paragraph(invoice, step) ]
-    pay = pay_line(invoice)
-    lines += [ "", pay ] if pay.present?
-    lines += [ "", "Thanks" ]
-    lines.join("\n")
+    attach_pay_block(body_without_pay(invoice, step), invoice)
+  end
+
+  def body_without_pay(invoice, step)
+    [ "Hi,", "", paragraph(invoice, step), "", "Thanks" ].join("\n")
+  end
+
+  def pay_block(invoice)
+    token = invoice.pay_link_token.to_s.strip
+    return if token.blank?
+
+    number = invoice.invoice_number
+    remaining = money(invoice, invoice.balance_remaining)
+    if token.match?(/\Ahttps?:\/\//i)
+      "Pay invoice #{number} (#{remaining}):\n#{token}"
+    else
+      "Payment reference for invoice #{number}: #{token}"
+    end
+  end
+
+  def attach_pay_block(body, invoice)
+    text = body.to_s
+    block = pay_block(invoice)
+    return text if block.blank?
+
+    token = invoice.pay_link_token.to_s.strip
+    return text if token.present? && text.include?(token)
+
+    if text.match?(/\nThanks\s*\z/)
+      text.sub(/\nThanks\s*\z/, "\n\n#{block}\n\nThanks")
+    else
+      "#{text.rstrip}\n\n#{block}"
+    end
+  end
+
+  def strip_pay_urls(body, invoice)
+    text = body.to_s
+    token = invoice.pay_link_token.to_s.strip
+    text = text.gsub(token, "") if token.present?
+    text.gsub(/\n{3,}/, "\n\n").strip
   end
 
   def paragraph(invoice, step)
@@ -44,10 +79,7 @@ module Cadence::Copy
   end
 
   def pay_line(invoice)
-    token = invoice.pay_link_token.to_s.strip
-    return if token.blank?
-
-    token.match?(/\Ahttps?:\/\//i) ? "Pay here: #{token}" : "Payment reference: #{token}"
+    pay_block(invoice)
   end
 
   def money(invoice, amount)
