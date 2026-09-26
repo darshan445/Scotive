@@ -6,11 +6,12 @@ import {
     MarketingSolveBlock,
 } from "@/components/MarketingShell";
 import { absoluteUrl } from "@/lib/seo";
+import { PRICE_AFTER_TRIAL, PRICE_FOOTER } from "@/lib/site";
 
 const PATH = "/zoho-books-invoice-chasing";
 const TITLE = "Zoho Books · Scotive";
 const DESCRIPTION =
-    "QBO / Xero / Zoho / FreshBooks create invoice, due date, paid/unpaid, books. Existing tools = invoicing + ledger. Scotive = chase on top of that ledger and that inbox. Zoho Books is coming soon. You keep QBO/Xero. We run the chase. $49/month, or $490/year.";
+    `QBO / Xero / Zoho / FreshBooks create invoice, due date, paid/unpaid, books. Existing tools = invoicing + ledger. Scotive = chase on top of that ledger and that inbox. Zoho Books is coming soon. You keep QBO/Xero. We run the chase. ${PRICE_FOOTER}.`;
 
 export const metadata = {
     title: { absolute: TITLE },
@@ -84,7 +85,7 @@ export default function ZohoBooksInvoiceChasingPage() {
  → Scotive (match thread to invoice, Friendly cadence, pause on reply, pay link, Firm you approve)`}</pre>
                     <p className="type-body mt-4 text-muted-foreground">
                         Cadence runs Friendly, pauses on reply, pay link in the draft, keep QBO/Xero.
-                        $49/month, or $490/year (2 months free). Agency / studio ops or founder, Gmail or Outlook + QBO.
+                        {" "}{PRICE_AFTER_TRIAL} Agency / studio ops or founder, Gmail or Outlook + QBO.
                     </p>
                     <p className="type-body mt-3 text-muted-foreground">
                         <Link href="/integrations" className="text-foreground underline underline-offset-2">

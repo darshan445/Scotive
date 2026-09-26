@@ -6,11 +6,12 @@ import {
     MarketingSolveBlock,
 } from "@/components/MarketingShell";
 import { absoluteUrl } from "@/lib/seo";
+import { PRICE_AFTER_TRIAL, PRICE_FOOTER } from "@/lib/site";
 
 const PATH = "/outlook-invoice-chasing";
 const TITLE = "Outlook · Scotive";
 const DESCRIPTION =
-    "Gmail / Outlook is the actual conversation. We match the thread to that invoice so you don't send 'just checking in' on an open reply. Friendly reminders send from your inbox and pause the moment they talk. Firm waits for a click. $49/month, or $490/year.";
+    `Gmail / Outlook is the actual conversation. We match the thread to that invoice so you don't send 'just checking in' on an open reply. Friendly reminders send from your inbox and pause the moment they talk. Firm waits for a click. ${PRICE_FOOTER}.`;
 
 export const metadata = {
     title: { absolute: TITLE },
@@ -104,7 +105,7 @@ export default function OutlookInvoiceChasingPage() {
                         Cadence runs Friendly, pauses on reply, pay link in the draft, keep QBO/Xero.
                     </p>
                     <p className="type-body mt-3 text-muted-foreground">
-                        $49/month, or $490/year (2 months free). Charge when there are more than a handful of open invoices. Agency / studio
+                        {PRICE_AFTER_TRIAL} Charge when there are more than a handful of open invoices. Agency / studio
                         ops or founder, ~8–40 people, B2B retainers, Gmail or Outlook + QBO. Consultant /
                         fractional with 8+ open invoices.
                     </p>

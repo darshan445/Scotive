@@ -5,7 +5,7 @@ export const TRIAL_LABEL = "30-day free trial";
 export const TRIAL_CTA = "Start free trial";
 
 /** One plan. Primary ICP (agency / consultant with a pile of open invoices). */
-export const MONTHLY_PRICE = 49;
+export const MONTHLY_PRICE = 29;
 /** Standard SaaS annual: 2 months free (pay for 10, get 12) ≈ 17% off. */
 export const ANNUAL_MONTHS_FREE = 2;
 export const ANNUAL_TOTAL = MONTHLY_PRICE * (12 - ANNUAL_MONTHS_FREE);
