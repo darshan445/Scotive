@@ -44,6 +44,7 @@ module Quickbooks::BooksPersistence
     record.primary_email = email if email.present?
     record.domain = corporate_domain(record.primary_email) if record.domain.blank?
     record.associated_emails = merge_emails(record.associated_emails, [ email ] + cc + bcc)
+      .reject { |value| owner_mailbox_emails.include?(value) }
     raise_string_error(record.errors.full_messages.to_sentence) unless record.save
     record
   end
@@ -114,6 +115,12 @@ module Quickbooks::BooksPersistence
 
   def merge_emails(*lists)
     lists.flatten.map { |email| normalize_email(email) }.compact.uniq
+  end
+
+  def owner_mailbox_emails
+    emails = organization.integrations.mailbox.filter_map { |row| normalize_email(row.account_name) }
+    emails.concat(organization.users.filter_map { |row| normalize_email(row.email) })
+    emails.to_set
   end
 
   def corporate_domain(email)

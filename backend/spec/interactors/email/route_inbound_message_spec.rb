@@ -199,6 +199,25 @@ RSpec.describe Email::RouteInboundMessage do
     expect(invoice.conversations.find_by(external_thread_id: "t-pay-miss")).to be_blank
   end
 
+  it "discards a newsletter to the owner even if HTML contains an invoice number" do
+    result = route(
+      message(
+        id: "m-promo",
+        thread_id: "t-promo",
+        from: "noreply@email.openai.com",
+        to: "owner@studio.com",
+        subject: "4 new image styles to try",
+        body: "<img width=\"2301\" /> Invoice 1081 leftover copy"
+      )
+    )
+
+    expect(result).to be_success
+    expect(result.data[:discarded]).to eq(true)
+    expect(result.data[:reason]).to eq("automatic_reply")
+    expect(invoice.conversations.find_by(external_thread_id: "t-promo")).to be_blank
+    expect(client_row.reload.associated_emails).not_to include("noreply@email.openai.com")
+  end
+
   it "matches a CC'd AP alias and remembers the sender" do
     invoice.update!(cc_emails: [ "cpa@books.com" ])
 

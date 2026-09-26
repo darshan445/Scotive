@@ -94,6 +94,53 @@ RSpec.describe Email::EvaluateInvoiceState do
     expect(invoice.list_bucket).to eq("needs_you")
   end
 
+  it "unlinks a noreply newsletter and does not treat it as the client writing" do
+    add_message!(id: "m-out", from: "owner@studio.com", to: "ap@acme.com", direction: "user_to_client", body: "Invoice attached")
+    promo = organization.conversations.create!(
+      integration: mailbox,
+      external_thread_id: "t-promo",
+      subject: "4 new image styles to try"
+    )
+    InvoiceConversation.create!(invoice: invoice, conversation: promo, is_primary: false, created_at: Time.current)
+    junk = promo.messages.create!(
+      external_message_id: "m-promo",
+      direction: "client_to_user",
+      from_address: "noreply@email.openai.com",
+      to_addresses: [ "owner@studio.com" ],
+      sent_at: Time.utc(2026, 9, 25, 9, 38),
+      clean_body: "Work cartoon or anime portrait?",
+      automatic: false,
+      created_at: Time.current
+    )
+    invoice.update!(chase_status: "needs_you", last_human_inbound_at: junk.sent_at, last_human_inbound_message_id: junk.id)
+
+    result = described_class.execute(invoice: invoice)
+    expect(result.success?).to eq(true)
+    expect(invoice.reload.chase_status).to eq("watching")
+    expect(invoice.last_human_inbound_message_id).to be_nil
+    expect(invoice.invoice_conversations.find_by(conversation_id: promo.id)).to be_blank
+  end
+
+  it "ignores an Automatic reply subject even when the automatic flag was not set" do
+    add_message!(id: "m-out", from: "owner@studio.com", to: "ap@acme.com", direction: "user_to_client", body: "Invoice attached")
+    organization.conversations.find_by(external_thread_id: "t-home")
+      .update!(subject: "Automatic reply: I am out of the office")
+    add_message!(
+      id: "m-ooo",
+      from: "ap@acme.com",
+      to: "owner@studio.com",
+      direction: "client_to_user",
+      body: "I am out of the office until Monday.",
+      automatic: false
+    )
+
+    result = described_class.execute(invoice: invoice)
+    expect(result.success?).to eq(true)
+    expect(invoice.reload.chase_status).to eq("watching")
+    expect(invoice.last_human_inbound_message_id).to be_nil
+    expect(invoice.invoice_chase_events.last.event_type).to eq("auto_reply_ignored")
+  end
+
   it "ignores an out-of-office and stays in Watching" do
     add_message!(id: "m-out", from: "owner@studio.com", to: "ap@acme.com", direction: "user_to_client", body: "Invoice attached")
     add_message!(

@@ -52,6 +52,16 @@ RSpec.describe Invoices::DraftChase do
     described_class.execute(organization: organization, invoice_id: invoice.id, client: llm, **extra)
   end
 
+  def add_home!
+    conversation = organization.conversations.create!(
+      integration: mailbox,
+      external_thread_id: "t-home",
+      subject: "INV-12"
+    )
+    InvoiceConversation.create!(invoice: invoice, conversation: conversation, is_primary: true, created_at: Time.current)
+    conversation
+  end
+
   def add_inbound!(body)
     conversation = organization.conversations.create!(
       integration: mailbox,
@@ -73,6 +83,7 @@ RSpec.describe Invoices::DraftChase do
   end
 
   it "drafts a chase and appends the formatted pay-link template" do
+    add_home!
     allow(llm).to receive(:complete_json).and_return(
       "job" => "chase",
       "include_pay_link" => true,
@@ -94,13 +105,7 @@ RSpec.describe Invoices::DraftChase do
 
   it "does not draft a decision until the owner instructs" do
     add_inbound!("Can you take $50 off this invoice?")
-    allow(llm).to receive(:complete_json).and_return(
-      "job" => "decision",
-      "include_pay_link" => false,
-      "reason" => "They asked to change the amount.",
-      "subject" => "Re: INV-12",
-      "body" => ""
-    )
+    allow(llm).to receive(:complete_json)
 
     result = execute!
     expect(result.success?).to eq(true)
@@ -108,6 +113,19 @@ RSpec.describe Invoices::DraftChase do
     expect(result.data[:needs_instruction]).to eq(true)
     expect(result.data[:body]).to eq("")
     expect(result.data[:reason]).to include("change the amount")
+    expect(llm).not_to have_received(:complete_json)
+  end
+
+  it "does not draft a chase when they asked for a W-9 even if the model would" do
+    add_inbound!("Can you resend the W-9 for SIM-2306 before we put this on the pay run?")
+    expect(llm).not_to receive(:complete_json)
+
+    result = execute!
+    expect(result.data[:job]).to eq("decision")
+    expect(result.data[:needs_instruction]).to eq(true)
+    expect(result.data[:body]).to eq("")
+    expect(result.data[:reason]).to include("W-9")
+    expect(result.data[:instruction_hint]).to include("W-9")
   end
 
   it "drafts a decision only from the owner instruction and skips the pay link" do
@@ -125,6 +143,42 @@ RSpec.describe Invoices::DraftChase do
     expect(result.data[:needs_instruction]).to eq(false)
     expect(result.data[:body]).to include("The balance is still $250.")
     expect(result.data[:body]).not_to include("https://pay.qbo.test/inv-12")
+  end
+
+  it "retries when an instruction comes back with an empty body" do
+    add_inbound!("Can you resend the W-9 for SIM-2306 before we put this on the pay run?")
+    allow(llm).to receive(:complete_json).and_return(
+      { "job" => "decision", "include_pay_link" => false, "reason" => "", "subject" => "Re: INV-12", "body" => "" },
+      {
+        "job" => "decision",
+        "include_pay_link" => false,
+        "reason" => "W-9 is on the way.",
+        "subject" => "Re: INV-12",
+        "body" => "Hi Acme,\n\nThe W-9 is on the way for INV-12 so you can put this on the pay run.\n\nThanks\nAda"
+      }
+    )
+
+    result = execute!(note: "it's on the way")
+    expect(result.data[:body]).to include("W-9 is on the way")
+    expect(result.data[:body]).to include("Hi Acme")
+    expect(result.data[:needs_instruction]).to eq(false)
+    expect(llm).to have_received(:complete_json).twice
+  end
+
+  it "does not tell the owner to shorten a note when the writer fails" do
+    add_inbound!("Can you resend the W-9?")
+    allow(llm).to receive(:complete_json).and_return(
+      "job" => "decision",
+      "include_pay_link" => false,
+      "reason" => "",
+      "subject" => "Re: INV-12",
+      "body" => ""
+    )
+
+    result = execute!(note: "it's on the way")
+    expect(result.data[:body]).to eq("")
+    expect(result.data[:reason]).to eq("Couldn't write that reply. Try again.")
+    expect(result.data[:reason]).not_to include("shorter")
   end
 
   it "falls back to a pending Firm draft when the LLM fails on a silent invoice" do
@@ -180,6 +234,7 @@ RSpec.describe Invoices::DraftChase do
   end
 
   it "uses saved last Friendly offset before Needs you drafts Firm" do
+    add_home!
     allow(llm).to receive(:complete_json).and_raise(Faraday::Error, "timeout")
     organization.update!(escalation_offsets: [ -3, 0, 20 ])
     travel_to Time.utc(2026, 9, 18, 12) do

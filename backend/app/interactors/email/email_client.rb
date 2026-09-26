@@ -13,13 +13,14 @@ class Email::EmailClient
     get("/api/v1/accounts/#{account_id}")
   end
 
-  def list_emails(account_id:, after: nil, any_email: nil, search: nil, from: nil, folder: nil, cursor: nil, limit: 100)
+  def list_emails(account_id:, after: nil, any_email: nil, search: nil, from: nil, folder: nil, thread_id: nil, cursor: nil, limit: 100)
     params = { account_id: account_id, limit: limit }
     params[:after] = after if after.present?
     params[:any_email] = any_email if any_email.present?
     params[:search] = search if search.present?
     params[:from] = from if from.present?
     params[:folder] = folder if folder.present?
+    params[:thread_id] = thread_id if thread_id.present?
     params[:cursor] = cursor if cursor.present?
     get("/api/v1/emails", params, timeout: 30)
   end

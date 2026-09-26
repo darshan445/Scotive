@@ -50,8 +50,10 @@ class Invoices::DraftChase
       conversation = reply_conversation(invoice)
       pending = pending_draft(invoice)
       step = step_for(invoice, pending)
-      llm = llm_copy(invoice, conversation, step)
-      assemble(invoice, conversation, pending, step, llm)
+      classified = validate_result(Invoices::ClassifyDraftJob.execute(invoice: invoice)).data
+      job = classified[:job]
+      llm = llm_copy(invoice, conversation, step, job) if write_copy?(job)
+      assemble(invoice, conversation, pending, step, job, classified[:reason], llm)
     end
   end
 
@@ -85,11 +87,15 @@ class Invoices::DraftChase
     invoice.list_bucket == "needs_you"
   end
 
-  def assemble(invoice, conversation, pending, step, llm)
-    job = normalize_job(llm&.dig("job")) || fallback_job(invoice)
+  def write_copy?(job)
+    AUTO_DRAFT_JOBS.include?(job) || note.present?
+  end
+
+  def assemble(invoice, conversation, pending, step, job, classified_reason, llm)
     instructed = note.present?
-    can_draft = AUTO_DRAFT_JOBS.include?(job) || instructed
-    reason = llm&.dig("reason").presence || JOB_REASONS[job]
+    can_draft = write_copy?(job)
+    reason = classified_reason.presence || JOB_REASONS[job]
+    reason = llm&.dig("reason").presence || reason if instructed
     payload = {
       subject: llm&.dig("subject").presence || pending&.subject.presence || Cadence::Copy.subject(invoice, conversation),
       body: "",
@@ -101,7 +107,7 @@ class Invoices::DraftChase
       reason: reason,
       needs_instruction: !can_draft,
       include_pay_link: false,
-      instruction_hint: instruction_hint(job)
+      instruction_hint: instruction_hint(job, classified_reason)
     }
     return payload unless can_draft
 
@@ -112,7 +118,7 @@ class Invoices::DraftChase
     end
     if body.blank?
       payload[:needs_instruction] = true
-      payload[:reason] = instructed ? "Couldn't draft that. Try a shorter instruction." : reason
+      payload[:reason] = instructed ? "Couldn't write that reply. Try again." : reason
       return payload
     end
 
@@ -123,13 +129,6 @@ class Invoices::DraftChase
       include_pay_link: include_link,
       mail_preview: Cadence::MailTemplate.preview(invoice, include_pay_link: include_link)
     )
-  end
-
-  def fallback_job(invoice)
-    return "chase" if silent?(invoice)
-    return "broken_date" if invoice.wait_expired?
-
-    "decision"
   end
 
   def silent?(invoice)
@@ -144,8 +143,10 @@ class Invoices::DraftChase
     llm["include_pay_link"] == true
   end
 
-  def instruction_hint(job)
-    if job == "decision"
+  def instruction_hint(job, reason)
+    if reason.to_s.match?(/W-9|file or form/i)
+      "e.g. attach the W-9, or say it's on the way"
+    elsif job == "decision"
       "e.g. invoice stands, or offer $1,800 if they pay this week"
     else
       "Optional: shorter, mention the PO, change the tone"
@@ -157,8 +158,27 @@ class Invoices::DraftChase
     JOBS.include?(key) ? key : nil
   end
 
-  def llm_copy(invoice, conversation, step)
-    raw = client.complete_json(system: prompt, user: payload(invoice, conversation, step).to_json, temperature: 0.3)
+  def llm_copy(invoice, conversation, step, job)
+    parsed = parse_llm(safe_complete(invoice, conversation, step, job))
+    if note.present? && parsed&.dig("body").blank?
+      parsed = parse_llm(safe_complete(invoice, conversation, step, job, force_write: true))
+    end
+    parsed
+  end
+
+  def safe_complete(invoice, conversation, step, job, force_write: false)
+    complete_llm(invoice, conversation, step, job, force_write: force_write)
+  rescue Faraday::Error, KeyError
+    nil
+  end
+
+  def complete_llm(invoice, conversation, step, job, force_write: false)
+    user = payload(invoice, conversation, step, job).to_json
+    user = "#{user}\n\nWrite the full email now. body must not be empty." if force_write
+    client.complete_json(system: prompt, user: user, temperature: note.present? ? 0.4 : 0.3)
+  end
+
+  def parse_llm(raw)
     return unless raw.is_a?(Hash)
 
     data = raw.stringify_keys
@@ -169,12 +189,14 @@ class Invoices::DraftChase
       "subject" => data["subject"].to_s.strip.presence,
       "body" => data["body"].to_s.strip.presence
     }
-  rescue Faraday::Error, KeyError
-    nil
   end
 
-  def payload(invoice, conversation, step)
+  def payload(invoice, conversation, step, job)
     {
+      job: job,
+      write_email: note.present? || AUTO_DRAFT_JOBS.include?(job),
+      client_first_name: first_name(invoice.client&.name),
+      owner_first_name: owner_first_name,
       invoice_number: invoice.invoice_number,
       amount: invoice.total_amount.to_s,
       remaining: invoice.balance_remaining.to_s,
@@ -204,6 +226,14 @@ class Invoices::DraftChase
 
     last = linked_messages(invoice).where(direction: "client_to_user").order(sent_at: :desc).first
     last&.conversation || Ledger::InvoicePayload.primary_conversation(invoice)
+  end
+
+  def first_name(value)
+    value.to_s.strip.split(/\s+/).first.presence
+  end
+
+  def owner_first_name
+    organization.users.where.not(first_name: [ nil, "" ]).order(:created_at).first&.first_name
   end
 
   def last_client_body(invoice)

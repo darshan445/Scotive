@@ -30,6 +30,18 @@ module Invoices::ChaseWrite
     record_chase_event!(invoice, type: "human_inbound", message: message, quote: quote)
   end
 
+  def clear_false_inbound!(invoice)
+    return if invoice.last_human_inbound_message_id.blank?
+
+    invoice.update!(
+      last_human_inbound_at: nil,
+      last_human_inbound_message_id: nil,
+      chase_status: invoice.chase_status == "stopped" ? "stopped" : "watching"
+    )
+    apply_friendly_window!(invoice)
+    record_chase_event!(invoice, type: "auto_reply_ignored", quote: "cleared non-client inbound")
+  end
+
   def apply_wait_until!(invoice, date, actor: "user", quote: nil)
     invoice.update!(chase_status: "watching", expected_pay_date: date)
     OutboxMessage.cancel_pending_for!(invoice, "waiting_until_date")

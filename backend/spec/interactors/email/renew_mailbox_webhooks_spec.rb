@@ -30,8 +30,9 @@ RSpec.describe Email::RenewMailboxWebhooks do
       webhook_expires_at: 1.day.from_now
     )
     allow(client).to receive(:list_webhooks).and_return(
-      "items" => [ { "id" => "wh-old", "request_url" => "https://example.ngrok-free.dev/api/v1/gmail/webhooks", "source" => "email" } ]
+      "items" => [ { "id" => "wh-old", "name" => "wherewasthis-email", "request_url" => "https://example.ngrok-free.dev/api/v1/gmail/webhooks", "source" => "email" } ]
     )
+    allow(client).to receive(:delete_webhook)
     allow(client).to receive(:create_webhook)
 
     result = described_class.execute(client: client)

@@ -1,4 +1,4 @@
-Write a chase email the owner can send from their own mailbox, in the existing thread.
+Write the email the owner will send from their mailbox, on this thread.
 
 Return JSON only:
 {
@@ -6,31 +6,32 @@ Return JSON only:
   "include_pay_link": true or false,
   "reason": "one short line for the owner, not for the client",
   "subject": "Re: …",
-  "body": "plain text email body, or empty string"
+  "body": "plain text email body"
 }
 
-Classify from last_client_message and recent_messages. When unsure, use "decision".
+The payload already set "job". Do not reclassify.
 
-Jobs:
-- chase: silent unpaid, or they only asked when / how to pay. Payment reminder.
-- broken_date: they named a date and it passed. Ask when payment will actually go out. Do not pretend they never promised.
-- answer_facts: they asked something already in the payload (invoice number, remaining, due date). Answer only those facts.
-- decision: discount, wrong amount, scope, “can you adjust?”, “we already paid”, dispute, missing W-9/file you do not have, or any commercial yes/no. Never guess what the owner will do.
+When steer_note is present (any length — a word or a paragraph):
+- You MUST write a full email. body must not be "".
+- steer_note is the outcome to communicate, not the email itself.
+- "thanks" → a real thank-you (greeting, what you're thanking them for, close).
+- "it's on the way" after a W-9/file ask → tell them that file is coming, name the invoice, close.
+- Do not paste the note as the whole body. Expand it the way a person would write to this client.
 
-When to write body:
-- job is chase, broken_date, or answer_facts: write the email.
-- job is decision and steer_note is empty: body must be "". Do not agree, refuse, or explain. The owner will instruct first.
-- steer_note is present: always write the email from the owner’s instruction. That note is the outcome. Do not follow the client’s ask if the note says otherwise.
+When steer_note is empty:
+- chase / broken_date / answer_facts: write the email.
+- decision: body must be "".
 
 Pay link:
-- include_pay_link true only when the email is asking them to pay (chase, broken_date, or they asked how to pay).
-- false for decision, “we paid”, dispute, or a facts-only answer that is not about paying.
-- Never paste a URL. Never write “Pay here” or “Pay invoice”. A backend template adds a “View and pay this invoice” button when include_pay_link is true.
+- include_pay_link true only when asking them to pay.
+- false for decision, “we paid”, dispute, file/W-9, or a facts-only answer that is not about paying.
+- Never paste a URL. Never write “Pay here” or “Pay invoice”. A backend template adds the button.
 
-Rules for any body you do write:
-- Same thread. Subject stays a Re: of existing_subject when one is provided.
-- Sound like the owner’s last outbound messages when those exist. Short. No legalese, late fees, or threats.
-- Do not invent facts (new amounts, PO numbers, wire details, new dates, “I updated QuickBooks”).
-- Remaining balance in the payload is ground truth. Do not change it unless steer_note says to.
-- Always include invoice number, remaining balance, and due date when the email is a chase or broken_date.
-- Plain text. Sign off “Thanks” with no invented last name.
+How a written body must look:
+- Open with Hi {client_first_name}, (or Hi there if no name).
+- Answer their last_client_message using the facts and steer_note.
+- Same thread. Subject is a Re: of existing_subject when provided.
+- Sound like owner_voice when those exist. Warm, specific, 4–8 short lines. No legalese, late fees, or threats.
+- Do not invent amounts, PO numbers, wire details, new dates, or “I updated QuickBooks”.
+- Remaining balance in the payload is ground truth unless steer_note changes it.
+- Sign off Thanks then owner_first_name when provided. No invented last name.

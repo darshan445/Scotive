@@ -48,6 +48,11 @@ RSpec.describe Invoices::SendChase do
   end
   let(:email_client) { instance_double(Email::EmailClient) }
 
+  before do
+    allow(email_client).to receive(:list_emails).and_return({ "items" => [] })
+    allow(email_client).to receive(:get_email) { |id, **| { "id" => id } }
+  end
+
   def add_home_thread!
     conversation = organization.conversations.create!(
       integration: mailbox,
@@ -180,6 +185,33 @@ RSpec.describe Invoices::SendChase do
     end
   end
 
+  it "uses a live thread id from Unipile when stored parents are Gmail hex" do
+    travel_to Time.utc(2026, 9, 18, 12) do
+      add_home_thread!
+      allow(email_client).to receive(:list_emails).and_return(
+        "items" => [ { "id" => "LiveUnipileParentId01" } ]
+      )
+      allow(email_client).to receive(:send_email).and_return("id" => "msg-sent")
+
+      result = described_class.execute(
+        organization: organization,
+        invoice_id: invoice.id,
+        subject: "Re: INV-12",
+        body: "Following up",
+        wait_until: "2026-09-25",
+        client: email_client
+      )
+
+      expect(result.success?).to eq(true)
+      expect(email_client).to have_received(:list_emails).with(
+        hash_including(account_id: "acc-gmail", thread_id: "t-home")
+      )
+      expect(email_client).to have_received(:send_email).with(
+        hash_including(reply_to: "LiveUnipileParentId01")
+      )
+    end
+  end
+
   it "resolves a Gmail provider id to Unipile's email id before reply_to" do
     travel_to Time.utc(2026, 9, 18, 12) do
       conversation = add_home_thread!
@@ -268,12 +300,37 @@ RSpec.describe Invoices::SendChase do
     expect(email_client).not_to have_received(:send_email)
   end
 
+  it "retries without reply_to when Unipile says the parent mail is gone" do
+    travel_to Time.utc(2026, 9, 18, 12) do
+      add_home_thread!
+      allow(email_client).to receive(:send_email) do |**kwargs|
+        if kwargs[:reply_to].present?
+          raise Faraday::Error, "Unipile POST /api/v1/emails failed (422): errors/parent_mail_not_found — Parent mail not found"
+        end
+
+        { "id" => "msg-new" }
+      end
+
+      result = described_class.execute(
+        organization: organization,
+        invoice_id: invoice.id,
+        subject: "Re: INV-12",
+        body: "Following up",
+        wait_until: "2026-09-25",
+        client: email_client
+      )
+
+      expect(result.success?).to eq(true)
+      expect(email_client).to have_received(:send_email).with(hash_including(reply_to: nil))
+    end
+  end
+
   it "returns the Unipile error when the mailbox send fails" do
     travel_to Time.utc(2026, 9, 18, 12) do
       add_home_thread!
       allow(email_client).to receive(:send_email).and_raise(
         Faraday::Error,
-        "Unipile POST /api/v1/emails failed (422): errors/invalid_reply_to — Email not found"
+        "Unipile POST /api/v1/emails failed (500): mailbox exploded"
       )
 
       result = described_class.execute(
@@ -286,8 +343,7 @@ RSpec.describe Invoices::SendChase do
       )
 
       expect(result.success?).to eq(false)
-      expect(result.errors).to include("invalid_reply_to")
-      expect(result.errors).to include("Email not found")
+      expect(result.errors).to include("mailbox exploded")
     end
   end
 

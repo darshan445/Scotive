@@ -20,22 +20,50 @@ module Cadence::HomeThreadSend
     pay = include_pay_link.nil? ? invoice.pay_link_token.to_s.match?(/\Ahttps?:\/\//i) : include_pay_link
     prose = Cadence::Copy.strip_pay_urls(body, invoice)
     mail = Cadence::MailTemplate.for(invoice, prose: prose, include_pay_link: pay)
-    reply_to = unipile_reply_to(client, mailbox, conversation)
-    payload = client.send_email(
-      account_id: mailbox.external_account_id,
+    payload = send_with_live_parent!(
+      client: client,
+      mailbox: mailbox,
+      conversation: conversation,
       to: to,
-      cc: Array(cc),
+      cc: cc,
       subject: subject,
-      body: mail[:html],
-      reply_to: reply_to,
-      custom_headers: [
-        { name: "X-Auto-Response-Suppress", value: "All" }
-      ],
-      attachments: Array(attachments)
+      html: mail[:html],
+      attachments: attachments
     )
     persist_delivered!(invoice, conversation, mailbox, payload, to: to, cc: cc, subject: subject, body: prose, outbox: outbox)
   rescue Faraday::Error => e
     raise_string_error(e.message.to_s.presence || "Mailbox send failed")
+  end
+
+  PARENT_GONE = /parent_mail_not_found|parent_mail_invalid|invalid_reply_to|email not found/i
+
+  def send_with_live_parent!(client:, mailbox:, conversation:, to:, cc:, subject:, html:, attachments:)
+    parents = unipile_reply_candidates(client, mailbox, conversation)
+    last_error = nil
+    (parents + [ nil ]).uniq.each do |reply_to|
+      begin
+        return client.send_email(
+          account_id: mailbox.external_account_id,
+          to: to,
+          cc: Array(cc),
+          subject: subject,
+          body: html,
+          reply_to: reply_to,
+          custom_headers: [
+            { name: "X-Auto-Response-Suppress", value: "All" }
+          ],
+          attachments: Array(attachments)
+        )
+      rescue Faraday::Error => e
+        last_error = e
+        next if PARENT_GONE.match?(e.message) && reply_to.present?
+
+        raise
+      end
+    end
+    raise last_error if last_error
+
+    raise_string_error("Mailbox send failed")
   end
 
   def persist_delivered!(invoice, conversation, mailbox, payload, to:, cc:, subject:, body:, outbox:)
@@ -116,27 +144,52 @@ module Cadence::HomeThreadSend
     payload["id"].presence || payload[:id].presence
   end
 
-  # Unipile reply_to must be their email id, not a Gmail hex provider_id or RFC Message-ID.
-  def unipile_reply_to(client, mailbox, conversation)
-    account_id = mailbox.external_account_id
+  # Live Unipile ids on this mailbox first. Stored Gmail hex / stale ids are only hints.
+  def unipile_reply_candidates(client, mailbox, conversation)
+    ids = live_thread_email_ids(client, mailbox, conversation)
     conversation.messages.order(sent_at: :desc).each do |message|
-      resolved = resolve_unipile_email_id(client, account_id, message.external_message_id)
-      return resolved if resolved.present?
+      resolved = verify_unipile_email_id(client, mailbox.external_account_id, message.external_message_id)
+      next if resolved.blank? || ids.include?(resolved)
+
+      ids << resolved
+      remember_unipile_id!(message, resolved)
     end
-    nil
+    ids
   end
 
-  def resolve_unipile_email_id(client, account_id, stored)
-    token = stored.to_s.strip
-    return if token.blank? || token.start_with?("outbox:")
-    return token if unipile_email_id?(token)
+  def live_thread_email_ids(client, mailbox, conversation)
+    thread_id = conversation.external_thread_id.to_s
+    return [] if thread_id.blank?
 
-    row = client.get_email(token, account_id: account_id)
+    body = client.list_emails(account_id: mailbox.external_account_id, thread_id: thread_id, limit: 20)
+    items = Array(body.is_a?(Hash) ? (body["items"] || body["data"]) : nil)
+    items.filter_map { |row| live_row_id(row) }
+  rescue Faraday::Error
+    []
+  end
+
+  def live_row_id(row)
     return unless row.is_a?(Hash)
 
     id = row["id"].presence || row[:id].presence || row["email_id"].presence
     id if unipile_email_id?(id)
+  end
+
+  def verify_unipile_email_id(client, account_id, stored)
+    token = stored.to_s.strip
+    return if token.blank? || token.start_with?("outbox:")
+
+    row = client.get_email(token, account_id: account_id)
+    live_row_id(row)
   rescue Faraday::Error
+    nil
+  end
+
+  def remember_unipile_id!(message, resolved)
+    return if resolved.blank? || message.external_message_id == resolved
+
+    message.update!(external_message_id: resolved)
+  rescue ActiveRecord::RecordNotUnique, ActiveRecord::RecordInvalid
     nil
   end
 

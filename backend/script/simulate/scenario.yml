@@ -1,246 +1,200 @@
 # ==============================================================================
-# AR onboarding match suite (real Gmail + QBO)
+# Live Gmail + QBO suite (one file)
 #
-# Confirms the new clustering rules, not the 10-status reader:
-#   Pass 1  — invoice number anywhere in the thread binds the whole thread
-#   Pass 1  — unique $ amount binds only when no number is present
-#   Pass 2  — unlabeled payment talk + 2+ open invoices → joint-link ALL of them
-#   Ignore  — project chatter / other_payment / OOO subject
+# Logged-in user:  testuser@gmail.com
+# Org mailbox:     wherewasthis.contact@gmail.com
+# Client:          r24827708@gmail.com
 #
-# Extra gap files (run separately; unlabeled Pass 2 would pollute these):
-#   script/simulate/scenario_clock.yml   — token-only HOME, outbound clock, fallback
-#   script/simulate/scenario_single.yml  — Pass 2 with exactly one open invoice
+# Only those two Gmails. No custom domain — matcher uses exact addresses,
+# never from:gmail.com. Client.domain stays nil.
 #
-# Client is Gmail (rp9900821): matcher must use that exact address, not from:gmail.com.
-# Unique per-invoice subjects so Gmail does not stack QBO-lookalike mail.
-# QBO /send cannot set a subject; the runner mailbox-sends when unique_subjects is true.
+# Cannot live-test here (covered by specs): Outlook, @acme.com coworker,
+# a third AP alias inbox, QBO mark-paid / void.
+#
+# Payment replies always name the invoice so Pass 2 does not joint-link
+# every open invoice on this client.
 # ==============================================================================
 user_email: testuser@gmail.com
 user_mailbox: wherewasthis.contact@gmail.com
-client_email: rp9900821@gmail.com
-client_name: AR Sim rp9900821
+client_email: r24827708@gmail.com
+client_name: AR Sim r24827708
 company_name: "Craig's Design and Landscaping Services"
 unique_subjects: true
-wait_seconds: 8
+wait_seconds: 6
 send_from_qbo: true
 
 invoices:
-  # ----------------------------------------------------------------------------
-  # SIM-2101 HOME + inheritance
-  # Send subject has the number. Later replies omit it ("will pay Friday") but stay
-  # on the same thread. Expect: this HOME thread on 2101 only.
-  # ----------------------------------------------------------------------------
-  - number: SIM-2101
-    amount: 1000.00
-    due_in_days: -5
-    description: Full Stack Development Retainer
-    send:
-      via: qbo
-      subject: "Invoice {{invoice_number}} from Craig's Design and Landscaping Services"
-      message: Please find invoice {{invoice_number}} for ${{amount}} attached, due {{due_date}}.
-    conversations:
-      - from: client
-        thread: existing
-        body: Thanks for the reminder. We have scheduled this and will pay this Friday.
-      - from: client
-        thread: existing
-        body: Wait, stop the payment! Line item 2 says $400 for consulting, but our agreed rate was $200. We only owe $800.
-      - from: user
-        thread: existing
-        body: Confirmed, $800 it is. I have applied a $200 credit memo to reflect our agreement.
+  # --- Auto reminders: outbound only, still in Friendly window ---------------
 
-  # ----------------------------------------------------------------------------
-  # SIM-2102 numbered split + MUST NOT eat SIM-2108 via remaining $500
-  # Amounts: 2102=$500 unique, 2108=$900 with "remaining $500" ON 2108's numbered thread.
-  # Expect: wire_check subject names 2102 → 2102 only. 2108 thread never on 2102.
-  # ----------------------------------------------------------------------------
-  - number: SIM-2102
-    amount: 500.00
-    due_in_days: 10
-    description: UI/UX Redesign Deliverable
+  - number: SIM-2301
+    amount: 481.00
+    due_in_days: 3
+    description: Website retainer — due in 3 days
+    expect: { bucket: auto_reminders, min_threads: 1, inbound: false }
     send:
       via: mailbox
       from: wherewasthis.contact@gmail.com
       subject: "Invoice {{invoice_number}} from Craig's Design and Landscaping Services"
-      message: Invoice {{invoice_number}} for ${{amount}} is due {{due_date}}. Pay online at https://connect.intuit.com/pay/sim2102_token.
-    conversations:
-      - from: client
-        thread: existing
-        body: "Wire sent just now! Wire Ref: HDFC-TXN-998822."
-      - from: client
-        thread: new
-        as: wire_check
-        subject: "Status of wire transfer for {{invoice_number}}"
-        body: Can you confirm whether the wire for ${{amount}} hit your account?
-      - from: user
-        thread: wire_check
-        body: Checked with HDFC Bank—no deposit has arrived yet under reference HDFC-TXN-998822.
+      message: Invoice {{invoice_number}} for ${{amount}} is due {{due_date}}.
+    conversations: []
 
-  # ----------------------------------------------------------------------------
-  # SIM-2103 remittance names TWO invoices (Pass 1 multi-anchor)
-  # Expect: "Consolidated Remittance…" thread on BOTH 2102 and 2103. Not on 2108.
-  # Plus unlabeled payment (Pass 2 joint): attached to EVERY open invoice for this client.
-  # ----------------------------------------------------------------------------
-  - number: SIM-2103
-    amount: 2500.00
-    due_in_days: -3
-    description: Cloud Infrastructure & Database Migration
+  - number: SIM-2302
+    amount: 721.00
+    due_in_days: 0
+    description: Brand workshop — due today
+    expect: { bucket: auto_reminders, min_threads: 1, inbound: false }
     send:
-      via: qbo
+      via: mailbox
+      from: wherewasthis.contact@gmail.com
       subject: "Invoice {{invoice_number}} from Craig's Design and Landscaping Services"
-      message: Invoice {{invoice_number}} for ${{amount}} was due on {{due_date}}.
-    conversations:
-      - from: client
-        thread: new
-        as: multi_remittance
-        subject: "Consolidated Remittance Advice: {{invoice_number}} & SIM-2102"
-        body: Hi Darshan, we have processed combined payment for invoice SIM-2102 ($500) and invoice {{invoice_number}} ($2,500). Both will clear via ACH early next week.
-      - from: user
-        thread: multi_remittance
-        body: Thanks, I will monitor our account for both transactions early next week.
-      - from: client
-        thread: new
-        as: unlabeled_payment
-        subject: "Payment released"
-        body: We will pay the outstanding invoices this week. Please confirm banking details.
+      message: Invoice {{invoice_number}} for ${{amount}} is due today.
+    conversations: []
 
-  # ----------------------------------------------------------------------------
-  # SIM-2104 outbound-only send + unique-amount orphan (no invoice number in mail)
-  # $350.00 is unique among this suite. Expect amount-only thread on 2104 only.
-  # Send thread: 2104 only. Clock, no client reply on the home thread.
-  # ----------------------------------------------------------------------------
-  - number: SIM-2104
-    amount: 350.00
-    due_in_days: -12
-    description: Quarterly Maintenance
+  - number: SIM-2303
+    amount: 911.00
+    due_in_days: -2
+    description: Monthly ops — 2 days late, still in window
+    expect: { bucket: auto_reminders, min_threads: 1, inbound: false }
     send:
       via: mailbox
       from: wherewasthis.contact@gmail.com
       subject: "Invoice {{invoice_number}} from Craig's Design and Landscaping Services"
       message: Invoice {{invoice_number}} for ${{amount}} was due {{due_date}}.
+    conversations: []
+
+  # --- Needs you: inbound on the HOME thread --------------------------------
+
+  - number: SIM-2304
+    amount: 1501.00
+    due_in_days: -5
+    description: Retainer — promised Friday (reply omits the number)
+    expect: { bucket: needs_you, min_threads: 1, inbound: true }
+    send:
+      via: mailbox
+      from: wherewasthis.contact@gmail.com
+      subject: "Invoice {{invoice_number}} from Craig's Design and Landscaping Services"
+      message: Please find invoice {{invoice_number}} for ${{amount}}, due {{due_date}}.
     conversations:
       - from: client
-        thread: new
-        as: amount_only
-        subject: "Balance question"
-        body: Accounting asked about the $350.00 balance. Can you confirm that is still open?
+        thread: existing
+        body: Thanks — we have this scheduled and will pay Friday.
 
-  # ----------------------------------------------------------------------------
-  # SIM-2105 W-9 on numbered home + project chatter (must NOT attach)
-  # ----------------------------------------------------------------------------
-  - number: SIM-2105
-    amount: 1200.00
+  - number: SIM-2305
+    amount: 2401.00
     due_in_days: -4
-    description: API Security Audit
-    send:
-      via: qbo
-      subject: "Invoice {{invoice_number}} from Craig's Design and Landscaping Services"
-      message: Invoice {{invoice_number}} for ${{amount}} is due {{due_date}}.
-    conversations:
-      - from: client
-        thread: existing
-        body: Can you send over an updated W-9 form and your wiring instructions? Our finance team cannot release the $1,200.00 without it.
-      - from: client
-        thread: new
-        as: project_chat
-        subject: "Workshop next week"
-        body: Can we move the kickoff workshop to Tuesday? The agenda is scoping only. No billing or invoices.
-
-  # ----------------------------------------------------------------------------
-  # SIM-2106 number only in the body (Pass 1 still hits). Subject omits SIM-2106 so
-  # Gmail does not stack it, but matching cannot use the subject — only the body.
-  # ----------------------------------------------------------------------------
-  - number: SIM-2106
-    amount: 850.00
-    due_in_days: 5
-    description: Monthly SEO Optimization
+    description: Sprint — asked to cut $400
+    expect: { bucket: needs_you, min_threads: 1, inbound: true }
     send:
       via: mailbox
       from: wherewasthis.contact@gmail.com
-      subject: "Invoice from Craig's Design and Landscaping Services (SEO Q3)"
-      message: Invoice {{invoice_number}} for ${{amount}} is due {{due_date}}.
-    conversations:
-      - from: client
-        thread: existing
-        body: Got the SEO invoice for SIM-2106. We will remit payment next Tuesday.
-
-  # ----------------------------------------------------------------------------
-  # SIM-2107 numbered home. Must NOT inherit SIM-2110's thread.
-  # ----------------------------------------------------------------------------
-  - number: SIM-2107
-    amount: 600.00
-    due_in_days: -8
-    description: Mobile App Bugfixes
-    send:
-      via: qbo
-      subject: "Invoice {{invoice_number}} from Craig's Design and Landscaping Services"
-      message: Invoice {{invoice_number}} for ${{amount}} is attached, due {{due_date}}.
-    conversations:
-      - from: client
-        thread: existing
-        body: We are running payroll now and will pay this Friday.
-      - from: user
-        thread: existing
-        body: Forget Friday, that date does not work. This was due over a week ago and we need payment settled today.
-
-  # ----------------------------------------------------------------------------
-  # SIM-2108 "remaining $500" on a $900 invoice whose SUBJECT names 2108.
-  # Regression: must not attach to SIM-2102 ($500).
-  # ----------------------------------------------------------------------------
-  - number: SIM-2108
-    amount: 900.00
-    due_in_days: 2
-    description: Custom Dashboard Integration
-    send:
-      via: mailbox
-      from: wherewasthis.contact@gmail.com
-      subject: "Invoice {{invoice_number}} from Craig's Design and Landscaping Services"
-      message: Invoice {{invoice_number}} for ${{amount}} is due {{due_date}}.
-    conversations:
-      - from: client
-        thread: existing
-        body: We just sent an initial deposit of $400.00 via direct deposit. We will transfer the remaining $500.00 at the end of the month.
-
-  # ----------------------------------------------------------------------------
-  # SIM-2109 AP routing on numbered home (no date). Matching: 2109 only.
-  # ----------------------------------------------------------------------------
-  - number: SIM-2109
-    amount: 1500.00
-    due_in_days: -2
-    description: Frontend Performance Tuning
-    send:
-      via: qbo
-      subject: "Invoice {{invoice_number}} from Craig's Design and Landscaping Services"
-      message: Invoice {{invoice_number}} for ${{amount}} was due on {{due_date}}.
-    conversations:
-      - from: client
-        thread: existing
-        body: Approved and routed over to accounting for payment processing.
-
-  # ----------------------------------------------------------------------------
-  # SIM-2110 OOO on numbered home. Must stay on 2110, never on 2107.
-  # ----------------------------------------------------------------------------
-  - number: SIM-2110
-    amount: 450.00
-    due_in_days: 6
-    description: Database Optimization Consultation
-    send:
-      via: qbo
       subject: "Invoice {{invoice_number}} from Craig's Design and Landscaping Services"
       message: Invoice {{invoice_number}} for ${{amount}} is attached.
     conversations:
       - from: client
         thread: existing
-        body: Received, thanks! I am currently out of the office returning Monday.
+        body: Hold on about {{invoice_number}}. Line 2 is $800 but we agreed $400. Take $400 off so this is $2000?
 
-  # ----------------------------------------------------------------------------
-  # SIM-2111 digits-only Pass 1. New thread never says SIM-2111 — only "2111".
-  # Expect: digits thread on 2111 only. Must not steal SIM-2101.
-  # ----------------------------------------------------------------------------
-  - number: SIM-2111
-    amount: 175.00
+  - number: SIM-2306
+    amount: 641.00
+    due_in_days: -6
+    description: Design hours — asked for a W-9
+    expect: { bucket: needs_you, min_threads: 1, inbound: true }
+    send:
+      via: mailbox
+      from: wherewasthis.contact@gmail.com
+      subject: "Invoice {{invoice_number}} from Craig's Design and Landscaping Services"
+      message: Invoice {{invoice_number}} for ${{amount}} is attached, due {{due_date}}.
+    conversations:
+      - from: client
+        thread: existing
+        body: Can you resend the W-9 for {{invoice_number}} before we put this on the pay run?
+
+  - number: SIM-2307
+    amount: 381.00
+    due_in_days: -12
+    description: Photo day — 12 days late, no reply (past Friendly)
+    expect: { bucket: needs_you, min_threads: 1, inbound: false }
+    send:
+      via: mailbox
+      from: wherewasthis.contact@gmail.com
+      subject: "Invoice {{invoice_number}} from Craig's Design and Landscaping Services"
+      message: Invoice {{invoice_number}} for ${{amount}} was due {{due_date}}.
+    conversations: []
+
+  - number: SIM-2308
+    amount: 880.00
+    due_in_days: -8
+    description: Workshop — client says already paid
+    expect: { bucket: needs_you, min_threads: 1, inbound: true }
+    send:
+      via: mailbox
+      from: wherewasthis.contact@gmail.com
+      subject: "Invoice {{invoice_number}} from Craig's Design and Landscaping Services"
+      message: Invoice {{invoice_number}} for ${{amount}} is attached.
+    conversations:
+      - from: client
+        thread: existing
+        body: We already paid {{invoice_number}} last Tuesday. Can you check your books?
+
+  # --- Two-way thread: client, you, client -----------------------------------
+
+  - number: SIM-2309
+    amount: 1120.00
+    due_in_days: -3
+    description: Retainer add-on — back and forth
+    expect: { bucket: needs_you, min_threads: 1, inbound: true }
+    send:
+      via: mailbox
+      from: wherewasthis.contact@gmail.com
+      subject: "Invoice {{invoice_number}} from Craig's Design and Landscaping Services"
+      message: Invoice {{invoice_number}} for ${{amount}} is attached.
+    conversations:
+      - from: client
+        thread: existing
+        body: Got {{invoice_number}}. Can you confirm the PO is PO-4419?
+      - from: user
+        thread: existing
+        body: Confirmed — PO-4419 is on {{invoice_number}}. Pay link is in the original email.
+      - from: client
+        thread: existing
+        body: Thanks. AP will release {{invoice_number}} on the next pay run.
+
+  # --- One client mail names two invoices ------------------------------------
+
+  - number: SIM-2310
+    amount: 510.00
+    due_in_days: -4
+    description: Half of a joint pay
+    expect: { bucket: needs_you, min_threads: 1, inbound: true }
+    send:
+      via: mailbox
+      from: wherewasthis.contact@gmail.com
+      subject: "Invoice {{invoice_number}} from Craig's Design and Landscaping Services"
+      message: Invoice {{invoice_number}} for ${{amount}} is attached.
+    conversations:
+      - from: client
+        thread: existing
+        body: We will pay SIM-2310 and SIM-2311 together on Friday. One transfer.
+
+  - number: SIM-2311
+    amount: 520.00
+    due_in_days: -4
+    description: Other half of a joint pay
+    expect: { bucket: needs_you, min_threads: 1, inbound: true }
+    send:
+      via: mailbox
+      from: wherewasthis.contact@gmail.com
+      subject: "Invoice {{invoice_number}} from Craig's Design and Landscaping Services"
+      message: Invoice {{invoice_number}} for ${{amount}} is attached.
+    conversations: []
+
+  # --- Must NOT attach / must NOT pause --------------------------------------
+
+  - number: SIM-2312
+    amount: 330.00
     due_in_days: 4
-    description: Retainer true-up
+    description: Silent invoice plus an OOO that must not pause chase
+    expect: { bucket: auto_reminders, min_threads: 1, max_threads: 1, inbound: false }
     send:
       via: mailbox
       from: wherewasthis.contact@gmail.com
@@ -249,91 +203,48 @@ invoices:
     conversations:
       - from: client
         thread: new
-        as: digits_only
-        subject: "Checking 2111"
-        body: AP asked about 2111 — is that still open? They did not have the SIM prefix in their system.
+        as: ooo
+        subject: "Automatic reply: I am out of the office"
+        body: I am out of the office until next Monday with no access to email.
 
-  # ----------------------------------------------------------------------------
-  # SIM-2112 QBO-style send. Generic stacked-looking subject. Body + PDF filename
-  # still name SIM-2112 (Invoice_SIM-2112.pdf). Expect: this send thread on 2112.
-  # ----------------------------------------------------------------------------
-  - number: SIM-2112
+  - number: SIM-2313
+    amount: 340.00
+    due_in_days: 5
+    description: Silent invoice plus project chatter that must not attach
+    expect: { bucket: auto_reminders, min_threads: 1, max_threads: 1, inbound: false }
+    send:
+      via: mailbox
+      from: wherewasthis.contact@gmail.com
+      subject: "Invoice {{invoice_number}} from Craig's Design and Landscaping Services"
+      message: Invoice {{invoice_number}} for ${{amount}} is due {{due_date}}.
+    conversations:
+      - from: client
+        thread: new
+        as: chatter
+        subject: "Landing page for next quarter"
+        body: Can we add a landing page next month? Budget is around $4000 for that new work only.
+
+  # --- Token-only HOME (no invoice number in the subject) --------------------
+
+  - number: SIM-2314
     amount: 275.00
-    due_in_days: -1
-    description: Year-end close support
-    send:
-      via: mailbox
-      from: wherewasthis.contact@gmail.com
-      subject: "Invoice from Craig's Design and Landscaping Services — Q4 close"
-      message: Your invoice is attached.
-    conversations:
-      - from: client
-        thread: existing
-        body: Received the PDF. We will put this in the next AP run.
-
-  # ----------------------------------------------------------------------------
-  # SIM-2113 numbered HOME + unlabeled OOO subject (must NOT attach).
-  # Skip is the subject prefix "Out of Office", not OOO in the body (see 2110).
-  # Expect: HOME on 2113. "Out of Office: …" thread on no invoice.
-  # ----------------------------------------------------------------------------
-  - number: SIM-2113
-    amount: 410.00
-    due_in_days: 1
-    description: Accessible checkout pass
-    send:
-      via: qbo
-      subject: "Invoice {{invoice_number}} from Craig's Design and Landscaping Services"
-      message: Invoice {{invoice_number}} for ${{amount}} is due {{due_date}}.
-    conversations:
-      - from: client
-        thread: existing
-        body: Thanks, we have this.
-      - from: client
-        thread: new
-        as: ooo_subject
-        subject: "Out of Office: I am away until Monday"
-        body: I am out of the office with no access to email. This is an automatic reply.
-
-  # ----------------------------------------------------------------------------
-  # SIM-2114 numbered HOME + unlabeled other_payment (new quote / budget).
-  # Expect: HOME on 2114. Quote thread on no invoice (intent is not invoice_payment).
-  # ----------------------------------------------------------------------------
-  - number: SIM-2114
-    amount: 480.00
     due_in_days: 6
-    description: Brand workshop
+    description: Token-only send — pay link in the body, no number in the subject
+    expect: { bucket: auto_reminders, min_threads: 1, inbound: false }
     send:
-      via: qbo
-      subject: "Invoice {{invoice_number}} from Craig's Design and Landscaping Services"
-      message: Invoice {{invoice_number}} for ${{amount}} is due {{due_date}}.
-    conversations:
-      - from: client
-        thread: new
-        as: other_payment
-        subject: "Quote for the spring landscaping add-on"
-        body: Can you send a new estimate for the spring add-on? Budget for next quarter is about $4,000. This is not payment on anything already billed.
-
-  # ----------------------------------------------------------------------------
-  # SIM-2115 quoted-only number on a NEW thread. Live text never says SIM-2115.
-  # Number lives inside "On Mon wrote:" (stripped from clean_body, kept in raw_body)
-  # and the PDF-style filename mention. Expect: quoted thread on 2115 only.
-  # ----------------------------------------------------------------------------
-  - number: SIM-2115
-    amount: 195.00
-    due_in_days: 2
-    description: Copy edits
-    send:
-      via: mailbox
+      via: plain
       from: wherewasthis.contact@gmail.com
-      subject: "Invoice {{invoice_number}} from Craig's Design and Landscaping Services"
-      message: Invoice {{invoice_number}} for ${{amount}} is due {{due_date}}.
-    conversations:
-      - from: client
-        thread: new
-        as: quoted_only
-        subject: "Invoice from Craig's Design and Landscaping Services"
-        body: |
-          Got it, thanks.
+      subject: "Your invoice is ready"
+      message: "Pay here: {{pay_link}}"
+    conversations: []
 
-          On Mon, QuickBooks wrote:
-          Invoice SIM-2115 for $195.00 is attached (Invoice_SIM-2115.pdf).
+  # --- Never emailed — batch match misses, fallback miss ---------------------
+
+  - number: SIM-2315
+    amount: 199.00
+    due_in_days: 7
+    description: Created in QBO, never emailed
+    expect: { bucket: auto_reminders, min_threads: 0, max_threads: 0, inbound: false }
+    send:
+      via: none
+    conversations: []

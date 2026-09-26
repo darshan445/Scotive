@@ -96,6 +96,7 @@ class Email::RouteInboundMessage
   def remember_sender!(client_row, email)
     normalized = normalize_email(email)
     return if normalized.blank?
+    return if owner_mailbox_emails.include?(normalized)
 
     client_row.associated_emails = merge_associated(client_row.associated_emails, normalized)
     client_row.primary_email = normalized if client_row.primary_email.blank?

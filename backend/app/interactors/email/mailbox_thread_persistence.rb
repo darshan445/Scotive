@@ -7,6 +7,7 @@ require "set"
 # and per-invoice fallback. Not an interactor.
 module Email::MailboxThreadPersistence
   AMOUNT_PATTERN = /(?:usd|us\$|\$)?\s*(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{2}))?/i
+  CURRENCY_AMOUNT_PATTERN = /(?:usd|us\$|\$)\s*(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{2}))?/i
 
   def persist_thread!(mailbox, invoice, thread_id, messages, primary:)
     thread_messages = messages.select { |message| message[:thread_id] == thread_id }.sort_by { |message| message[:sent_at] }
@@ -285,6 +286,7 @@ module Email::MailboxThreadPersistence
   def automatic_message?(message)
     return true if message[:automatic]
     return true if bounce_from?(message)
+    return true if noreply_from?(message)
 
     subject = message[:subject].to_s
     return true if subject.match?(/\A\s*(automatic reply|auto[- ]reply|out of office|ooo:)/i)
@@ -301,6 +303,11 @@ module Email::MailboxThreadPersistence
   def bounce_from?(message)
     message[:from].to_s.match?(/mailer-daemon|postmaster/i) ||
       message[:subject].to_s.match?(/delivery status|undeliverable|returned mail/i)
+  end
+
+  def noreply_from?(message)
+    local = message[:from].to_s.split("@", 2).first.to_s.downcase
+    local.match?(/\A(no[-_]?reply|do[-_]?not[-_]?reply|noreply|notifications?|newsletter|mailer|digest|updates?)\z/)
   end
 
   def invoice_payment_intent?(thread_messages)
@@ -328,13 +335,14 @@ module Email::MailboxThreadPersistence
     number = invoice.invoice_number.to_s.strip
     return false if number.blank?
 
-    haystack = match_haystack(message)
-    return true if number_hit?(haystack, number)
+    prose = match_prose_haystack(message)
+    return true if number_hit?(prose, number)
+    return true if number.match?(/[A-Za-z]/) && number_hit?(match_haystack(message), number)
 
     digits = number[/\d{3,}\z/]
-    return false if digits.blank?
+    return false if digits.blank? || digits == number
 
-    number_hit?(haystack, digits)
+    number_hit?(prose, digits)
   end
 
   def number_hit?(haystack, token)
@@ -344,21 +352,27 @@ module Email::MailboxThreadPersistence
   def match_haystack(message)
     raw = message[:raw_body].to_s
     [
+      match_prose_haystack(message),
+      raw,
+      Invoices::PayLink.urls_in(raw)
+    ].compact.join("\n")
+  end
+
+  def match_prose_haystack(message)
+    [
       message[:subject],
       message[:clean_body],
-      raw,
-      Invoices::PayLink.urls_in(raw),
       Array(message[:attachment_names]).join(" ")
     ].compact.join("\n")
   end
 
   def match_amount?(invoice, message)
-    amounts = quoted_amounts(match_haystack(message))
+    amounts = quoted_amounts(match_prose_haystack(message), currency_required: true)
     amounts.include?(invoice.total_amount.to_d)
   end
 
   def match_exclusive_amount?(invoice, message, client_invoices)
-    amounts = quoted_amounts(match_haystack(message))
+    amounts = quoted_amounts(match_prose_haystack(message), currency_required: true)
     return false if amounts.empty?
 
     amounts.any? do |amount|
@@ -367,8 +381,9 @@ module Email::MailboxThreadPersistence
     end
   end
 
-  def quoted_amounts(text)
-    text.to_s.scan(AMOUNT_PATTERN).filter_map do |whole, cents|
+  def quoted_amounts(text, currency_required: false)
+    pattern = currency_required ? CURRENCY_AMOUNT_PATTERN : AMOUNT_PATTERN
+    text.to_s.scan(pattern).filter_map do |whole, cents|
       normalized = whole.to_s.delete(",")
       next if normalized.blank?
 
@@ -388,10 +403,17 @@ module Email::MailboxThreadPersistence
   end
 
   def contact_emails(clients)
+    owner = owner_mailbox_emails
     clients.flat_map do |client_row|
       [ client_row.primary_email ] + Array(client_row.associated_emails) +
         client_row.invoices.flat_map { |row| Array(row.cc_emails) + Array(row.bcc_emails) }
-    end.map { |email| normalize_email(email) }.compact.uniq
+    end.map { |email| normalize_email(email) }.compact.uniq.reject { |email| owner.include?(email) }
+  end
+
+  def owner_mailbox_emails
+    emails = organization.integrations.mailbox.filter_map { |row| normalize_email(row.account_name) }
+    emails.concat(organization.users.filter_map { |row| normalize_email(row.email) }) if organization.respond_to?(:users)
+    emails.to_set
   end
 
   def normalize_message(payload)

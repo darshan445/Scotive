@@ -855,6 +855,48 @@ RSpec.describe Email::MatchOpenInvoices do
     )
   end
 
+  it "does not search the owner's mailbox as if it were a client contact" do
+    client_row = create_client!(
+      external_id: "29a",
+      email: "r24827708@gmail.com",
+      domain: nil,
+      associated: [ "r24827708@gmail.com", "owner@studio.com" ]
+    )
+    create_invoice!(client_row, number: "1081", amount: 50, due_date: 29.days.from_now)
+    stub_list([])
+
+    result = run_match
+
+    expect(result).to be_success
+    expect(email_client).to have_received(:list_emails).with(
+      hash_including(search: a_string_including("from:r24827708@gmail.com"))
+    )
+    expect(email_client).not_to have_received(:list_emails).with(
+      hash_including(search: a_string_including("from:owner@studio.com"))
+    )
+  end
+
+  it "does not bind a newsletter that only mentions a bare invoice number in HTML" do
+    client_row = create_client!(external_id: "29b", email: "r24827708@gmail.com", domain: nil)
+    invoice = create_invoice!(client_row, number: "1081", amount: 50, due_date: 29.days.from_now)
+    stub_intent("other_payment")
+    stub_list([
+      mail(
+        id: "m-promo",
+        thread_id: "t-promo",
+        from: "noreply@email.openai.com",
+        to: "owner@studio.com",
+        subject: "4 new image styles to try",
+        body: "<img width=\"1081\" /><p>See your photos in a new way. Only 50 people left.</p>"
+      )
+    ])
+
+    result = run_match
+
+    expect(result).to be_success
+    expect(invoice.conversations.find_by(external_thread_id: "t-promo")).to be_blank
+  end
+
   it "searches a Gmail client by exact address, not from:gmail.com" do
     client_row = create_client!(external_id: "29", email: "vt444713@gmail.com", domain: nil)
     create_invoice!(client_row, number: "SIM-GMAIL", amount: 15, due_date: 5.days.from_now)

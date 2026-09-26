@@ -44,14 +44,23 @@ module Simulate
   end
 
   def run!
-    with_inline_jobs do
-      log "mode=#{mode} user=#{user.email} org=#{organization.id}"
-      assert_connections!
-      seed_invoices!
-      play_conversations!(ingest_webhooks: %w[webhook all].include?(mode))
-      run_onboarding! if %w[onboarding all].include?(mode)
-      run_sync! if %w[sync all].include?(mode)
-      print_snapshot
+    Rails.application.reloader.wrap do
+      with_inline_jobs do
+        log "mode=#{mode} user=#{user.email} org=#{organization.id}"
+        assert_connections!
+        if resume?
+          load_existing_seeds!
+        else
+          seed_invoices!
+          play_conversations!(ingest_webhooks: %w[webhook all].include?(mode))
+        end
+        refresh_records!
+        run_onboarding! if %w[onboarding all].include?(mode)
+        refresh_records!
+        run_sync! if %w[sync all].include?(mode)
+        print_snapshot
+        assert_expectations!
+      end
     end
   end
 
@@ -114,6 +123,40 @@ module Simulate
     truthy?(options["skip-emails"])
   end
 
+  def resume?
+    truthy?(options["resume"])
+  end
+
+  def refresh_records!
+    return if @user.blank?
+
+    @user = User.find(@user.id)
+    @organization = @user.organization
+    @accounting = nil
+    @mailbox = nil
+  end
+
+  def load_existing_seeds!
+    invoices_config.each do |row|
+      number = row["number"].to_s
+      local = organization.invoices.find_by(invoice_number: number)
+      raise "Resume: local invoice #{number} is missing. Run without --resume first." if local.blank?
+
+      created << {
+        config: row,
+        remote: { "Id" => local.external_id, "DocNumber" => number },
+        invoice_number: number,
+        amount: local.total_amount,
+        due_date: local.due_date,
+        pay_link: nil,
+        messages: [],
+        threads: {},
+        last_thread_for: { "user" => "invoice", "client" => "invoice" }
+      }
+      log "resume #{number} local=#{local.id} bucket=#{local.list_bucket} threads=#{local.invoice_conversations.size}"
+    end
+  end
+
   def user_unipile_id
     @user_unipile_id ||= mail.account_id_for!(user_mailbox_email, prefer: mailbox&.external_account_id)
   end
@@ -128,11 +171,20 @@ module Simulate
     raise "Set client_email in the scenario" if client_email.blank?
     raise "Mailbox account_name #{mailbox.account_name} does not match #{user_mailbox_email}" if mailbox.account_name.to_s.downcase != user_mailbox_email
 
+    remount_mailbox_if_stale!
     log "QBO realm=#{accounting.external_account_id} mailbox=#{mailbox.account_name} (#{mailbox.external_account_id})"
     log "Unipile user=#{user_mailbox_email} (#{user_unipile_id}) client=#{client_email} (#{client_unipile_id})"
-    if mailbox.external_account_id.to_s != user_unipile_id.to_s
-      log "WARN: Scotive mailbox id #{mailbox.external_account_id} != send/poll Unipile #{user_unipile_id}. Reconnect Gmail in the app if matching/webhooks miss mail."
-    end
+  end
+
+  # Gmail can be reconnected in Unipile while Scotive still stores the old account id
+  # (MAILS=CREDENTIALS). Matching, sync, and webhooks use integrations.external_account_id.
+  def remount_mailbox_if_stale!
+    live_id = user_unipile_id.to_s
+    stored_id = mailbox.external_account_id.to_s
+    return if stored_id == live_id
+
+    log "Mailbox Unipile id #{stored_id} is stale; pointing at live #{live_id} for #{user_mailbox_email}"
+    mailbox.update!(external_account_id: live_id)
   end
 
   def seed_invoices!
@@ -486,7 +538,7 @@ module Simulate
 
     log "UI path: POST /api/v1/qbo/pipelines/match → Quickbooks::EnqueueConversationMatch"
     begin
-      matched = must!(Quickbooks::EnqueueConversationMatch.execute(organization: organization, client: mail), "match")
+      matched = must!(Quickbooks::EnqueueConversationMatch.execute(organization: Organization.find(organization.id), client: mail), "match")
       log "match #{matched.inspect}"
     rescue RuntimeError => e
       raise unless e.message.to_s.match?(/State reader/)
@@ -577,18 +629,56 @@ module Simulate
         .count
       log [
         invoice.invoice_number,
+        "bucket=#{invoice.list_bucket}",
         "books=#{invoice.books_status}",
         "chase=#{invoice.chase_status}",
         "wait=#{invoice.expected_pay_date}",
         "balance=#{invoice.balance_remaining}",
         "threads=#{invoice.invoice_conversations.size}",
-        "messages=#{message_count}"
+        "messages=#{message_count}",
+        "inbound=#{invoice.last_human_inbound_at.present?}"
       ].join(" ")
       invoice.invoice_conversations.each do |link|
         conversation = link.conversation
         log "    #{link.is_primary? ? 'HOME' : 'split'} #{conversation.external_thread_id} #{conversation.subject.inspect}"
       end
     end
+  end
+
+  def assert_expectations!
+    failures = []
+    created.each do |seed|
+      expected = (seed[:config]["expect"] || {}).stringify_keys
+      next if expected.blank?
+
+      invoice = organization.invoices.find_by(invoice_number: seed[:invoice_number])
+      if invoice.blank?
+        failures << "#{seed[:invoice_number]} missing locally"
+        next
+      end
+
+      if expected.key?("bucket") && invoice.list_bucket != expected["bucket"].to_s
+        failures << "#{invoice.invoice_number} bucket=#{invoice.list_bucket} want #{expected['bucket']}"
+      end
+      threads = invoice.invoice_conversations.size
+      if expected.key?("min_threads") && threads < expected["min_threads"].to_i
+        failures << "#{invoice.invoice_number} threads=#{threads} want >= #{expected['min_threads']}"
+      end
+      if expected.key?("max_threads") && threads > expected["max_threads"].to_i
+        failures << "#{invoice.invoice_number} threads=#{threads} want <= #{expected['max_threads']}"
+      end
+      inbound = invoice.last_human_inbound_at.present?
+      if expected.key?("inbound") && inbound != truthy?(expected["inbound"])
+        failures << "#{invoice.invoice_number} inbound=#{inbound} want #{expected['inbound']}"
+      end
+    end
+
+    if failures.empty?
+      log "expectations ok"
+      return
+    end
+
+    raise "Scenario expectations failed:\n  #{failures.join("\n  ")}"
   end
 
   def invoices_config

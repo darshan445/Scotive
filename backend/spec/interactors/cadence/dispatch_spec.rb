@@ -69,6 +69,11 @@ RSpec.describe Cadence::Dispatch do
   end
   let(:email_client) { instance_double(Email::EmailClient) }
 
+  before do
+    allow(email_client).to receive(:list_emails).and_return({ "items" => [] })
+    allow(email_client).to receive(:get_email) { |id, **| { "id" => id } }
+  end
+
   def create_outbox!(status: "scheduled", step: "nudge_plus_3")
     invoice.update!(chase_status: "watching")
     invoice.outbox_messages.create!(

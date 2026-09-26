@@ -34,7 +34,7 @@ class Invoices::BuildConversation
 
       threads = serialize_threads(invoice)
       home = threads.find { |thread| thread[:is_primary] } || threads.first
-      messages = uniqued_messages(Array(home&.dig(:messages)))
+      messages = uniqued_messages(threads.flat_map { |thread| Array(thread[:messages]) })
         .sort_by { |message| message[:date].to_s }
         .reverse
       {

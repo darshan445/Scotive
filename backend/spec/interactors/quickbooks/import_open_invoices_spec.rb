@@ -79,6 +79,38 @@ RSpec.describe Quickbooks::ImportOpenInvoices do
     expect(integration.reload.last_synced_at).to be_present
   end
 
+  it "does not store the connected mailbox as a client contact" do
+    organization.integrations.create!(
+      category: "mailbox",
+      provider: "gmail",
+      external_account_id: "acc-gmail",
+      account_name: "owner@studio.com",
+      connection_status: "connected"
+    )
+    allow(qbo_client).to receive(:query_open_invoices).and_return([
+      invoice_payload(
+        id: "102",
+        customer_id: "59",
+        doc: "INV-102",
+        balance: "50.00",
+        total: "50.00",
+        txn_date: 10.days.ago.to_date.iso8601,
+        due_date: 5.days.from_now.to_date.iso8601,
+        email: "r24827708@gmail.com"
+      ).merge("BillEmailBcc" => { "Address" => "owner@studio.com" })
+    ])
+    allow(qbo_client).to receive(:query_customers).and_return([
+      { "Id" => "59", "DisplayName" => "Rahul", "PrimaryEmailAddr" => { "Address" => "r24827708@gmail.com" } }
+    ])
+
+    result = described_class.execute(organization: organization, client: qbo_client)
+
+    expect(result).to be_success
+    client_row = organization.clients.find_by!(external_id: "59")
+    expect(client_row.associated_emails).to include("r24827708@gmail.com")
+    expect(client_row.associated_emails).not_to include("owner@studio.com")
+  end
+
   it "puts a silent invoice past the Friendly window on Needs you" do
     allow(qbo_client).to receive(:query_open_invoices).and_return([
       invoice_payload(
