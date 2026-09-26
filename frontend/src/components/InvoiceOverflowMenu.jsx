@@ -24,14 +24,14 @@ export async function markInvoicePaidWithUndo(invoiceId, { onChanged } = {}) {
 export async function resumeInvoiceTracking(invoiceId, { onChanged } = {}) {
     try {
         await api.post(`/v1/invoices/${invoiceId}/action`, { action: "resume" });
-        toast.success("Snooze cleared");
+        toast.success("Back in Needs you");
         await onChanged?.();
     } catch (e) {
         toast.error(extractError(e));
     }
 }
 
-/** Resume Friendly cadence. Firm/Final drafts are skipped so they leave Needs you. */
+/** Clear a check-back date and put the invoice in Needs you. */
 export async function putBackOnCadence(invoice, { onChanged } = {}) {
     if (!invoice?._id) return;
     try {
@@ -67,6 +67,7 @@ export function InvoiceOverflowMenu({ invoice, onChanged, className = "" }) {
 
     const bucket = invoiceBucket(invoice);
     const closed = bucket === BUCKETS.paid;
+    const openChase = bucket === BUCKETS.watching || bucket === BUCKETS.auto_reminders;
     const threadUrl = gmailThreadUrl(invoice.source_thread_id || invoice.thread_id);
 
     if (closed && !threadUrl) return null;
@@ -89,7 +90,7 @@ export function InvoiceOverflowMenu({ invoice, onChanged, className = "" }) {
                     </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-56">
-                    {!closed && bucket === BUCKETS.watching ? (
+                    {openChase ? (
                         <DropdownMenuItem
                             data-testid="overflow-stop-chasing"
                             onSelect={() => {

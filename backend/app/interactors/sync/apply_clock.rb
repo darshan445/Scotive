@@ -24,7 +24,7 @@ class Sync::ApplyClock
     execute_log_and_return_open_struct do
       raise_string_error("Organization is required") if organization.blank?
 
-      { wait_expired: expire_waits! }
+      { wait_expired: expire_waits!, friendly_ended: expire_friendly_windows! }
     end
   end
 
@@ -52,6 +52,26 @@ class Sync::ApplyClock
     organization.invoices.books_open
       .where(chase_status: "watching")
       .where("expected_pay_date < ?", Date.current)
+  end
+
+  def expire_friendly_windows!
+    count = 0
+    friendly_scope.find_each do |invoice|
+      Invoice.transaction do
+        row = organization.invoices.lock.find(invoice.id)
+        next if row.chase_status != "watching"
+
+        apply_friendly_window!(row)
+        count += 1 if row.chase_status == "needs_you"
+      end
+    end
+    count
+  end
+
+  def friendly_scope
+    organization.invoices.books_open
+      .where(chase_status: "watching", last_human_inbound_at: nil)
+      .where("expected_pay_date IS NULL OR expected_pay_date < ?", organization.today)
   end
 
   # :ok — books refreshed (or local-only). :unavailable — do not expire on a stale unpaid.

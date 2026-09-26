@@ -98,11 +98,12 @@ RSpec.describe Invoices::SendChase do
         invoice_id: invoice.id,
         subject: "Re: INV-12",
         body: "Edited firm follow-up",
+        wait_until: "2026-09-25",
         client: email_client
       )
       expect(result.success?).to eq(true)
       expect(invoice.reload.chase_status).to eq("watching")
-      expect(invoice.expected_pay_date).to be_nil
+      expect(invoice.expected_pay_date).to eq(Date.new(2026, 9, 25))
       expect(draft.reload.status).to eq("sent")
       expect(draft.body).to eq("Edited firm follow-up")
       expect(invoice.outbox_messages.find_by(cadence_step: "nudge_plus_3").status).to eq("cancelled")
@@ -134,12 +135,14 @@ RSpec.describe Invoices::SendChase do
         invoice_id: invoice.id,
         subject: "Re: INV-12",
         body: "Any update from accounting?",
+        wait_until: "2026-09-25",
         client: email_client
       )
 
       expect(result.success?).to eq(true)
-      expect(invoice.reload.chase_status).to eq("needs_you")
-      expect(invoice.expected_pay_date).to be_nil
+      expect(invoice.reload.chase_status).to eq("watching")
+      expect(invoice.expected_pay_date).to eq(Date.new(2026, 9, 25))
+      expect(invoice.last_human_inbound_at).to eq(inbound.sent_at)
     end
   end
 
@@ -174,6 +177,93 @@ RSpec.describe Invoices::SendChase do
       expect(result.success?).to eq(true)
       expect(invoice.reload.chase_status).to eq("watching")
       expect(invoice.expected_pay_date).to eq(Date.new(2026, 9, 23))
+    end
+  end
+
+  it "replies on a new client compose thread instead of the Home Thread" do
+    travel_to Time.utc(2026, 9, 18, 12) do
+      home = add_home_thread!
+      split = organization.conversations.create!(
+        integration: mailbox,
+        external_thread_id: "t-new-compose",
+        subject: "Question about the PO"
+      )
+      InvoiceConversation.create!(invoice: invoice, conversation: split, is_primary: false, created_at: Time.current)
+      inbound = split.messages.create!(
+        external_message_id: "msg-new-compose",
+        direction: "client_to_user",
+        from_address: "ap-alt@acme.com",
+        to_addresses: [ "owner@studio.com" ],
+        sent_at: Time.utc(2026, 9, 17, 16),
+        clean_body: "Can you resend the PO?",
+        created_at: Time.current
+      )
+      invoice.update!(
+        chase_status: "needs_you",
+        last_human_inbound_at: inbound.sent_at,
+        last_human_inbound_message: inbound
+      )
+      allow(email_client).to receive(:send_email).and_return("id" => "msg-split-sent")
+
+      result = described_class.execute(
+        organization: organization,
+        invoice_id: invoice.id,
+        subject: "Re: INV-12",
+        body: "PO is attached.",
+        wait_until: "2026-09-25",
+        client: email_client
+      )
+
+      expect(result.success?).to eq(true)
+      expect(email_client).to have_received(:send_email).with(
+        hash_including(
+          to: "ap-alt@acme.com",
+          subject: "Re: Question about the PO",
+          reply_to: "msg-new-compose"
+        )
+      )
+      expect(split.messages.find_by!(external_message_id: "msg-split-sent")).to be_present
+      expect(home.messages.find_by(external_message_id: "msg-split-sent")).to be_blank
+    end
+  end
+
+  it "refuses to send without a check-back date" do
+    add_home_thread!
+    allow(email_client).to receive(:send_email)
+
+    result = described_class.execute(
+      organization: organization,
+      invoice_id: invoice.id,
+      subject: "Re: INV-12",
+      body: "Following up",
+      client: email_client
+    )
+
+    expect(result.success?).to eq(false)
+    expect(result.errors).to match(/check-back/i)
+    expect(email_client).not_to have_received(:send_email)
+  end
+
+  it "returns the Unipile error when the mailbox send fails" do
+    travel_to Time.utc(2026, 9, 18, 12) do
+      add_home_thread!
+      allow(email_client).to receive(:send_email).and_raise(
+        Faraday::Error,
+        "Unipile POST /api/v1/emails failed (422): errors/invalid_reply_to — Email not found"
+      )
+
+      result = described_class.execute(
+        organization: organization,
+        invoice_id: invoice.id,
+        subject: "Re: INV-12",
+        body: "Following up",
+        wait_until: "2026-09-25",
+        client: email_client
+      )
+
+      expect(result.success?).to eq(false)
+      expect(result.errors).to include("invalid_reply_to")
+      expect(result.errors).to include("Email not found")
     end
   end
 

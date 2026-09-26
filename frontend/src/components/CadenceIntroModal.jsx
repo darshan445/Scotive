@@ -72,9 +72,9 @@ export function CadenceIntroModal({ open, mailboxProvider, onDismiss }) {
                             </span>
                         </div>
                         <div className="flex items-baseline justify-between gap-4 text-sm">
-                            <span className="text-muted-foreground">14 days overdue</span>
+                            <span className="text-muted-foreground">After the last Friendly</span>
                             <span className="max-w-[220px] shrink-0 text-right font-medium text-foreground">
-                                Firm reminder, ready for you to review
+                                Needs you — you write and send
                             </span>
                         </div>
                     </section>

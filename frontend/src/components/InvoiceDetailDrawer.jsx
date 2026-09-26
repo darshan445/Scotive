@@ -4,7 +4,7 @@ import Link from "next/link";
 import { ExternalLink, X } from "lucide-react";
 import * as SheetPrimitive from "@radix-ui/react-dialog";
 import { ChaseComposer, confirmDiscardComposer } from "@/components/ChaseComposer";
-import { CheckBackSelect, SnoozeControl } from "@/components/WaitUntilControl";
+import { CheckBackControl } from "@/components/WaitUntilControl";
 import { stopInvoiceChase } from "@/components/InvoiceOverflowMenu";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -20,7 +20,6 @@ import {
     isNeedsYouInvoice,
     isPaidInvoice,
     latestActivity,
-    plusBusinessDays,
     remainingLabel,
 } from "@/lib/chase";
 import { gmailThreadUrl } from "@/lib/invoiceTimeline";
@@ -110,7 +109,7 @@ export function InvoiceDetailDrawer({ invoiceId, preview = null, open, onClose, 
     const [data, setData] = useState(null);
     const [err, setErr] = useState("");
     const [threadOpen, setThreadOpen] = useState(false);
-    const [followUpDate, setFollowUpDate] = useState(plusBusinessDays(3));
+    const [followUpDate, setFollowUpDate] = useState("");
     const composeDirtyRef = useRef(false);
 
     const refresh = useCallback(() => {
@@ -126,6 +125,7 @@ export function InvoiceDetailDrawer({ invoiceId, preview = null, open, onClose, 
         setData(null);
         setErr("");
         setThreadOpen(false);
+        setFollowUpDate("");
         composeDirtyRef.current = false;
         refresh();
     }, [open, invoiceId, refresh]);
@@ -134,8 +134,7 @@ export function InvoiceDetailDrawer({ invoiceId, preview = null, open, onClose, 
 
     useEffect(() => {
         if (!inv) return;
-        const suggested = invoiceWithWaitSuggestion(inv).suggested_wait_date;
-        setFollowUpDate(suggested || plusBusinessDays(3));
+        setFollowUpDate(invoiceWithWaitSuggestion(inv).suggested_wait_date || "");
     }, [inv?._id, inv?.suggested_wait_date, inv?.reason_quote]);
 
     function requestClose() {
@@ -292,16 +291,21 @@ export function InvoiceDetailDrawer({ invoiceId, preview = null, open, onClose, 
                                         onDirtyChange={(d) => { composeDirtyRef.current = d; }}
                                         onCancel={requestClose}
                                         onSent={afterAction}
-                                        beforeSend={<CheckBackSelect value={followUpDate} onChange={setFollowUpDate} />}
                                     />
                                 </section>
 
                                 <div className="border-t border-border mt-6 pt-5">
                                     <div className="mb-2.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                                        Or don’t send an email
+                                        Don’t send a reply
                                     </div>
                                     <div className="flex flex-wrap items-center gap-2">
-                                        <SnoozeControl invoice={inv} label="Snooze instead" onChanged={afterAction} />
+                                        <CheckBackControl
+                                            invoice={inv}
+                                            label="Check back without sending"
+                                            testId="check-back-without-sending"
+                                            successMessage="We'll check back if they haven't written"
+                                            onChanged={afterAction}
+                                        />
                                         <Button
                                             variant="ghost"
                                             className="text-rose-700 hover:text-rose-800"

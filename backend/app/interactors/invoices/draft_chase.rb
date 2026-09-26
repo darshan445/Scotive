@@ -68,6 +68,7 @@ class Invoices::DraftChase
     return pending.cadence_step if pending&.cadence_step.present?
     return "broken_promise" if invoice.wait_expired?
     return intent_step if intent_step.present?
+    return Cadence::Steps::FIRM if invoice.past_friendly_window?
 
     Cadence::Steps.current_key(organization, invoice)
   end

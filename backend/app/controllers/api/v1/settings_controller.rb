@@ -27,8 +27,12 @@ module Api
           :daily_digest_enabled,
           :daily_digest_hour,
           :friendly_auto_send,
-          :follow_up_interval_days,
-          escalation_offsets: []
+          escalation_offsets: [],
+          friendly_reminders: {
+            before_due: [ :enabled, :days ],
+            on_due: [ :enabled ],
+            overdue: [ :enabled, :days ]
+          }
         ).to_h
       end
     end

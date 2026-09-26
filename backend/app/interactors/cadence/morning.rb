@@ -21,6 +21,7 @@ class Cadence::Morning
         next unless local_morning?(organization)
 
         Cadence::Schedule.execute(organization: organization)
+        Sync::ApplyClock.execute(organization: organization)
         ran += 1
       end
       { ran: ran }

@@ -72,9 +72,37 @@ RSpec.describe Quickbooks::ImportOpenInvoices do
     invoice = organization.invoices.find_by!(external_id: "101")
     expect(invoice.invoice_number).to eq("INV-101")
     expect(invoice.books_status).to eq("open")
+    expect(invoice.chase_status).to eq("watching")
+    expect(invoice.list_bucket).to eq("auto_reminders")
     expect(invoice.pay_link_token).to eq("https://pay.example.com/inv/INV-101")
     expect(invoice.cc_emails).to eq([ "ap@acme.com" ])
     expect(integration.reload.last_synced_at).to be_present
+  end
+
+  it "puts a silent invoice past the Friendly window on Needs you" do
+    allow(qbo_client).to receive(:query_open_invoices).and_return([
+      invoice_payload(
+        id: "109",
+        customer_id: "58",
+        doc: "INV-109",
+        balance: "400.00",
+        total: "400.00",
+        txn_date: 20.days.ago.to_date.iso8601,
+        due_date: 12.days.ago.to_date.iso8601,
+        email: "billing@acme.com"
+      )
+    ])
+    allow(qbo_client).to receive(:query_customers).and_return([
+      { "Id" => "58", "DisplayName" => "Acme Co", "PrimaryEmailAddr" => { "Address" => "billing@acme.com" } }
+    ])
+
+    result = described_class.execute(organization: organization, client: qbo_client)
+
+    expect(result).to be_success
+    invoice = organization.invoices.find_by!(external_id: "109")
+    expect(invoice.chase_status).to eq("needs_you")
+    expect(invoice.list_bucket).to eq("needs_you")
+    expect(invoice.invoice_chase_events.last.event_type).to eq("friendly_window_ended")
   end
 
   it "keeps books paid over a conversational overlay" do

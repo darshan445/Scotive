@@ -88,7 +88,7 @@ RSpec.describe Invoices::DraftChase do
     expect(result.success?).to eq(true)
     expect(result.data[:body]).to eq("Firm copy from cadence")
     expect(result.data[:tone_label]).to eq("Firm follow-up")
-    expect(result.data[:is_reply]).to eq(false)
+    expect(result.data[:is_reply]).to eq(true)
   end
 
   it "falls back to status templates and prepends a steer note when the LLM fails" do
@@ -96,21 +96,21 @@ RSpec.describe Invoices::DraftChase do
     travel_to Time.utc(2026, 9, 18, 12) do
       result = execute!(note: "mention the PO")
       expect(result.success?).to eq(true)
-      expect(result.data[:tone_label]).to eq("Final notice")
+      expect(result.data[:tone_label]).to eq("Firm follow-up")
       expect(result.data[:body]).to include("mention the PO")
       expect(result.data[:body]).to include("INV-12")
       expect(result.data[:body]).to include("Pay here: https://pay.qbo.test/inv-12")
     end
   end
 
-  it "uses saved ladder offsets to pick Firm before the follow-up interval" do
+  it "uses saved last Friendly offset before Needs you drafts Firm" do
     allow(llm).to receive(:complete_json).and_raise(Faraday::Error, "timeout")
-    organization.update!(escalation_offsets: [ -3, 0, 7, 12 ], follow_up_interval_days: 10)
+    organization.update!(escalation_offsets: [ -3, 0, 20 ])
     travel_to Time.utc(2026, 9, 18, 12) do
       result = execute!
       expect(result.success?).to eq(true)
-      expect(result.data[:tone_label]).to eq("Firm follow-up")
-      expect(result.data[:cadence_step]).to eq("firm_plus_7")
+      expect(result.data[:tone_label]).to eq("Friendly reminder")
+      expect(result.data[:cadence_step]).to eq("due_today")
     end
   end
 end

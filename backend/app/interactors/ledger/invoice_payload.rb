@@ -39,6 +39,7 @@ module Ledger::InvoicePayload
       source_thread_id: primary&.external_thread_id,
       due_date: iso_date(invoice.due_date),
       days_late: days_late(invoice),
+      last_friendly_offset: Cadence::Steps.last_friendly_offset(invoice.organization),
       expected_pay_date: iso_date(invoice.expected_pay_date),
       promise_date: iso_date(invoice.expected_pay_date),
       payment_claim_pending: false,
@@ -174,8 +175,8 @@ module Ledger::InvoicePayload
     elsif invoice.sleeping?
       {
         state: "sleeping",
-        title: "Sleeping until #{short_date(invoice.expected_pay_date)}",
-        detail: "No emails until then. If still unpaid, it comes back to Needs you."
+        title: "Check back on #{short_date(invoice.expected_pay_date)}",
+        detail: "If they reply sooner, this comes back to Needs you. If they don't, we'll bring it back on that date."
       }
     elsif pending&.status == "scheduled"
       reminder_copy(pending.cadence_step, invoice).merge(
@@ -191,36 +192,31 @@ module Ledger::InvoicePayload
   def next_ladder_step(invoice)
     org = invoice.organization
     today = org&.today || Date.current
-    offsets = org&.ladder_offsets || Organization::DEFAULT_OFFSETS
-    Cadence::Steps::LADDER.each_with_index do |key, index|
-      offset = offsets.fetch(index)
+    Cadence::Steps.enabled_ladder(org).each do |row|
+      offset = row[:offset]
       milestone = invoice.due_date + offset
       next if milestone < today
 
-      copy = reminder_copy(key, invoice, offset: offset)
+      copy = reminder_copy(row[:key], invoice, offset: offset)
       send_line = if milestone == today
         "Sends today at 10:15 AM from your Gmail"
       else
         "Sends #{short_date(milestone)} at 10:15 AM from your Gmail"
       end
-      return copy.merge(state: "queued", detail: send_line, step: key, offset: offset)
+      return copy.merge(state: "queued", detail: send_line, step: row[:key], offset: offset)
     end
 
     reminder_copy(Cadence::Steps::FIRM, invoice).merge(
-      state: "queued",
+      state: "needs_approval",
       step: Cadence::Steps::FIRM,
-      detail: "Tomorrow morning we draft this. You send it."
+      detail: "Friendly is over. You send the next email."
     )
   end
 
   def reminder_copy(step, invoice, offset: nil)
     org = invoice.organization
-    offsets = org&.ladder_offsets || Organization::DEFAULT_OFFSETS
     resolved = offset
-    if resolved.nil? && (index = Cadence::Steps::LADDER.index(step.to_s))
-      resolved = offsets.fetch(index)
-    end
-    resolved ||= 0
+    resolved = Cadence::Steps.offset_for(org, step) if resolved.nil?
 
     milestone = invoice.due_date + resolved
     case step.to_s

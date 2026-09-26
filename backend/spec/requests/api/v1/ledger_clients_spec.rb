@@ -61,7 +61,7 @@ RSpec.describe "API v1 ledger and clients", type: :request do
     expect(response).to have_http_status(:ok)
     invoices = json_body.dig("data", "invoices")
     expect(invoices.first["invoice_ref"]).to eq("INV-9")
-    expect(invoices.first["status"]).to eq("watching")
+    expect(invoices.first["status"]).to eq("auto_reminders")
     expect(json_body.dig("data", "client_count")).to eq(1)
     expect(invoices.first["unmatched"]).to eq(true)
     expect(invoices.first["has_thread"]).to eq(false)

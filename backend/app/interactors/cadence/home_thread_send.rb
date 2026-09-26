@@ -1,19 +1,21 @@
 # frozen_string_literal: true
 
-# Send a reply on the invoice Home Thread (Unipile + RFC In-Reply-To / References).
+# Send a reply via Unipile (reply_to = provider id). Cadence stays on the Home Thread.
+# User Follow-up uses the thread the client last wrote on (home or a new compose).
+# Unipile only accepts custom headers that start with X-.
 module Cadence::HomeThreadSend
   include Email::MailboxThreadPersistence
   include Invoices::ChaseWrite
 
-  def deliver_home_thread!(invoice:, to:, cc:, subject:, body:, client:, outbox: nil)
-    conversation = home_thread_for(invoice, outbox)
+  def deliver_home_thread!(invoice:, to:, cc:, subject:, body:, client:, outbox: nil, conversation: nil)
+    conversation ||= home_thread_for(invoice, outbox)
     raise_string_error("Home thread is missing") if conversation.blank?
 
     mailbox = conversation.integration
     raise_string_error("Mailbox is not connected") if mailbox.blank? || !mailbox.connected? || mailbox.external_account_id.blank?
 
     last_message = conversation.messages.order(:sent_at).last
-    raise_string_error("Home thread has no messages") if last_message.blank?
+    raise_string_error("Thread has no messages") if last_message.blank?
 
     payload = client.send_email(
       account_id: mailbox.external_account_id,
@@ -22,11 +24,13 @@ module Cadence::HomeThreadSend
       subject: subject,
       body: body,
       reply_to: last_message.external_message_id,
-      custom_headers: mime_headers(conversation, last_message)
+      custom_headers: [
+        { name: "X-Auto-Response-Suppress", value: "All" }
+      ]
     )
     persist_delivered!(invoice, conversation, mailbox, payload, to: to, cc: cc, subject: subject, body: body, outbox: outbox)
-  rescue Faraday::Error
-    raise_string_error("Mailbox send failed")
+  rescue Faraday::Error => e
+    raise_string_error(e.message.to_s.presence || "Mailbox send failed")
   end
 
   def persist_delivered!(invoice, conversation, mailbox, payload, to:, cc:, subject:, body:, outbox:)
@@ -44,21 +48,18 @@ module Cadence::HomeThreadSend
       normalize_email(mailbox.account_name),
       anchor: false
     )
-    outbox.update!(status: "sent", sent_at: Time.current, subject: subject, body: body) if outbox
+    if outbox
+      outbox.update!(
+        status: "sent",
+        sent_at: Time.current,
+        subject: subject,
+        body: body,
+        conversation: conversation
+      )
+    end
     type = outbox && Cadence::Steps.friendly?(outbox.cadence_step) ? "friendly_sent" : "draft_sent"
     record_chase_event!(invoice, type: type)
     { sent: true, message_id: external_id, outbox_id: outbox&.id }
-  end
-
-  def mime_headers(conversation, last_message)
-    anchor = conversation.messages.find_by(is_anchor: true) || conversation.messages.order(:sent_at).first
-    references = [ anchor&.external_message_id, last_message.external_message_id ].compact.uniq
-    [
-      { name: "In-Reply-To", value: "<#{last_message.external_message_id}>" },
-      { name: "References", value: references.map { |id| "<#{id}>" }.join(" ") },
-      { name: "Auto-Submitted", value: "auto-generated" },
-      { name: "X-Auto-Response-Suppress", value: "All" }
-    ]
   end
 
   def home_thread_for(invoice, outbox)
@@ -69,6 +70,39 @@ module Cadence::HomeThreadSend
       conversation = fallback
     end
     conversation
+  end
+
+  # Last client mail on any linked thread (new compose or Home). Otherwise Home Thread.
+  def reply_thread_for(invoice, outbox)
+    inbound = invoice.last_human_inbound_message
+    return inbound.conversation if inbound&.conversation.present?
+
+    last_inbound = Message
+      .joins(conversation: :invoice_conversations)
+      .where(invoice_conversations: { invoice_id: invoice.id }, direction: "client_to_user")
+      .order(sent_at: :desc)
+      .first
+    last_inbound&.conversation || home_thread_for(invoice, outbox)
+  end
+
+  def reply_address_for(invoice, conversation)
+    last_message = conversation.messages.order(:sent_at).last
+    if last_message&.direction == "client_to_user"
+      last_message.from_address.presence || invoice.client.primary_email
+    else
+      Array(last_message&.to_addresses).first.presence || invoice.client.primary_email
+    end
+  end
+
+  def threaded_subject(conversation, requested)
+    parent = conversation&.subject.to_s.strip
+    return requested if parent.blank?
+
+    bare_parent = parent.sub(/\A(?:re|fw|fwd)\s*:\s*/i, "")
+    bare_requested = requested.to_s.sub(/\A(?:re|fw|fwd)\s*:\s*/i, "")
+    return requested if bare_requested.casecmp?(bare_parent)
+
+    parent.match?(/\A(?:re|fw|fwd)\s*:/i) ? parent : "Re: #{parent}"
   end
 
   def sent_id(payload)

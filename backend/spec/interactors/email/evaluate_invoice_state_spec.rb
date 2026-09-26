@@ -82,6 +82,18 @@ RSpec.describe Email::EvaluateInvoiceState do
     expect(invoice.books_status).to eq("open")
   end
 
+  it "brings a sleeping invoice back to Needs you when the client writes again" do
+    add_message!(id: "m-out", from: "owner@studio.com", to: "ap@acme.com", direction: "user_to_client", body: "Invoice attached")
+    invoice.update!(chase_status: "watching", expected_pay_date: Date.new(2026, 9, 30))
+    add_message!(id: "m-in", from: "ap@acme.com", to: "owner@studio.com", direction: "client_to_user", body: "Paying next week")
+
+    result = described_class.execute(invoice: invoice)
+    expect(result.success?).to eq(true)
+    expect(invoice.reload.chase_status).to eq("needs_you")
+    expect(invoice.expected_pay_date).to be_nil
+    expect(invoice.list_bucket).to eq("needs_you")
+  end
+
   it "ignores an out-of-office and stays in Watching" do
     add_message!(id: "m-out", from: "owner@studio.com", to: "ap@acme.com", direction: "user_to_client", body: "Invoice attached")
     add_message!(

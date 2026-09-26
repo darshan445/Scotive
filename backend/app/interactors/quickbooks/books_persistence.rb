@@ -80,6 +80,7 @@ module Quickbooks::BooksPersistence
     token = pay_link_token(payload)
     invoice.pay_link_token = token if token.present? || !existed
     apply_books_status!(invoice, status)
+    apply_friendly_window!(invoice) if invoice.books_open?
     existed ? :updated : :created
   end
 

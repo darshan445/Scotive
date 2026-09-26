@@ -15,6 +15,7 @@ class Invoices::BuildTimeline
     "bounce_ignored" => "bounce",
     "wait_set" => "waiting_until",
     "wait_expired" => "wait_date_passed",
+    "friendly_window_ended" => "needs_you",
     "resumed" => "resumed",
     "stopped" => "stopped",
     "books_paid" => "receipt",

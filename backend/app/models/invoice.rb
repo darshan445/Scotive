@@ -38,7 +38,23 @@ class Invoice < ApplicationRecord
   end
 
   def cadence_allowed?
-    books_open? && chase_status == "watching" && !sleeping? && last_human_inbound_at.blank?
+    books_open? && chase_status == "watching" && !sleeping? && last_human_inbound_at.blank? && !past_friendly_window?
+  end
+
+  def days_late(today = organization&.today || Date.current)
+    return 0 if due_date.blank?
+
+    (today - due_date).to_i
+  end
+
+  # Silent + still on Friendly (due in the future, or today ≤ due + last Friendly offset).
+  def past_friendly_window?(today = organization&.today || Date.current)
+    offset = if organization
+      Cadence::Steps.last_friendly_offset(organization)
+    else
+      Organization::DEFAULT_OFFSETS[Cadence::Steps::FRIENDLY.length - 1]
+    end
+    days_late(today) > offset
   end
 
   def list_bucket
@@ -46,8 +62,10 @@ class Invoice < ApplicationRecord
     return "stopped" if chase_status == "stopped"
     return "needs_you" if chase_status == "needs_you" || pending_approval_draft?
     return "needs_you" if last_human_inbound_at.present? && !sleeping?
+    return "needs_you" if books_open? && !sleeping? && past_friendly_window?
+    return "watching" if sleeping?
 
-    "watching"
+    "auto_reminders"
   end
 
   def pending_approval_draft?

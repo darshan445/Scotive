@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Invoices::SendChase Interactor
-# Purpose: user-approved send on the Home Thread. Books-paid still blocks; other cadence guards do not.
+# Purpose: user-approved send on the last client thread. Requires a check-back date so a ghost returns to Needs you.
 # Methods:
 # - execute
 
@@ -42,25 +42,27 @@ class Invoices::SendChase
         raise_string_error("Invoice not found") if invoice.blank?
         raise_string_error("This invoice is paid") if invoice.books_closed?
         raise_string_error("Client email is missing") if invoice.client&.primary_email.blank?
+        raise_string_error("Check-back date is required") if parsed_wait.blank?
+        raise_string_error("Check-back date must be today or later") if parsed_wait < organization.today
 
         draft = invoice.outbox_messages.where(status: "draft").order(created_at: :desc).first
+        conversation = reply_thread_for(invoice, draft)
+        raise_string_error("Home thread is missing") if conversation.blank?
+
         outcome = deliver_home_thread!(
           invoice: invoice,
-          to: invoice.client.primary_email,
+          to: reply_address_for(invoice, conversation),
           cc: Array(invoice.cc_emails),
-          subject: subject,
+          subject: threaded_subject(conversation, subject),
           body: body,
           client: client,
-          outbox: draft
+          outbox: draft,
+          conversation: conversation
         )
         invoice.outbox_messages.where(status: "scheduled").find_each do |row|
           row.update!(status: "cancelled", cancellation_reason: "human_sent")
         end
-        if parsed_wait
-          apply_wait_until!(invoice, parsed_wait)
-        elsif invoice.last_human_inbound_at.blank?
-          apply_resume!(invoice)
-        end
+        apply_wait_until!(invoice, parsed_wait)
         outcome[:invoice] = Ledger::InvoicePayload.for(invoice.reload)
       end
       outcome

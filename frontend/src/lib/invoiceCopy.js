@@ -5,6 +5,7 @@ import { chaseReason, invoiceBucket, BUCKET_LABELS } from "@/lib/chase";
 export const STATUS_LABELS = {
     needs_you: "Needs you",
     watching: "Watching",
+    auto_reminders: "Auto reminders",
     paid: "Paid",
     stopped: "Stopped",
     invoiced: "Watching",
@@ -17,7 +18,7 @@ export const STATUS_LABELS = {
     paid_unconfirmed: "Needs you",
     written_off: "Paid",
     stale: "Watching",
-    unmatched: "Watching",
+    unmatched: "Auto reminders",
 };
 
 export function statusLabel(status) {

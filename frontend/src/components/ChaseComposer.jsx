@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { CHECK_BACK_HELP, CheckBackSelect } from "@/components/WaitUntilControl";
+import { shortWaitDate } from "@/lib/chase";
 import { cn } from "@/lib/utils";
 
 function asThreadSubject(raw) {
@@ -31,6 +33,8 @@ export function ChaseComposer({
     showBack = false,
     embedded = false,
     waitUntil = null,
+    onWaitUntilChange,
+    requireCheckBack = true,
     sendLabel = "Send reply from Gmail",
     composeTitle = "Your reply",
     beforeSend = null,
@@ -44,6 +48,7 @@ export function ChaseComposer({
     const [isReplyDraft, setIsReplyDraft] = useState(false);
     const [steerOpen, setSteerOpen] = useState(false);
     const [steerNote, setSteerNote] = useState("");
+    const [checkBackDate, setCheckBackDate] = useState(waitUntil || "");
     const baselineRef = useRef({ subject: "", body: "" });
     const loadedForRef = useRef(null);
 
@@ -88,6 +93,7 @@ export function ChaseComposer({
         setIsReplyDraft(Boolean(initialDraft?.is_reply));
         setSteerNote("");
         setSteerOpen(false);
+        setCheckBackDate(waitUntil || "");
         baselineRef.current = { subject: subject0, body: body0 };
         onDirtyChange?.(false);
         if (!autoDraft) return;
@@ -98,6 +104,15 @@ export function ChaseComposer({
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps -- load once per open/invoice/intent
     }, [active, invoice?._id, initialIntent, autoDraft]);
+
+    useEffect(() => {
+        setCheckBackDate(waitUntil || "");
+    }, [waitUntil]);
+
+    function updateCheckBackDate(iso) {
+        setCheckBackDate(iso || "");
+        onWaitUntilChange?.(iso || "");
+    }
 
     useEffect(() => {
         if (!active) {
@@ -114,14 +129,18 @@ export function ChaseComposer({
     }
 
     async function send() {
+        if (requireCheckBack && !checkBackDate) {
+            toast.error("Pick a check-back date first");
+            return;
+        }
         setSending(true);
         try {
             await api.post(`/v1/invoices/${invoice._id}/send-chase`, {
                 subject,
                 body,
-                wait_until: waitUntil || undefined,
+                wait_until: checkBackDate,
             });
-            toast.success(waitUntil ? `Sent · we'll check back ${waitUntil}` : "Sent from your Gmail");
+            toast.success(`Sent · we'll check back ${shortWaitDate(checkBackDate) || checkBackDate}`);
             baselineRef.current = { subject, body };
             onDirtyChange?.(false);
             await onSent?.();
@@ -130,6 +149,8 @@ export function ChaseComposer({
         }
         setSending(false);
     }
+
+    const canSend = Boolean(subject && body && (!requireCheckBack || checkBackDate) && !sending && !loading);
 
     const title = (isReplyDraft || invoice?.status === "needs_you" || invoice?.last_human_inbound_at)
         ? "Reply to"
@@ -226,6 +247,12 @@ export function ChaseComposer({
                         placeholder="Write the email…"
                         data-testid="chase-body"
                     />
+                    {requireCheckBack ? (
+                        <div className="space-y-1.5">
+                            <CheckBackSelect value={checkBackDate} onChange={updateCheckBackDate} />
+                            <p className="text-xs leading-relaxed text-muted-foreground">{CHECK_BACK_HELP}</p>
+                        </div>
+                    ) : null}
                 </div>
             )}
 
@@ -234,7 +261,7 @@ export function ChaseComposer({
                     {beforeSend}
                     <Button
                         onClick={send}
-                        disabled={!subject || !body || sending || loading}
+                        disabled={!canSend}
                         className="w-full bg-foreground text-background"
                         data-testid="chase-send"
                     >
@@ -249,7 +276,7 @@ export function ChaseComposer({
                     </Button>
                     <Button
                         onClick={send}
-                        disabled={!subject || !body || sending || loading}
+                        disabled={!canSend}
                         className="bg-foreground text-background"
                         data-testid="chase-send"
                     >

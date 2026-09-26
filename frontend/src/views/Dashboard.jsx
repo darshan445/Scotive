@@ -30,7 +30,7 @@ import { useOnboarding } from "@/hooks/useOnboarding";
 import { useLiveDetection } from "@/hooks/useLiveDetection";
 import { useWorkspaceRefresh } from "@/hooks/useWorkspaceRefresh";
 import { historyLedgerInvoices, outstandingBalance } from "@/lib/ledgerInvoices";
-import { needsYouInvoices, openChaseInvoices, stoppedInvoices, watchingInvoices } from "@/lib/chase";
+import { autoReminderInvoices, needsYouInvoices, openChaseInvoices, stoppedInvoices, watchingInvoices } from "@/lib/chase";
 import { needsReconnect } from "@/lib/connectionStatus";
 import { ConnectQboButton } from "@/components/ConnectQboButton";
 
@@ -138,6 +138,7 @@ export default function DashboardPage() {
     const invoices = ledger?.invoices || [];
     const needsYouCount = useMemo(() => needsYouInvoices(invoices).length, [invoices]);
     const watchingCount = useMemo(() => watchingInvoices(invoices).length, [invoices]);
+    const autoCount = useMemo(() => autoReminderInvoices(invoices).length, [invoices]);
     const stoppedCount = useMemo(() => stoppedInvoices(invoices).length, [invoices]);
     const paidCount = useMemo(() => historyLedgerInvoices(invoices).length, [invoices]);
     const hasOpenInvoices = useMemo(() => openChaseInvoices(invoices).length > 0, [invoices]);
@@ -345,6 +346,16 @@ export default function DashboardPage() {
                                             ) : null}
                                         </TabsTrigger>
                                         <TabsTrigger
+                                            value="auto_reminders"
+                                            className="rounded-md px-3.5 py-2 text-sm data-[state=active]:shadow-sm"
+                                            data-testid="tab-auto-reminders"
+                                        >
+                                            Auto reminders
+                                            {autoCount ? (
+                                                <span className="ml-1.5 text-[11px] tabular-nums text-muted-foreground">{autoCount}</span>
+                                            ) : null}
+                                        </TabsTrigger>
+                                        <TabsTrigger
                                             value="stopped"
                                             className="rounded-md px-3.5 py-2 text-sm data-[state=active]:shadow-sm"
                                             data-testid="tab-stopped"
@@ -365,12 +376,14 @@ export default function DashboardPage() {
                                     </TabsList>
                                     <p className="mt-3 text-sm text-muted-foreground max-w-2xl" data-testid="tab-explainer">
                                         {tab === "needs_you"
-                                            ? "Replies, follow-up dates, and Firm emails to approve."
+                                            ? "Replies and Firm drafts. After you act, pick when to check back if they stay quiet."
                                             : tab === "watching"
-                                              ? "The ladder runs on silent invoices. Snoozed ones sleep until the date you picked."
-                                              : tab === "stopped"
-                                                ? "You turned reminders off. Restart when you want Scotive to check back."
-                                                : "Closed in QuickBooks. Chase is over."}
+                                              ? "Dates you set. We'll bring it back to Needs you on that day if they haven't written — or sooner if they reply."
+                                              : tab === "auto_reminders"
+                                                ? "Silent invoices. Friendly reminders send on their own. A reply stops them. Stop from the menu if you need to turn them off."
+                                                : tab === "stopped"
+                                                  ? "You turned reminders off. Pick a date when you want Scotive to check back."
+                                                  : "Closed in QuickBooks. Chase is over."}
                                     </p>
                                     <TabsContent value="needs_you" className="mt-4">
                                         <ChaseBoard
@@ -386,6 +399,13 @@ export default function DashboardPage() {
                                             variant="watching"
                                             onChanged={refreshAll}
                                             onReview={setReviewInvoice}
+                                        />
+                                    </TabsContent>
+                                    <TabsContent value="auto_reminders" className="mt-4">
+                                        <ChaseBoard
+                                            ledger={ledger}
+                                            variant="auto_reminders"
+                                            onChanged={refreshAll}
                                         />
                                     </TabsContent>
                                     <TabsContent value="stopped" className="mt-4">

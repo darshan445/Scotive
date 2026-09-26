@@ -19,6 +19,7 @@ function formatMoney(n, currency = "USD") {
 export const BUCKETS = {
     needs_you: "needs_you",
     watching: "watching",
+    auto_reminders: "auto_reminders",
     paid: "paid",
     stopped: "stopped",
 };
@@ -26,11 +27,17 @@ export const BUCKETS = {
 export const BUCKET_LABELS = {
     needs_you: "Needs you",
     watching: "Watching",
+    auto_reminders: "Auto reminders",
     paid: "Paid",
     stopped: "Stopped",
 };
 
 const APPROVAL_STEPS = new Set(["firm_plus_7", "urgent_plus_14", "broken_promise"]);
+
+function lastFriendlyOffset(inv) {
+    const offset = Number(inv?.last_friendly_offset);
+    return Number.isFinite(offset) ? offset : 7;
+}
 
 export function isApprovalDraft(inv) {
     if (!inv) return false;
@@ -48,8 +55,15 @@ export function invoiceBucket(inv) {
         || inv.reason === "wait_date_passed"
         || isApprovalDraft(inv)
         || (Boolean(inv.last_human_inbound_at || inv.reason === "replied") && !inv.expected_pay_date)
+        || (
+            Number.isFinite(Number(inv.days_late))
+            && Number(inv.days_late) > lastFriendlyOffset(inv)
+            && !inv.last_human_inbound_at
+            && !hasFutureFollowUp(inv)
+        )
     ) return BUCKETS.needs_you;
-    return BUCKETS.watching;
+    if (hasFutureFollowUp(inv)) return BUCKETS.watching;
+    return BUCKETS.auto_reminders;
 }
 
 export function isPaidInvoice(inv) {
@@ -66,6 +80,10 @@ export function isNeedsYouInvoice(inv) {
 
 export function isWatchingInvoice(inv) {
     return invoiceBucket(inv) === BUCKETS.watching;
+}
+
+export function isAutoReminderInvoice(inv) {
+    return invoiceBucket(inv) === BUCKETS.auto_reminders;
 }
 
 export function hasFutureFollowUp(inv) {
@@ -165,8 +183,8 @@ export function chaseReason(inv) {
     }
     if (isSleepingInvoice(inv)) {
         return {
-            title: wait ? `Follow up if unpaid on ${wait}` : "Waiting on a date",
-            detail: "No emails until then. If still unpaid, it comes back to Needs you.",
+            title: wait ? `Check back on ${wait}` : "Waiting on a date",
+            detail: "If they reply sooner, this comes back to Needs you. If they don't, we'll bring it back on that date.",
         };
     }
     if (inv.unmatched) {
@@ -181,6 +199,7 @@ export function chaseReason(inv) {
 export function bucketTone(bucket) {
     if (bucket === BUCKETS.needs_you) return "rose";
     if (bucket === BUCKETS.watching) return "sky";
+    if (bucket === BUCKETS.auto_reminders) return "slate";
     if (bucket === BUCKETS.paid) return "emerald";
     if (bucket === BUCKETS.stopped) return "stone";
     return "slate";
@@ -189,6 +208,7 @@ export function bucketTone(bucket) {
 export const BUCKET_PILL = {
     needs_you: "bg-rose-50 text-rose-800 border-rose-200",
     watching: "bg-sky-50 text-sky-800 border-sky-200",
+    auto_reminders: "bg-slate-50 text-slate-700 border-slate-200",
     paid: "bg-emerald-50 text-emerald-800 border-emerald-200",
     stopped: "bg-stone-100 text-stone-700 border-stone-300",
 };
@@ -212,11 +232,16 @@ export function needsYouInvoices(invoices = []) {
 
 export function watchingInvoices(invoices = []) {
     return invoices.filter(isWatchingInvoice).sort((a, b) => {
-        const sleepA = isSleepingInvoice(a) ? 0 : 1;
-        const sleepB = isSleepingInvoice(b) ? 0 : 1;
-        if (sleepA !== sleepB) return sleepA - sleepB;
         const da = Date.parse(a.expected_pay_date || a.due_date || 0) || Number.MAX_SAFE_INTEGER;
         const db = Date.parse(b.expected_pay_date || b.due_date || 0) || Number.MAX_SAFE_INTEGER;
+        return da - db;
+    });
+}
+
+export function autoReminderInvoices(invoices = []) {
+    return invoices.filter(isAutoReminderInvoice).sort((a, b) => {
+        const da = Date.parse(a.due_date || 0) || Number.MAX_SAFE_INTEGER;
+        const db = Date.parse(b.due_date || 0) || Number.MAX_SAFE_INTEGER;
         return da - db;
     });
 }
@@ -291,8 +316,8 @@ export function latestActivity(inv) {
     if (inv.reason === "wait_date_passed" || (inv.expected_pay_date && !isSleepingInvoice(inv) && invoiceBucket(inv) === BUCKETS.needs_you)) {
         const day = formatShortDate(inv.expected_pay_date);
         return {
-            title: day ? `You snoozed until ${day}` : "You snoozed this chase",
-            detail: "Date passed · Still unpaid in QuickBooks",
+            title: day ? `Check-back date reached (${day})` : "Check-back date reached",
+            detail: "They never replied · Still unpaid in QuickBooks",
             quote: null,
         };
     }

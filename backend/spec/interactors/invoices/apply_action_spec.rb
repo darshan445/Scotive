@@ -67,6 +67,19 @@ RSpec.describe Invoices::ApplyAction do
     end
   end
 
+  it "resumes a parked invoice to Needs you even when Friendly is still in window" do
+    travel_to Time.utc(2026, 9, 18, 12) do
+      invoice.update!(chase_status: "stopped", due_date: Date.new(2026, 9, 25))
+      execute!("wait_until", wait_until: "2026-09-22")
+      expect(invoice.reload.list_bucket).to eq("watching")
+
+      execute!("resume")
+      expect(invoice.reload.expected_pay_date).to be_nil
+      expect(invoice.chase_status).to eq("needs_you")
+      expect(invoice.list_bucket).to eq("needs_you")
+    end
+  end
+
   it "marks paid from the ledger action and cancels outbox" do
     invoice.outbox_messages.create!(
       organization: organization,

@@ -3,7 +3,7 @@
 class InvoiceChaseEvent < ApplicationRecord
   EVENT_TYPES = %w[
     human_inbound auto_reply_ignored bounce_ignored
-    wait_set wait_expired resumed stopped
+    wait_set wait_expired resumed stopped friendly_window_ended
     books_paid books_voided books_partial
     friendly_sent draft_sent
   ].freeze

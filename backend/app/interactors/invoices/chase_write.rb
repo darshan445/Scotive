@@ -37,28 +37,29 @@ module Invoices::ChaseWrite
   end
 
   def apply_resume!(invoice)
-    invoice.update!(chase_status: "watching", expected_pay_date: nil)
+    invoice.update!(chase_status: "needs_you", expected_pay_date: nil)
     OutboxMessage.cancel_pending_for!(invoice, "resumed")
     record_chase_event!(invoice, type: "resumed", actor: "user")
-    invoice.update!(chase_status: "needs_you") if invoice.last_human_inbound_at.present?
   end
 
-  def apply_resume_to_ladder!(invoice)
-    apply_resume!(invoice)
+  # Silent invoices leave Watching when Friendly is over (today > due + last Friendly offset).
+  def apply_friendly_window!(invoice)
+    return if invoice.books_closed?
+    return if invoice.chase_status == "stopped"
+    return if invoice.sleeping?
     return if invoice.last_human_inbound_at.present?
-    return if Cadence::Steps.next_future_step(invoice.organization, invoice).present?
+    return unless invoice.past_friendly_window?
+    return if invoice.chase_status == "needs_you"
 
     invoice.update!(chase_status: "needs_you")
+    record_chase_event!(invoice, type: "friendly_window_ended")
     escalate_draft!(invoice)
   end
 
   def escalate_draft!(invoice)
-    step = if invoice.outbox_messages.where(status: "sent", cadence_step: Cadence::Steps::FIRM).exists?
-      Cadence::Steps::FINAL
-    else
-      Cadence::Steps::FIRM
-    end
-    Cadence::Enqueue.execute(invoice: invoice, step: step)
+    return if invoice.outbox_messages.where(status: "sent", cadence_step: Cadence::Steps::FIRM).exists?
+
+    Cadence::Enqueue.execute(invoice: invoice, step: Cadence::Steps::FIRM)
   end
 
   def apply_stop!(invoice)

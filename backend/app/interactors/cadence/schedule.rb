@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Cadence::Schedule Interactor
-# Purpose: morning pass — enqueue Friendly/Firm/Final/broken-promise outbox rows for due milestones.
+# Purpose: morning pass — enqueue Friendly outbox rows for due milestones.
 # Methods:
 # - execute
 
@@ -28,9 +28,6 @@ class Cadence::Schedule
         created += counts[:created]
         skipped += counts[:skipped]
       end
-      follow = enqueue_post_firm_follow_ups!
-      created += follow[:created]
-      skipped += follow[:skipped]
       { created: created, skipped: skipped }
     end
   end
@@ -50,51 +47,6 @@ class Cadence::Schedule
       end
     end
     { created: created, skipped: skipped }
-  end
-
-  def enqueue_post_firm_follow_ups!
-    created = 0
-    skipped = 0
-    interval = organization.follow_up_interval_days
-    organization.outbox_messages
-      .where(status: "sent", cadence_step: Cadence::Steps::FIRM)
-      .where.not(sent_at: nil)
-      .includes(:invoice)
-      .find_each do |row|
-        invoice = row.invoice
-        next if invoice.blank?
-        next unless days_since_send(row.sent_at) >= interval
-        next if skip_final?(invoice, row.sent_at)
-
-        if record_created?(invoice, Cadence::Steps::FINAL)
-          created += 1
-        else
-          skipped += 1
-        end
-      end
-    { created: created, skipped: skipped }
-  end
-
-  def days_since_send(sent_at)
-    (organization.today - sent_at.in_time_zone(organization.zone).to_date).to_i
-  end
-
-  def skip_final?(invoice, sent_at)
-    invoice.books_closed? ||
-      !invoice.cadence_allowed? ||
-      invoice.outbox_messages.pending.where(cadence_step: Cadence::Steps::FINAL).exists? ||
-      invoice.outbox_messages.where(status: "sent", cadence_step: Cadence::Steps::FINAL).exists? ||
-      client_replied_since?(invoice, sent_at)
-  end
-
-  def client_replied_since?(invoice, since)
-    return false if since.blank?
-
-    Message
-      .joins(conversation: :invoice_conversations)
-      .where(invoice_conversations: { invoice_id: invoice.id }, direction: "client_to_user")
-      .where("messages.sent_at > ?", since)
-      .exists?
   end
 
   def due_scope(due_date)

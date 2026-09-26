@@ -34,18 +34,45 @@ import { useGmailConnection } from "@/hooks/useGmailConnection";
 import { useQboConnection } from "@/hooks/useQboConnection";
 import { QboConnectionPanel } from "@/components/QboConnectionPanel";
 
-const ESCALATION_LABELS = [
-    "Before due (Friendly)",
-    "On due date (Friendly)",
-    "~7 days late (Friendly)",
-    "Your turn (Firm)",
-];
+const DEFAULT_REMINDERS = {
+    before_due: { enabled: true, days: 3 },
+    on_due: { enabled: true },
+    overdue: { enabled: true, days: 7 },
+};
 
 const DEFAULT_SETTINGS = {
-    escalation_offsets: [-3, 0, 7, 9],
-    follow_up_interval_days: 3,
+    friendly_reminders: DEFAULT_REMINDERS,
     friendly_auto_send: true,
 };
+
+function clampDay(value, fallback, min, max) {
+    const n = parseInt(value, 10);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(max, Math.max(min, n));
+}
+
+function remindersFromSettings(settings) {
+    const raw = settings?.friendly_reminders;
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+        return {
+            before_due: {
+                enabled: raw.before_due?.enabled !== false,
+                days: clampDay(raw.before_due?.days, 3, 1, 30),
+            },
+            on_due: { enabled: raw.on_due?.enabled !== false },
+            overdue: {
+                enabled: raw.overdue?.enabled !== false,
+                days: clampDay(raw.overdue?.days, 7, 1, 90),
+            },
+        };
+    }
+    const offsets = Array.isArray(settings?.escalation_offsets) ? settings.escalation_offsets : [-3, 0, 7];
+    return {
+        before_due: { enabled: offsets[0] != null, days: clampDay(Math.abs(offsets[0]), 3, 1, 30) },
+        on_due: { enabled: offsets[1] != null },
+        overdue: { enabled: offsets[2] != null, days: clampDay(Math.abs(offsets[2]), 7, 1, 90) },
+    };
+}
 
 export default function SettingsPage() {
     const { user, logout } = useAuth();
@@ -242,43 +269,62 @@ function QboAccountSection({ status }) {
 // ---------------------------------------------------------------------------
 // Chasing timing
 // ---------------------------------------------------------------------------
-function padOffsets(arr) {
-    const base = Array.isArray(arr) && arr.length ? [...arr] : [-3, 0, 7, 9];
-    const defaults = [-3, 0, 7, 9];
-    while (base.length < 4) base.push(defaults[base.length] ?? 0);
-    return base.slice(0, 4);
+function DayField({ id, value, onChange, disabled, min, max, testid }) {
+    return (
+        <Input
+            id={id}
+            type="text"
+            inputMode="numeric"
+            disabled={disabled}
+            value={value}
+            onChange={(e) => onChange(e.target.value.replace(/[^\d]/g, "").slice(0, 2))}
+            onBlur={() => {
+                const next = clampDay(value, min, min, max);
+                onChange(String(next));
+            }}
+            className="h-8 w-14 px-1 text-center"
+            data-testid={testid}
+        />
+    );
 }
 
 function ChasingTimingSection({ settings, saving, onSave }) {
-    const [offsets, setOffsets] = useState(() => padOffsets(settings.escalation_offsets));
-    const [followUpDays, setFollowUpDays] = useState(settings.follow_up_interval_days ?? 3);
+    const saved = remindersFromSettings(settings);
+    const [beforeOn, setBeforeOn] = useState(saved.before_due.enabled);
+    const [beforeDays, setBeforeDays] = useState(String(saved.before_due.days));
+    const [onDue, setOnDue] = useState(saved.on_due.enabled);
+    const [overdueOn, setOverdueOn] = useState(saved.overdue.enabled);
+    const [overdueDays, setOverdueDays] = useState(String(saved.overdue.days));
     const [autoSend, setAutoSend] = useState(settings.friendly_auto_send !== false);
-    useEffect(() => { setOffsets(padOffsets(settings.escalation_offsets)); }, [settings.escalation_offsets]);
-    useEffect(() => { setFollowUpDays(settings.follow_up_interval_days ?? 3); }, [settings.follow_up_interval_days]);
+
+    useEffect(() => {
+        const next = remindersFromSettings(settings);
+        setBeforeOn(next.before_due.enabled);
+        setBeforeDays(String(next.before_due.days));
+        setOnDue(next.on_due.enabled);
+        setOverdueOn(next.overdue.enabled);
+        setOverdueDays(String(next.overdue.days));
+    }, [settings.friendly_reminders, settings.escalation_offsets]);
     useEffect(() => { setAutoSend(settings.friendly_auto_send !== false); }, [settings.friendly_auto_send]);
 
-    const paddedSaved = padOffsets(settings.escalation_offsets);
+    const draft = {
+        before_due: { enabled: beforeOn, days: clampDay(beforeDays, saved.before_due.days, 1, 30) },
+        on_due: { enabled: onDue },
+        overdue: { enabled: overdueOn, days: clampDay(overdueDays, saved.overdue.days, 1, 90) },
+    };
     const dirty =
-        JSON.stringify(offsets) !== JSON.stringify(paddedSaved)
-        || followUpDays !== (settings.follow_up_interval_days ?? 3)
+        JSON.stringify(draft) !== JSON.stringify(saved)
         || autoSend !== (settings.friendly_auto_send !== false);
-
-    function updateOffset(i, value) {
-        const v = parseInt(value, 10);
-        const next = [...offsets];
-        next[i] = Number.isFinite(v) ? v : 0;
-        setOffsets(next);
-    }
 
     return (
         <Section
             title="Friendly cadence"
-            subtitle="While a client ignores an unpaid invoice, Scotive sends Friendly reminders from your mailbox on these days. After the last Friendly, you write and send Firm yourself. Cadence pauses if they reply, promise, dispute, or pay.">
+            subtitle="Turn each reminder on or off. After the last one you leave on, the invoice moves to Needs you — you write and send. Cadence pauses if they reply or pay.">
             <div className="flex items-center justify-between gap-4 max-w-lg mb-4">
                 <div>
                     <div className="font-medium">Send Friendly reminders automatically</div>
                     <div className="text-xs text-muted-foreground">
-                        Off = draft only, you still click send. Firm is never auto-sent.
+                        Off = draft only, you still click send. Nothing firmer is auto-sent.
                     </div>
                 </div>
                 <Switch
@@ -290,54 +336,70 @@ function ChasingTimingSection({ settings, saving, onSave }) {
             <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground mb-4 max-w-lg">
                 Invoices move to <strong>Past due</strong> the day after their due date during the hourly sync (or Sync now).
             </div>
-            <div className="mt-2 space-y-3">
-                <Label>Escalation ladder</Label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                    {ESCALATION_LABELS.map((label, i) => (
-                        <div key={label} className="space-y-1.5">
-                            <div className="type-label text-muted-foreground">
-                                {label}
-                            </div>
-                            <div className="flex items-baseline gap-1.5">
-                                <Input
-                                    type="number"
-                                    min={-30}
-                                    max={90}
-                                    value={offsets[i] ?? 0}
-                                    onChange={(e) => updateOffset(i, e.target.value)}
-                                    className="max-w-[90px]"
-                                    data-testid={`input-escalation-${i}`}
-                                />
-                                <span className="text-xs text-muted-foreground">
-                                    {(offsets[i] ?? 0) < 0 ? "days before due" : (offsets[i] ?? 0) === 0 ? "on due date" : "days after due"}
-                                </span>
-                            </div>
-                        </div>
-                    ))}
+            <div className="mt-2 max-w-lg space-y-3">
+                <Label>Reminders</Label>
+                <div className="space-y-3">
+                    <label className="flex items-start gap-3 text-sm">
+                        <input
+                            type="checkbox"
+                            className="mt-1 h-4 w-4 shrink-0 rounded border border-primary accent-primary"
+                            checked={beforeOn}
+                            onChange={(e) => setBeforeOn(e.target.checked)}
+                            data-testid="toggle-reminder-before-due"
+                        />
+                        <span className={`flex flex-wrap items-center gap-x-1.5 gap-y-1 ${beforeOn ? "text-foreground" : "text-muted-foreground"}`}>
+                            <span className="font-medium">Before due:</span>
+                            <span>Send</span>
+                            <DayField
+                                id="before-due-days"
+                                value={beforeDays}
+                                onChange={setBeforeDays}
+                                disabled={!beforeOn}
+                                min={1}
+                                max={30}
+                                testid="input-reminder-before-due"
+                            />
+                            <span>days before due date</span>
+                        </span>
+                    </label>
+                    <label className="flex items-start gap-3 text-sm">
+                        <input
+                            type="checkbox"
+                            className="mt-1 h-4 w-4 shrink-0 rounded border border-primary accent-primary"
+                            checked={onDue}
+                            onChange={(e) => setOnDue(e.target.checked)}
+                            data-testid="toggle-reminder-on-due"
+                        />
+                        <span className={onDue ? "text-foreground" : "text-muted-foreground"}>
+                            <span className="font-medium">On due date:</span> Send on due date
+                        </span>
+                    </label>
+                    <label className="flex items-start gap-3 text-sm">
+                        <input
+                            type="checkbox"
+                            className="mt-1 h-4 w-4 shrink-0 rounded border border-primary accent-primary"
+                            checked={overdueOn}
+                            onChange={(e) => setOverdueOn(e.target.checked)}
+                            data-testid="toggle-reminder-overdue"
+                        />
+                        <span className={`flex flex-wrap items-center gap-x-1.5 gap-y-1 ${overdueOn ? "text-foreground" : "text-muted-foreground"}`}>
+                            <span className="font-medium">Overdue follow-up:</span>
+                            <span>Send</span>
+                            <DayField
+                                id="overdue-days"
+                                value={overdueDays}
+                                onChange={setOverdueDays}
+                                disabled={!overdueOn}
+                                min={1}
+                                max={90}
+                                testid="input-reminder-overdue"
+                            />
+                            <span>days after due date</span>
+                        </span>
+                    </label>
                 </div>
                 <p className="text-[11px] text-muted-foreground">
-                    Negative values send before due; positives send after. The first three steps are Friendly.
-                    The last step is Firm — you review and send.
-                </p>
-            </div>
-
-            <div className="mt-6 space-y-2 max-w-lg">
-                <Label htmlFor="follow-up-interval">Follow-up interval (after you send)</Label>
-                <div className="flex items-baseline gap-2">
-                    <Input
-                        id="follow-up-interval"
-                        type="number"
-                        min={1}
-                        max={30}
-                        value={followUpDays}
-                        onChange={(e) => setFollowUpDays(parseInt(e.target.value, 10) || 1)}
-                        className="max-w-[90px]"
-                        data-testid="input-follow-up-interval"
-                    />
-                    <span className="text-xs text-muted-foreground">days with no client reply before the next escalation draft</span>
-                </div>
-                <p className="text-[11px] text-muted-foreground">
-                    After you send Firm yourself. Scotive drafts the next step for your review — it does not auto-send.
+                    Uncheck a row to skip that reminder. After the last one still on, you take over from Needs you.
                 </p>
             </div>
 
@@ -345,8 +407,7 @@ function ChasingTimingSection({ settings, saving, onSave }) {
                 dirty={dirty}
                 saving={saving}
                 onSave={() => onSave({
-                    escalation_offsets: offsets,
-                    follow_up_interval_days: followUpDays,
+                    friendly_reminders: draft,
                     friendly_auto_send: autoSend,
                 }, "Cadence saved")}
                 testid="save-chasing-timing"
@@ -476,7 +537,7 @@ function DailyDigestSection({ settings, saving, onSave, timezones }) {
     return (
         <Section
             title="Timezone"
-            subtitle="Friendly cadence runs at 08:00 in this timezone and sends at 10:15. Firm and Final still wait for your click.">
+            subtitle="Friendly cadence runs at 08:00 in this timezone and sends at 10:15. After that, you send from Needs you.">
             <div className="space-y-2 max-w-lg">
                 <Label htmlFor="digest-tz">Workspace timezone</Label>
                 <Select value={tz} onValueChange={setTz}>

@@ -68,7 +68,7 @@ RSpec.describe Ledger::Build do
     travel_to Time.utc(2026, 9, 19, 12) do
       result = described_class.execute(organization: organization)
       row = result.data[:invoices].first
-      expect(row[:status]).to eq("watching")
+      expect(row[:status]).to eq("needs_you")
       expect(row[:unmatched]).to eq(true)
       expect(row[:has_thread]).to eq(false)
     end

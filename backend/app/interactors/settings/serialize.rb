@@ -12,8 +12,8 @@ module Settings::Serialize
       daily_digest_hour: organization.daily_digest_hour,
       last_digest_sent_at: organization.last_digest_sent_at&.iso8601,
       friendly_auto_send: organization.friendly_auto_send,
-      escalation_offsets: Array(organization.escalation_offsets),
-      follow_up_interval_days: organization.follow_up_interval_days
+      friendly_reminders: organization.friendly_reminders,
+      escalation_offsets: organization.ladder_offsets
     }
   end
 end

@@ -1,9 +1,9 @@
 "use client";
 import { useMemo } from "react";
 import Link from "next/link";
-import { ExternalLink, Play, Search } from "lucide-react";
+import { ExternalLink, Play } from "lucide-react";
 import { InvoiceOverflowMenu, resumeInvoiceTracking } from "@/components/InvoiceOverflowMenu";
-import { SnoozeControl } from "@/components/WaitUntilControl";
+import { CheckBackControl } from "@/components/WaitUntilControl";
 import { Button } from "@/components/ui/button";
 import { formatMoney, formatOpenTotals } from "@/components/LedgerCard";
 import { historyLedgerInvoices, historyLedgerSummary, outstandingBalance } from "@/lib/ledgerInvoices";
@@ -12,14 +12,13 @@ import {
     dueMeta,
     gmailSearchUrl,
     invoiceNumber,
-    isSleepingInvoice,
     latestActivity,
     needsYouInvoices,
     remainingLabel,
-    shortWaitDate,
     stoppedInvoices,
     stoppedOnLabel,
     watchingInvoices,
+    autoReminderInvoices,
 } from "@/lib/chase";
 import { gmailThreadUrl } from "@/lib/invoiceTimeline";
 
@@ -85,7 +84,6 @@ function NeedsYouActions({ inv, onReview }) {
     return (
         <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
             <Button size="sm" onClick={() => onReview(inv)} data-testid="ledger-follow-up">
-                <Search className="w-3.5 h-3.5 mr-1" />
                 Review
             </Button>
         </div>
@@ -96,11 +94,10 @@ function StoppedActions({ inv, onChanged }) {
     const url = gmailThreadUrl(inv.source_thread_id);
     return (
         <div className="flex flex-nowrap items-center justify-end gap-1.5 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-            <SnoozeControl
+            <CheckBackControl
                 invoice={inv}
-                label="Restart chasing"
+                label="Check back"
                 testId="restart-chasing"
-                successMessage={(date) => `Chasing restarts ${shortWaitDate(date)}`}
                 onChanged={onChanged}
             />
             {url ? (
@@ -115,44 +112,35 @@ function StoppedActions({ inv, onChanged }) {
 }
 
 function WatchingActions({ inv, onChanged }) {
-    const overflow = <InvoiceOverflowMenu invoice={inv} onChanged={onChanged} />;
-
-    if (inv.unmatched) {
-        const search = gmailSearchUrl(inv.invoice_ref);
-        return (
-            <div className="flex flex-nowrap items-center justify-end gap-1.5 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                {search ? (
-                    <Button size="sm" variant="outline" asChild data-testid="match-thread">
-                        <a href={search} target="_blank" rel="noopener noreferrer">
-                            Match thread <ExternalLink className="w-3 h-3 ml-1" />
-                        </a>
-                    </Button>
-                ) : null}
-                {overflow}
-            </div>
-        );
-    }
-    if (isSleepingInvoice(inv)) {
-        return (
-            <div className="flex flex-nowrap items-center justify-end gap-1.5 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                <SnoozeControl invoice={inv} label="Edit date" defaultDate={inv.expected_pay_date} onChanged={onChanged} />
-                <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => resumeInvoiceTracking(inv._id, { onChanged })}
-                    data-testid="ledger-resume-tracking"
-                >
-                    <Play className="w-3.5 h-3.5 mr-1" />
-                    Resume
-                </Button>
-                {overflow}
-            </div>
-        );
-    }
     return (
         <div className="flex flex-nowrap items-center justify-end gap-1.5 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-            <SnoozeControl invoice={inv} label="Snooze" onChanged={onChanged} />
-            {overflow}
+            <CheckBackControl invoice={inv} label="Edit date" defaultDate={inv.expected_pay_date} onChanged={onChanged} />
+            <Button
+                size="sm"
+                variant="outline"
+                onClick={() => resumeInvoiceTracking(inv._id, { onChanged })}
+                data-testid="ledger-resume-tracking"
+            >
+                <Play className="w-3.5 h-3.5 mr-1" />
+                Resume
+            </Button>
+            <InvoiceOverflowMenu invoice={inv} onChanged={onChanged} />
+        </div>
+    );
+}
+
+function AutoReminderActions({ inv, onChanged }) {
+    const search = inv.unmatched ? gmailSearchUrl(inv.invoice_ref) : null;
+    return (
+        <div className="flex flex-nowrap items-center justify-end gap-1.5 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+            {search ? (
+                <Button size="sm" variant="outline" asChild data-testid="match-thread">
+                    <a href={search} target="_blank" rel="noopener noreferrer">
+                        Match thread <ExternalLink className="w-3 h-3 ml-1" />
+                    </a>
+                </Button>
+            ) : null}
+            <InvoiceOverflowMenu invoice={inv} onChanged={onChanged} />
         </div>
     );
 }
@@ -188,13 +176,14 @@ function PaidActions({ inv }) {
 }
 
 function ChaseRow({ inv, variant, onChanged, onReview }) {
-    const line = variant === "watching" ? cadenceLine(inv) : null;
+    const onClock = variant === "watching" || variant === "auto_reminders";
+    const line = onClock ? cadenceLine(inv) : null;
     const rowTone =
         variant === "needs_you"
             ? "border-l-[3px] border-l-rose-500"
             : variant === "stopped"
               ? "border-l-[3px] border-l-stone-400"
-              : line?.state === "sleeping"
+              : variant === "watching"
                 ? "border-l-[3px] border-l-sky-400"
                 : line?.state === "unmatched"
                   ? "border-l-[3px] border-l-amber-400"
@@ -249,11 +238,13 @@ function ChaseRow({ inv, variant, onChanged, onReview }) {
                         <AmountCell inv={inv} />
                     </td>
                     <td className="px-4 py-3.5 align-middle">
-                        <StoryCell inv={inv} watching={variant === "watching"} />
+                        <StoryCell inv={inv} watching={onClock} />
                     </td>
                     <td className="px-3 py-3.5 align-middle whitespace-nowrap">
                         {variant === "watching" ? (
                             <WatchingActions inv={inv} onChanged={onChanged} />
+                        ) : variant === "auto_reminders" ? (
+                            <AutoReminderActions inv={inv} onChanged={onChanged} />
                         ) : (
                             <NeedsYouActions inv={inv} onReview={onReview} />
                         )}
@@ -267,17 +258,22 @@ function ChaseRow({ inv, variant, onChanged, onReview }) {
 const COPY = {
     needs_you: {
         emptyTitle: "Nothing needs you",
-        emptyBody: "A client reply, a follow-up date, or a Firm email to approve lands here.",
+        emptyBody: "A client reply, a check-back date that came due, or a Firm email to approve lands here.",
         columns: ["Client", "Invoice", "Due", "Amount", "Latest activity", ""],
     },
     watching: {
-        emptyTitle: "Nothing on the radar",
-        emptyBody: "Silent invoices run the ladder. Snoozed invoices sleep until the date you picked.",
+        emptyTitle: "Nothing you're watching",
+        emptyBody: "When you pick a check-back date, the invoice waits here until that day — or until they reply.",
+        columns: ["Client", "Invoice", "Due", "Amount", "Status", ""],
+    },
+    auto_reminders: {
+        emptyTitle: "No automatic reminders running",
+        emptyBody: "Silent invoices sit here while Friendly reminders send from your inbox. You don't need to touch them.",
         columns: ["Client", "Invoice", "Due", "Amount", "Status", ""],
     },
     stopped: {
         emptyTitle: "Nothing stopped",
-        emptyBody: "Stop chasing when a thread is going to court or was handled offline. Restart when you want Scotive to check back.",
+        emptyBody: "Stop chasing when a thread is going to court or was handled offline. Pick a date when you want Scotive to check back.",
         columns: ["Client", "Invoice", "Amount", "Stopped", ""],
     },
     paid: {
@@ -292,6 +288,7 @@ export function ChaseBoard({ ledger, variant, onChanged, onReview }) {
     const invoices = useMemo(() => {
         if (variant === "paid") return historyLedgerInvoices(all);
         if (variant === "watching") return watchingInvoices(all);
+        if (variant === "auto_reminders") return autoReminderInvoices(all);
         if (variant === "stopped") return stoppedInvoices(all);
         return needsYouInvoices(all);
     }, [all, variant]);

@@ -37,10 +37,9 @@ class Settings::Update
     out = {}
     out[:time_zone] = resolved_time_zone if time_zone_value.present?
     out[:friendly_auto_send] = cast_bool(attrs[:friendly_auto_send]) unless attrs[:friendly_auto_send].nil?
-    out[:follow_up_interval_days] = attrs[:follow_up_interval_days] if attrs[:follow_up_interval_days].present?
     out[:daily_digest_enabled] = cast_bool(attrs[:daily_digest_enabled]) unless attrs[:daily_digest_enabled].nil?
     out[:daily_digest_hour] = attrs[:daily_digest_hour] unless attrs[:daily_digest_hour].nil?
-    out[:escalation_offsets] = normalized_offsets if attrs.key?(:escalation_offsets)
+    out[:escalation_offsets] = normalized_reminders if reminder_attrs?
     out
   end
 
@@ -55,13 +54,15 @@ class Settings::Update
     zone
   end
 
-  def normalized_offsets
-    values = Array(attrs[:escalation_offsets]).map { |value| Integer(value) }
-    raise_string_error("Escalation offsets must be four numbers") unless values.size == 4
+  def reminder_attrs?
+    attrs.key?(:friendly_reminders) || attrs.key?(:escalation_offsets)
+  end
 
-    values
+  def normalized_reminders
+    raw = attrs[:friendly_reminders].presence || attrs[:escalation_offsets]
+    Organization.normalize_friendly_reminders(raw)
   rescue ArgumentError, TypeError
-    raise_string_error("Escalation offsets must be numbers")
+    raise_string_error("Friendly reminders are invalid")
   end
 
   def cast_bool(value)

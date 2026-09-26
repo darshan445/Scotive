@@ -105,12 +105,9 @@ RSpec.describe Cadence::Dispatch do
           to: "ap@acme.com",
           cc: [ "cfo@acme.com" ],
           reply_to: "msg-anchor",
-          custom_headers: array_including(
-            { name: "In-Reply-To", value: "<msg-anchor>" },
-            { name: "References", value: "<msg-anchor>" },
-            { name: "Auto-Submitted", value: "auto-generated" },
+          custom_headers: [
             { name: "X-Auto-Response-Suppress", value: "All" }
-          )
+          ]
         )
       )
     end

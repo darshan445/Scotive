@@ -105,11 +105,25 @@ class Email::EmailClient
   end
 
   def unwrap!(response, context)
-    unless response.success?
-      raise Faraday::Error, "#{context} failed (#{response.status}): #{response.body}"
-    end
+    return response.body if response.success?
 
-    response.body
+    raise Faraday::Error, format_error(context, response)
+  end
+
+  def format_error(context, response)
+    parsed = response.body
+    parsed = JSON.parse(parsed.to_s) if parsed.is_a?(String)
+    parts = []
+    if parsed.is_a?(Hash)
+      parts << parsed["type"].presence
+      parts << parsed["title"].presence
+      parts << parsed["detail"].presence
+      parts << parsed["message"].presence
+    end
+    detail = parts.compact.uniq.join(" — ").presence || parsed.inspect
+    "#{context} failed (#{response.status}): #{detail}"
+  rescue JSON::ParserError
+    "#{context} failed (#{response.status}): #{response.body}"
   end
 
   def attendees(emails)

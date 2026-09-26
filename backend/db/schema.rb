@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_09_23_154500) do
+ActiveRecord::Schema[8.1].define(version: 2026_09_25_125500) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -156,8 +156,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_23_154500) do
     t.datetime "created_at", null: false
     t.boolean "daily_digest_enabled", default: false, null: false
     t.integer "daily_digest_hour", default: 9, null: false
-    t.jsonb "escalation_offsets", default: [-3, 0, 7, 9], null: false
-    t.integer "follow_up_interval_days", default: 3, null: false
+    t.jsonb "escalation_offsets", default: {"on_due"=>{"enabled"=>true}, "overdue"=>{"days"=>7, "enabled"=>true}, "before_due"=>{"days"=>3, "enabled"=>true}}, null: false
     t.boolean "friendly_auto_send", default: true, null: false
     t.datetime "last_digest_sent_at"
     t.string "name", null: false
@@ -184,7 +183,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_23_154500) do
     t.string "to_address", null: false
     t.datetime "updated_at", null: false
     t.index ["conversation_id"], name: "index_outbox_messages_on_conversation_id"
-    t.index ["invoice_id", "cadence_step"], name: "uq_outbox_pending_step", unique: true, where: "(((status)::text = ANY ((ARRAY['scheduled'::character varying, 'draft'::character varying])::text[])) AND (cadence_step IS NOT NULL))"
+    t.index ["invoice_id", "cadence_step"], name: "uq_outbox_pending_step", unique: true, where: "(((status)::text = ANY (ARRAY[('scheduled'::character varying)::text, ('draft'::character varying)::text])) AND (cadence_step IS NOT NULL))"
     t.index ["invoice_id"], name: "index_outbox_messages_on_invoice_id"
     t.index ["organization_id"], name: "index_outbox_messages_on_organization_id"
     t.index ["status", "scheduled_send_at"], name: "idx_outbox_queue", where: "((status)::text = 'scheduled'::text)"

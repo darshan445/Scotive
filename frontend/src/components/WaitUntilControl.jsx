@@ -37,7 +37,7 @@ function todayDate() {
 
 export async function waitUntilInvoice(invoiceId, date, { onChanged, successMessage } = {}) {
     await api.post(`/v1/invoices/${invoiceId}/action`, { action: "wait_until", wait_until: date });
-    toast.success(successMessage || `Sleeping until ${shortWaitDate(date)}`);
+    toast.success(successMessage || `We'll check back ${shortWaitDate(date)}`);
     await onChanged?.();
 }
 
@@ -122,16 +122,56 @@ function DayCalendar({ selected, minDate, onPick }) {
     );
 }
 
-export function SnoozeControl({
+export const CHECK_BACK_HELP =
+    "If they reply, this comes back to Needs you. If they don't, we'll bring it back on this date.";
+
+export function CheckBackStep({
+    date,
+    onChange,
+    primaryLabel,
+    onPrimary,
+    onBack,
+    busy = false,
+    backLabel = "Back",
+    testId = "check-back-step",
+}) {
+    return (
+        <div className="rounded-lg border border-border bg-muted/30 px-4 py-3 space-y-3" data-testid={testId}>
+            <div>
+                <div className="text-sm font-medium">When should we check back?</div>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{CHECK_BACK_HELP}</p>
+            </div>
+            <CheckBackSelect value={date} onChange={onChange} />
+            <div className="flex flex-col gap-2">
+                <Button
+                    type="button"
+                    disabled={!date || busy}
+                    onClick={onPrimary}
+                    className="w-full bg-foreground text-background"
+                    data-testid={`${testId}-confirm`}
+                >
+                    {primaryLabel}
+                </Button>
+                {onBack ? (
+                    <Button type="button" variant="ghost" disabled={busy} onClick={onBack} data-testid={`${testId}-back`}>
+                        {backLabel}
+                    </Button>
+                ) : null}
+            </div>
+        </div>
+    );
+}
+
+export function CheckBackControl({
     invoice,
-    label = "Snooze",
+    label = "Check back",
     presetDate = null,
     defaultDate = null,
     onChanged,
     size = "sm",
     className = "",
     successMessage = null,
-    testId = "snooze-open",
+    testId = "check-back-open",
 }) {
     const saved = toIsoDate(defaultDate || invoice?.expected_pay_date) || "";
     const [open, setOpen] = useState(false);
@@ -202,7 +242,7 @@ export function CheckBackSelect({ value, onChange }) {
 
     return (
         <div className="flex flex-wrap items-center gap-2" data-testid="check-back-select">
-            <span className="text-sm text-muted-foreground">If still unpaid, check back in:</span>
+            <span className="text-sm text-muted-foreground">Check back on</span>
             <Popover open={open} onOpenChange={setOpen}>
                 <PopoverTrigger asChild>
                     <Button type="button" variant="outline" size="sm" className="h-8 font-normal">
@@ -269,9 +309,9 @@ export function FollowUpDateField({ value, onChange, id = "follow-up-date", comp
 
 export function WaitUntilControl({ invoice, onChanged, compact = false, className = "" }) {
     return (
-        <SnoozeControl
+        <CheckBackControl
             invoice={invoice}
-            label={compact ? "Snooze" : "Snooze until date"}
+            label={compact ? "Check back" : "Check back on a date"}
             defaultDate={invoice?.suggested_wait_date || invoice?.expected_pay_date}
             onChanged={onChanged}
             size={compact ? "sm" : "default"}
@@ -279,3 +319,5 @@ export function WaitUntilControl({ invoice, onChanged, compact = false, classNam
         />
     );
 }
+
+export const SnoozeControl = CheckBackControl;

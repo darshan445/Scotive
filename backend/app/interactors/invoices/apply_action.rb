@@ -41,7 +41,7 @@ class Invoices::ApplyAction
         raise_string_error("Invoice not found") if invoice.blank?
 
         case action
-        when "resume" then apply_resume_to_ladder!(invoice)
+        when "resume" then apply_resume!(invoice)
         when "wait_until" then wait_until!(invoice)
         when "stop_chasing" then apply_stop!(invoice)
         when "mark_paid" then mark_paid!(invoice)
@@ -66,7 +66,8 @@ class Invoices::ApplyAction
 
   def wait_until!(invoice)
     parsed = parse_date(wait_until.presence || due_date)
-    raise_string_error("Wait-until date is required") if parsed.blank?
+    raise_string_error("Check-back date is required") if parsed.blank?
+    raise_string_error("Check-back date must be today or later") if parsed < organization.today
 
     quote = invoice.outbox_messages.pending.order(created_at: :desc).first&.suggested_wait_quote
     apply_wait_until!(invoice, parsed, quote: quote)

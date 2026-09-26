@@ -3,8 +3,10 @@ import {
     isPaidInvoice,
     isStoppedInvoice,
     isWatchingInvoice,
+    isAutoReminderInvoice,
     needsYouInvoices,
     watchingInvoices,
+    autoReminderInvoices,
     stoppedInvoices,
 } from "@/lib/chase";
 
@@ -15,6 +17,7 @@ export const STATUS_FILTER_CHIPS = [
     { key: "all", label: "All" },
     { key: "needs_you", label: "Needs you" },
     { key: "watching", label: "Watching" },
+    { key: "auto_reminders", label: "Auto reminders" },
     { key: "stopped", label: "Stopped" },
 ];
 
@@ -66,6 +69,7 @@ function matchesStatusFilter(inv, filter) {
     if (!filter || filter === "all") return true;
     if (filter === "needs_you") return isNeedsYouInvoice(inv);
     if (filter === "watching") return isWatchingInvoice(inv);
+    if (filter === "auto_reminders") return isAutoReminderInvoice(inv);
     if (filter === "stopped") return isStoppedInvoice(inv);
     return inv.status === filter;
 }
@@ -177,4 +181,4 @@ export function historyLedgerSummary(invoices = []) {
     };
 }
 
-export { needsYouInvoices, watchingInvoices, stoppedInvoices };
+export { needsYouInvoices, watchingInvoices, autoReminderInvoices, stoppedInvoices };

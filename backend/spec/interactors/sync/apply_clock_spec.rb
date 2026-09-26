@@ -98,6 +98,20 @@ RSpec.describe Sync::ApplyClock do
     end
   end
 
+  it "moves a silent invoice off Watching when Friendly is over" do
+    travel_to Time.utc(2026, 9, 18, 12) do
+      late = create_invoice!(chase: "watching", due_date: Date.new(2026, 9, 10))
+      still_window = create_invoice!(chase: "watching", due_date: Date.new(2026, 9, 11))
+
+      result = described_class.execute(organization: organization, client: qbo_client)
+      expect(result.success?).to eq(true)
+      expect(result.data[:friendly_ended]).to eq(1)
+      expect(late.reload.chase_status).to eq("needs_you")
+      expect(late.invoice_chase_events.last.event_type).to eq("friendly_window_ended")
+      expect(still_window.reload.chase_status).to eq("watching")
+    end
+  end
+
   it "does not flip when QuickBooks cannot be reached" do
     qbo.update!(access_token: "at", refresh_token: "rt", token_expires_at: 1.hour.from_now)
     travel_to Time.utc(2026, 9, 18, 12) do

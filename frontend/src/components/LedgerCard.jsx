@@ -112,7 +112,8 @@ export function LedgerCard({ ledger, onChanged, variant = "needs_you", onFollowU
 
     const emptyCopy = {
         needs_you: ["Nothing needs you.", "When a client replies, the invoice lands here. Cadence stays off until you follow up, wait, resume, or stop."],
-        watching: ["Nothing on the clock.", "Open invoices sit here while Friendly reminders can send — or while they sleep until a date you set."],
+        watching: ["Nothing you're watching.", "When you pick a check-back date, the invoice waits here until that day — or until they reply."],
+        auto_reminders: ["No automatic reminders running.", "Silent invoices sit here while Friendly reminders send from your inbox."],
         paid: ["No paid invoices yet.", "When QuickBooks marks one paid, chase dies and the row moves here."],
         stopped: ["Nothing stopped.", "Stop chasing when a thread is sensitive. You can still send a draft by hand."],
     }[variant] || ["Nothing here.", ""];
