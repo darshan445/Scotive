@@ -37,6 +37,8 @@ class Webhooks::ProcessEvent
     case event.provider
     when "qbo"
       validate_result(Quickbooks::ApplyWebhook.execute(webhook_event: event)).data
+    when "xero"
+      validate_result(Xero::ApplyWebhook.execute(webhook_event: event)).data
     when "gmail", "outlook"
       validate_result(Email::ProcessMailboxWebhook.execute(webhook_event: event)).data
     else

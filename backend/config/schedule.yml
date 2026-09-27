@@ -18,6 +18,10 @@ qbo_token_refresh:
   cron: "0 */6 * * *"
   class: Quickbooks::RefreshTokensJob
 
+xero_token_refresh:
+  cron: "0 */6 * * *"
+  class: Xero::RefreshTokensJob
+
 mailbox_watch_renewal:
   cron: "0 7 * * *"
   class: Email::RenewMailboxWebhooksJob

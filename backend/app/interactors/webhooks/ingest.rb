@@ -47,15 +47,26 @@ class Webhooks::Ingest
   attr_reader :provider, :raw_body, :signature
 
   def verify_signature!
-    case provider
-    when "qbo" then verify_qbo!
-    when "gmail" then verify_unipile!
-    else
-      raise_string_error("Unsupported webhook provider")
+      case provider
+      when "qbo" then verify_qbo!
+      when "xero" then verify_xero!
+      when "gmail" then verify_unipile!
+      else
+        raise_string_error("Unsupported webhook provider")
+      end
     end
-  end
 
-  def verify_qbo!
+    def verify_xero!
+      key = ENV["XERO_WEBHOOK_KEY"].to_s
+      raise_string_error("Xero webhook key is not configured") if key.blank?
+      raise_string_error("Invalid Xero webhook signature") if signature.blank?
+
+      digest = OpenSSL::HMAC.digest("SHA256", key, raw_body)
+      expected = Base64.strict_encode64(digest)
+      raise_string_error("Invalid Xero webhook signature") unless secure_match?(expected, signature)
+    end
+
+    def verify_qbo!
     token = ENV["QBO_WEBHOOK_VERIFIER_TOKEN"].to_s
     raise_string_error("QuickBooks webhook verifier token is not configured") if token.blank?
     raise_string_error("Invalid QuickBooks webhook signature") if signature.blank?
@@ -92,7 +103,32 @@ class Webhooks::Ingest
   def expanded_rows(payload)
     case provider
     when "qbo" then qbo_rows(payload)
+    when "xero" then xero_rows(payload)
     else [ unipile_row(payload) ]
+    end
+  end
+
+  def xero_rows(payload)
+    events = Array(payload["events"])
+    events.filter_map do |event|
+      next unless event["eventCategory"].to_s.upcase == "INVOICE"
+
+      tenant_id = event["tenantId"].to_s
+      {
+        provider: "xero",
+        external_event_id: [
+          "xero", tenant_id, event["resourceId"], event["eventType"], event["eventDateUtc"]
+        ].join(":"),
+        organization: organization_for_xero(tenant_id),
+        integration: integration_for_xero(tenant_id),
+        payload: {
+          "tenantId" => tenant_id,
+          "resourceId" => event["resourceId"],
+          "eventCategory" => event["eventCategory"],
+          "eventType" => event["eventType"],
+          "eventDateUtc" => event["eventDateUtc"]
+        }
+      }
     end
   end
 
@@ -170,5 +206,16 @@ class Webhooks::Ingest
 
     @qbo_integrations ||= {}
     @qbo_integrations[realm_id] ||= Integration.accounting.connected.find_by(provider: "qbo", external_account_id: realm_id)
+  end
+
+  def organization_for_xero(tenant_id)
+    integration_for_xero(tenant_id)&.organization
+  end
+
+  def integration_for_xero(tenant_id)
+    return if tenant_id.blank?
+
+    @xero_integrations ||= {}
+    @xero_integrations[tenant_id] ||= Integration.accounting.connected.find_by(provider: "xero", external_account_id: tenant_id)
   end
 end

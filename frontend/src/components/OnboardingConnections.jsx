@@ -7,7 +7,10 @@ import { SiQuickbooks } from "react-icons/si";
 import { toast } from "sonner";
 import { ConnectMailboxButton } from "@/components/ConnectGmailButton";
 import { ConnectQboButton } from "@/components/ConnectQboButton";
+import { ConnectXeroButton } from "@/components/ConnectXeroButton";
 import { toastQboImportComplete } from "@/components/QboOnboardingStep";
+import { toastXeroImportComplete } from "@/components/XeroOnboardingStep";
+import { XeroMark } from "@/components/XeroMark";
 import { Button } from "@/components/ui/button";
 import { api, extractError, unwrapData, LONG_JOB_TIMEOUT_MS } from "@/lib/api";
 
@@ -19,13 +22,13 @@ function pipelineBusy(pipe) {
     return pipe?.status === "queued" || pipe?.status === "running";
 }
 
-function importFields(qboStatus, onboarding) {
-    const progress = qboStatus?.import_progress || onboarding?.qbo_import_progress || null;
-    const lastAt = qboStatus?.last_invoice_import_at || onboarding?.last_invoice_import_at || null;
-    const status = progress?.status || null;
+function importFields(status, fallbackProgress = null) {
+    const progress = status?.import_progress || fallbackProgress || null;
+    const lastAt = status?.last_invoice_import_at || null;
+    const importStatus = progress?.status || null;
     const imported = Number(progress?.imported || 0);
     const total = Number(progress?.total || 0);
-    return { progress, lastAt, status, imported, total };
+    return { progress, lastAt, status: importStatus, imported, total };
 }
 
 function BrandMark({ children }) {
@@ -33,17 +36,6 @@ function BrandMark({ children }) {
         <span className="inline-flex items-center justify-center w-10 h-10 rounded-xl bg-background border border-border flex-shrink-0">
             {children}
         </span>
-    );
-}
-
-function XeroMark() {
-    return (
-        <svg viewBox="10 16 28.1 27.9" className="w-5 h-5" aria-hidden="true">
-            <path
-                fill="#13B5EA"
-                d="M27.15 29.944L38.062 19.03c.334-.334.557-.9.557-1.336a2 2 0 0 0-2.004-2.004c-.557 0-1.002.223-1.448.557L24.254 27.16 13.34 16.247c-.334-.334-.9-.557-1.336-.557A2 2 0 0 0 10 17.694c0 .557.223 1.002.557 1.448L21.47 30.056 10.557 40.97c-.445.334-.557.9-.557 1.448a2 2 0 0 0 2.004 2.004c.557 0 1.002-.223 1.336-.557L24.254 32.95l10.913 10.913c.445.445.9.557 1.448.557a2 2 0 0 0 2.004-2.004c0-.557-.223-1.002-.557-1.336z"
-            />
-        </svg>
     );
 }
 
@@ -135,14 +127,16 @@ function ToolProgressBar({ label, current, total, fetchingLabel, testId }) {
 
 /**
  * Onboarding: invoicing first (one or more), then mailbox (Gmail and/or Outlook).
- * Email stays locked until QuickBooks invoices are imported.
+ * Email stays locked until invoices are imported from QuickBooks or Xero.
  */
 export function OnboardingConnections({
     gmailConnected = false,
     qboConnected = false,
+    xeroConnected = false,
     mailProvider = null,
     connections = [],
     qboStatus = null,
+    xeroStatus = null,
     onboarding = null,
     onContinue,
     onQboImported,
@@ -152,25 +146,44 @@ export function OnboardingConnections({
     const [retrying, setRetrying] = useState(false);
     const [disconnecting, setDisconnecting] = useState(null);
     const [liveQbo, setLiveQbo] = useState(qboStatus);
+    const [liveXero, setLiveXero] = useState(xeroStatus);
     const [livePipe, setLivePipe] = useState(onboarding?.qbo_pipeline || null);
     const [kickoffImporting, setKickoffImporting] = useState(false);
+    const [kickoffXeroImporting, setKickoffXeroImporting] = useState(false);
     const [kickoffError, setKickoffError] = useState(false);
+    const [kickoffXeroError, setKickoffXeroError] = useState(false);
     const [kickoffMatching, setKickoffMatching] = useState(false);
     const importKickoffRef = useRef(false);
+    const xeroImportKickoffRef = useRef(false);
     const matchKickoffRef = useRef(false);
 
     useEffect(() => {
         setLiveQbo(qboStatus);
     }, [qboStatus]);
 
-    const merged = liveQbo || qboStatus;
-    const { lastAt, status: importStatus, imported, total } = importFields(merged, onboarding);
-    const importError = importStatus === "error" || kickoffError;
-    const importComplete = Boolean(!importError && (lastAt || importStatus === "complete"));
-    const importing = Boolean(
-        qboConnected && !importComplete && (importStatus === "running" || importStatus === "queued" || kickoffImporting),
+    useEffect(() => {
+        setLiveXero(xeroStatus);
+    }, [xeroStatus]);
+
+    const mergedQbo = liveQbo || qboStatus;
+    const mergedXero = liveXero || xeroStatus;
+    const qboImport = importFields(mergedQbo, onboarding?.qbo_import_progress);
+    const xeroImport = importFields(mergedXero, onboarding?.xero_import_progress);
+    const qboImportError = qboImport.status === "error" || kickoffError;
+    const xeroImportError = xeroImport.status === "error" || kickoffXeroError;
+    const qboImportComplete = Boolean(!qboImportError && (qboImport.lastAt || qboImport.status === "complete"));
+    const xeroImportComplete = Boolean(!xeroImportError && (xeroImport.lastAt || xeroImport.status === "complete"));
+    const booksConnected = qboConnected || xeroConnected;
+    const importComplete = (qboConnected && qboImportComplete) || (xeroConnected && xeroImportComplete);
+    const qboImporting = Boolean(
+        qboConnected && !qboImportComplete && (qboImport.status === "running" || qboImport.status === "queued" || kickoffImporting),
     );
-    const emailUnlocked = qboConnected && importComplete && !importing;
+    const xeroImporting = Boolean(
+        xeroConnected && !xeroImportComplete && (xeroImport.status === "running" || xeroImport.status === "queued" || kickoffXeroImporting),
+    );
+    const importing = qboImporting || xeroImporting;
+    const importError = (qboConnected && qboImportError && !qboImportComplete) || (xeroConnected && xeroImportError && !xeroImportComplete);
+    const emailUnlocked = booksConnected && importComplete && !importing;
     const googleConn = connFor(connections, "google");
     const outlookConn = connFor(connections, "outlook");
     const googleOn = Boolean(googleConn) || (gmailConnected && (mailProvider === "google" || !mailProvider) && !outlookConn);
@@ -197,8 +210,9 @@ export function OnboardingConnections({
     const barLabel = deciding ? "Updating status from conversations" : "Matching conversations";
     const matchBarOnGmail = blocking && googleOn;
     const matchBarOnOutlook = blocking && outlookOn && !googleOn;
-    const canContinue = anyMail && qboConnected && importComplete && matchComplete && !blocking;
-    const companyName = (merged?.company_name || "").trim();
+    const canContinue = anyMail && booksConnected && importComplete && matchComplete && !blocking;
+    const companyName = (mergedQbo?.company_name || "").trim();
+    const xeroCompanyName = (mergedXero?.company_name || "").trim();
 
     const onImportedRef = useRef(onQboImported);
     onImportedRef.current = onQboImported;
@@ -208,7 +222,7 @@ export function OnboardingConnections({
     }, [onboarding?.qbo_pipeline]);
 
     useEffect(() => {
-        if (!qboConnected || importComplete || importError || importKickoffRef.current) return undefined;
+        if (!qboConnected || qboImportComplete || qboImportError || importKickoffRef.current) return undefined;
         importKickoffRef.current = true;
         setKickoffImporting(true);
         setKickoffError(false);
@@ -228,7 +242,30 @@ export function OnboardingConnections({
             }
         })();
         return undefined;
-    }, [qboConnected, importComplete, importError]);
+    }, [qboConnected, qboImportComplete, qboImportError]);
+
+    useEffect(() => {
+        if (!xeroConnected || xeroImportComplete || xeroImportError || xeroImportKickoffRef.current) return undefined;
+        xeroImportKickoffRef.current = true;
+        setKickoffXeroImporting(true);
+        setKickoffXeroError(false);
+        (async () => {
+            try {
+                const { data } = await api.post("/v1/xero/import", null, { timeout: LONG_JOB_TIMEOUT_MS });
+                toastXeroImportComplete(unwrapData(data)?.counts || {});
+                const { data: status } = await api.get("/v1/xero/status");
+                setLiveXero(unwrapData(status));
+                onImportedRef.current?.();
+            } catch (e) {
+                xeroImportKickoffRef.current = false;
+                setKickoffXeroError(true);
+                toast.error(extractError(e));
+            } finally {
+                setKickoffXeroImporting(false);
+            }
+        })();
+        return undefined;
+    }, [xeroConnected, xeroImportComplete, xeroImportError]);
 
     useEffect(() => {
         if (!anyMail || !importComplete || matchComplete || matchFailed || matchKickoffRef.current) return undefined;
@@ -277,6 +314,24 @@ export function OnboardingConnections({
         }
     }
 
+    async function disconnectXero() {
+        if (disconnecting) return;
+        setDisconnecting("xero");
+        try {
+            await api.post("/v1/xero/disconnect");
+            xeroImportKickoffRef.current = false;
+            setKickoffXeroImporting(false);
+            setKickoffXeroError(false);
+            setLiveXero({ connected: false, status: "disconnected" });
+            toast("Xero disconnected");
+            onConnectionsChange?.();
+        } catch (e) {
+            toast.error(extractError(e));
+        } finally {
+            setDisconnecting(null);
+        }
+    }
+
     async function disconnectMail(provider) {
         if (disconnecting) return;
         setDisconnecting(provider);
@@ -311,6 +366,23 @@ export function OnboardingConnections({
         }
     }
 
+    async function retryXeroImport() {
+        if (retrying) return;
+        setRetrying(true);
+        setKickoffXeroError(false);
+        try {
+            const { data } = await api.post("/v1/xero/import", null, { timeout: LONG_JOB_TIMEOUT_MS });
+            toastXeroImportComplete(unwrapData(data)?.counts || {});
+            const { data: status } = await api.get("/v1/xero/status");
+            setLiveXero(unwrapData(status));
+            onQboImported?.();
+        } catch (e) {
+            toast.error(extractError(e));
+        } finally {
+            setRetrying(false);
+        }
+    }
+
     async function handleNext() {
         if (!canContinue || busy) return;
         setBusy(true);
@@ -324,7 +396,7 @@ export function OnboardingConnections({
         }
     }
 
-    const emailLockHint = !qboConnected
+    const emailLockHint = !booksConnected
         ? "Connect invoicing first"
         : !importComplete || importing || importError
             ? "Available after invoices are imported"
@@ -333,8 +405,8 @@ export function OnboardingConnections({
     let nextHint = "Connect invoicing, then Gmail or Outlook";
     if (importing) nextHint = "Importing invoices…";
     else if (importError) nextHint = "Invoice import didn’t finish — try again";
-    else if (qboConnected && !importComplete) nextHint = "Invoice import is next — mailbox stays locked until then";
-    else if (qboConnected && !anyMail) nextHint = "Connect Gmail or Outlook — one or both";
+    else if (booksConnected && !importComplete) nextHint = "Invoice import is next — mailbox stays locked until then";
+    else if (booksConnected && !anyMail) nextHint = "Connect Gmail or Outlook — one or both";
     else if (matchingPhase) nextHint = "Matching conversations…";
     else if (matchFailed) nextHint = "Couldn’t match conversations — reconnect email to try again";
     else if (deciding) nextHint = "Updating status from conversations…";
@@ -372,11 +444,11 @@ export function OnboardingConnections({
                                         <div className="text-xs text-muted-foreground truncate mt-0.5">{companyName}</div>
                                     ) : null}
                                 </div>
-                                {qboConnected && importing ? (
+                                {qboConnected && qboImporting ? (
                                     <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
                                         <Loader2 className="w-4 h-4 animate-spin" /> Importing
                                     </span>
-                                ) : qboConnected && importError ? (
+                                ) : qboConnected && qboImportError ? (
                                     <Button
                                         type="button"
                                         size="sm"
@@ -403,28 +475,74 @@ export function OnboardingConnections({
                                     />
                                 )}
                             </div>
-                            {importing ? (
+                            {qboImporting ? (
                                 <ToolProgressBar
                                     label="Importing invoices"
-                                    current={imported}
-                                    total={total}
+                                    current={qboImport.imported}
+                                    total={qboImport.total}
                                     fetchingLabel="Fetching invoices…"
                                     testId="onboarding-qbo-import-bar"
                                 />
                             ) : null}
-                            {importError ? (
+                            {qboImportError ? (
                                 <p className="text-xs text-red-600 mt-3">Couldn’t import invoices. Try again.</p>
                             ) : null}
                         </div>
 
-                        <div className="p-4 flex items-center gap-3" data-testid="onboarding-xero-row">
-                            <BrandMark>
-                                <XeroMark />
-                            </BrandMark>
-                            <div className="min-w-0 flex-1">
-                                <div className="font-heading font-semibold text-foreground">Xero</div>
+                        <div className="p-4" data-testid="onboarding-xero-row">
+                            <div className="flex items-center gap-3">
+                                <BrandMark>
+                                    <XeroMark />
+                                </BrandMark>
+                                <div className="min-w-0 flex-1">
+                                    <div className="font-heading font-semibold text-foreground">Xero</div>
+                                    {xeroConnected && xeroCompanyName ? (
+                                        <div className="text-xs text-muted-foreground truncate mt-0.5">{xeroCompanyName}</div>
+                                    ) : null}
+                                </div>
+                                {xeroConnected && xeroImporting ? (
+                                    <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
+                                        <Loader2 className="w-4 h-4 animate-spin" /> Importing
+                                    </span>
+                                ) : xeroConnected && xeroImportError ? (
+                                    <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="outline"
+                                        className="rounded-full"
+                                        disabled={retrying}
+                                        onClick={retryXeroImport}
+                                        data-testid="onboarding-xero-retry"
+                                    >
+                                        {retrying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                                        Try again
+                                    </Button>
+                                ) : xeroConnected ? (
+                                    <ConnectedActions
+                                        onDisconnect={disconnectXero}
+                                        busy={disconnecting === "xero"}
+                                        testId="onboarding-xero-connected"
+                                    />
+                                ) : (
+                                    <ConnectXeroButton
+                                        label="Connect"
+                                        testId="onboarding-connect-xero"
+                                        compact
+                                    />
+                                )}
                             </div>
-                            <ComingSoon />
+                            {xeroImporting ? (
+                                <ToolProgressBar
+                                    label="Importing invoices"
+                                    current={xeroImport.imported}
+                                    total={xeroImport.total}
+                                    fetchingLabel="Fetching invoices…"
+                                    testId="onboarding-xero-import-bar"
+                                />
+                            ) : null}
+                            {xeroImportError ? (
+                                <p className="text-xs text-red-600 mt-3">Couldn’t import invoices. Try again.</p>
+                            ) : null}
                         </div>
 
                         <div className="p-4 flex items-center gap-3" data-testid="onboarding-freshbooks-row">
@@ -449,7 +567,7 @@ export function OnboardingConnections({
                         <p className="text-sm text-muted-foreground mt-1">
                             {emailUnlocked
                                 ? "Connect Gmail, Outlook, or both."
-                                : !qboConnected
+                                : !booksConnected
                                     ? "Connect invoicing first."
                                     : "Unlocks after invoices are imported."}
                         </p>

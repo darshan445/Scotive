@@ -11,13 +11,14 @@ class Sync::ApplyClock
   include Quickbooks::BooksPersistence
   include Quickbooks::TokenRefresh
 
-  def self.execute(organization:, client: Quickbooks::QuickbookClient.new)
-    new(organization: organization, client: client).execute
+  def self.execute(organization:, client: Quickbooks::QuickbookClient.new, xero_client: Xero::XeroClient.new)
+    new(organization: organization, client: client, xero_client: xero_client).execute
   end
 
-  def initialize(organization:, client:)
+  def initialize(organization:, client:, xero_client: Xero::XeroClient.new)
     @organization = organization
     @client = client
+    @xero_client = xero_client
   end
 
   def execute
@@ -30,7 +31,7 @@ class Sync::ApplyClock
 
   private
 
-  attr_reader :organization, :client
+  attr_reader :organization, :client, :xero_client
 
   def expire_waits!
     count = 0
@@ -77,8 +78,28 @@ class Sync::ApplyClock
   # :ok — books refreshed (or local-only). :unavailable — do not expire on a stale unpaid.
   def reconcile_from_quickbooks!(invoice)
     integration = invoice.integration
-    return :ok unless live_qbo?(integration, invoice)
+    return :ok unless live_books?(integration, invoice)
 
+    if integration.provider == "xero"
+      reconcile_from_xero!(invoice, integration)
+    else
+      reconcile_from_qbo!(invoice, integration)
+    end
+  rescue Faraday::Error => e
+    if e.message.to_s.match?(/404/)
+      Invoice.transaction do
+        void_local_invoice!(organization.invoices.lock.find(invoice.id))
+      end
+      return :ok
+    end
+
+    mark_reauth!(integration) if books_grant_error?(integration, e)
+    :unavailable
+  rescue StandardError
+    :unavailable
+  end
+
+  def reconcile_from_qbo!(invoice, integration)
     access_token = ensure_fresh_token!(integration)
     payload = client.get_invoice(
       realm_id: integration.external_account_id,
@@ -89,25 +110,64 @@ class Sync::ApplyClock
       upsert_invoice!(integration, invoice.client, payload, trigger_source: "books_sync")
     end
     :ok
-  rescue Faraday::Error => e
-    if e.message.to_s.match?(/404/)
+  end
+
+  def reconcile_from_xero!(invoice, integration)
+    access_token = xero_fresh_token!(integration)
+    payload = xero_client.get_invoice(
+      tenant_id: integration.external_account_id,
+      access_token: access_token,
+      id: invoice.external_id
+    )
+    if Xero::InvoiceMapper.voided?(payload)
       Invoice.transaction do
         void_local_invoice!(organization.invoices.lock.find(invoice.id))
       end
-      return :ok
+    else
+      mapped = Xero::InvoiceMapper.to_books_invoice(payload)
+      Invoice.transaction do
+        upsert_invoice!(integration, invoice.client, mapped, trigger_source: "books_sync")
+      end
     end
-
-    mark_reauth!(integration) if qbo_grant_error?(e)
-    :unavailable
-  rescue StandardError
-    :unavailable
+    :ok
   end
 
-  def live_qbo?(integration, invoice)
-    integration&.provider == "qbo" &&
+  def xero_fresh_token!(record)
+    token = record.access_token
+    if record.refresh_token.present? && (record.token_expires_at.blank? || record.token_expires_at <= 10.minutes.from_now)
+      tokens = xero_client.refresh_access_token(refresh_token: record.refresh_token)
+      token = tokens["access_token"] || tokens[:access_token]
+      refresh = tokens["refresh_token"] || tokens[:refresh_token]
+      expires_in = (tokens["expires_in"] || tokens[:expires_in]).to_i
+      raise_string_error("Xero did not return an access token") if token.blank?
+
+      record.update!(
+        access_token: token,
+        refresh_token: refresh.presence || record.refresh_token,
+        token_expires_at: expires_in.positive? ? Time.current + expires_in.seconds : record.token_expires_at
+      )
+    end
+    raise_string_error("Xero access token is missing") if token.blank?
+
+    token
+  rescue ActiveRecord::Encryption::Errors::Decryption
+    record.update!(connection_status: "reauth_required")
+    raise_string_error("Xero credentials could not be decrypted — reconnect Xero")
+  end
+
+  def live_books?(integration, invoice)
+    %w[qbo xero].include?(integration&.provider) &&
       integration.connection_status == "connected" &&
       integration.access_token.present? &&
       invoice.external_id.present? &&
       !invoice.external_id.to_s.start_with?("demo-")
+  end
+
+  def books_grant_error?(integration, error)
+    if integration&.provider == "xero"
+      error.message.to_s.match?(/invalid_grant|401|unauthorized/i)
+    else
+      qbo_grant_error?(error)
+    end
   end
 end

@@ -9,21 +9,23 @@ class Auth::DeleteAccount
   include ExecuteMethodHelper
   include LogHelper
 
-  def self.execute(user:, confirm_email:, token: nil, qbo_client: Quickbooks::QuickbookClient.new, email_client: Email::EmailClient.new)
+  def self.execute(user:, confirm_email:, token: nil, qbo_client: Quickbooks::QuickbookClient.new, xero_client: Xero::XeroClient.new, email_client: Email::EmailClient.new)
     new(
       user: user,
       confirm_email: confirm_email,
       token: token,
       qbo_client: qbo_client,
+      xero_client: xero_client,
       email_client: email_client
     ).execute
   end
 
-  def initialize(user:, confirm_email:, token:, qbo_client:, email_client:)
+  def initialize(user:, confirm_email:, token:, qbo_client:, xero_client:, email_client:)
     @user = user
     @confirm_email = confirm_email.to_s.strip.downcase
     @token = token.to_s.delete_prefix("Bearer ").strip
     @qbo_client = qbo_client
+    @xero_client = xero_client
     @email_client = email_client
   end
 
@@ -47,7 +49,7 @@ class Auth::DeleteAccount
 
   private
 
-  attr_reader :user, :confirm_email, :token, :qbo_client, :email_client
+  attr_reader :user, :confirm_email, :token, :qbo_client, :xero_client, :email_client
 
   def revoke_remote_connections(organization)
     organization.integrations.mailbox.each do |integration|
@@ -66,6 +68,12 @@ class Auth::DeleteAccount
     rescue Faraday::Error => e
       Rails.logger.warn("QBO revoke during account removal failed: #{e.message}")
     end
+
+    if organization.integrations.accounting.exists?(provider: "xero")
+      Xero::Disconnect.execute(organization: organization, client: xero_client)
+    end
+  rescue Faraday::Error => e
+    Rails.logger.warn("Xero revoke during account removal failed: #{e.message}")
   end
 
   def denylist_current_token

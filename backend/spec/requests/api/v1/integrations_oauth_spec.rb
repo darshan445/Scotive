@@ -219,6 +219,99 @@ RSpec.describe "API v1 integrations OAuth", type: :request do
     end
   end
 
+  describe "GET /api/v1/xero/oauth/start" do
+    it "returns a Xero authorization URL" do
+      get "/api/v1/xero/oauth/start", headers: auth_headers, as: :json
+
+      expect(response).to have_http_status(:ok)
+      url = json_body.dig("data", "authorization_url")
+      expect(url).to include("https://login.xero.com/identity/connect/authorize")
+      expect(url).to include("client_id=")
+      expect(url).to include("state=")
+      expect(url).to include("offline_access")
+      expect(url).to include("accounting.settings")
+      expect(url).to include("accounting.invoices")
+      expect(url).to include("accounting.contacts")
+      expect(url).not_to include("app.connections")
+      expect(url).not_to include("accounting.transactions")
+    end
+  end
+
+  describe "GET /api/xero/oauth/callback" do
+    let(:xero_client) { instance_double(Xero::XeroClient) }
+
+    before do
+      allow(Xero::XeroClient).to receive(:new).and_return(xero_client)
+      allow(xero_client).to receive(:exchange_code).and_return(
+        "access_token" => "xat-1",
+        "refresh_token" => "xrt-1",
+        "expires_in" => 1800
+      )
+      allow(xero_client).to receive(:list_connections).and_return(
+        [ { "id" => "conn-1", "tenantId" => "tenant-99", "tenantType" => "ORGANISATION", "tenantName" => "Acme Xero" } ]
+      )
+      allow(xero_client).to receive(:get_organisation).and_return("Name" => "Acme Xero")
+    end
+
+    it "persists the Xero integration and redirects to the frontend" do
+      state = Rails.application.message_verifier("oauth").generate(
+        { "organization_id" => organization.id, "provider" => "xero" },
+        expires_in: 15.minutes,
+        purpose: :oauth
+      )
+
+      get "/api/xero/oauth/callback", params: { code: "auth-code", state: state }
+
+      expect(response).to redirect_to(%r{/dashboard\?xero=connected})
+      integration = organization.integrations.accounting.find_by(provider: "xero")
+      expect(integration).to be_connected
+      expect(integration.external_account_id).to eq("tenant-99")
+      expect(integration.account_name).to eq("Acme Xero")
+      expect(integration.access_token).to eq("xat-1")
+    end
+
+    it "maps Xero denial to xero=access_denied" do
+      get "/api/xero/oauth/callback", params: { error: "access_denied", state: "x" }
+
+      expect(response).to redirect_to(%r{xero=access_denied})
+    end
+
+    it "maps a Xero scope rejection to xero=wrong_scopes" do
+      get "/api/xero/oauth/callback", params: {
+        error: "access_denied",
+        error_description: "Requested wrong apps scopes",
+        state: "x"
+      }
+
+      expect(response).to redirect_to(%r{xero=wrong_scopes})
+    end
+  end
+
+  describe "POST /api/v1/xero/import" do
+    it "imports open invoices and sets last_synced_at" do
+      organization.integrations.create!(
+        category: "accounting",
+        provider: "xero",
+        external_account_id: "tenant-1",
+        account_name: "Acme",
+        access_token: "at",
+        refresh_token: "rt",
+        token_expires_at: 1.hour.from_now,
+        connection_status: "connected"
+      )
+      xero_client = instance_double(Xero::XeroClient)
+      allow(Xero::XeroClient).to receive(:new).and_return(xero_client)
+      allow(xero_client).to receive(:query_open_invoices).and_return([])
+      allow(xero_client).to receive(:query_contacts).and_return([])
+
+      post "/api/v1/xero/import", headers: auth_headers, as: :json
+
+      expect(response).to have_http_status(:ok)
+      expect(json_body.dig("data", "counts", "fetched")).to eq(0)
+      expect(organization.integrations.find_by(provider: "xero").reload.last_synced_at).to be_present
+    end
+  end
+
   describe "POST /api/v1/qbo/import" do
     it "imports open invoices and sets last_synced_at" do
       organization.integrations.create!(

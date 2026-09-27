@@ -30,6 +30,7 @@ class Admin::Dashboard
     organization = user.organization
     mailbox = organization.integrations.find { |row| row.mailbox? && row.connected? }
     qbo = organization.integrations.find { |row| row.provider == "qbo" && row.connected? }
+    xero = organization.integrations.find { |row| row.provider == "xero" && row.connected? }
     {
       id: user.id,
       email: user.email,
@@ -40,6 +41,8 @@ class Admin::Dashboard
       gmail_email: mailbox&.account_name.presence || mailbox&.external_account_id,
       qbo_connected: qbo.present?,
       qbo_company: qbo&.account_name,
+      xero_connected: xero.present?,
+      xero_company: xero&.account_name,
       invoice_count: invoice_counts[organization.id] || 0,
       open_invoice_count: open_invoice_counts[organization.id] || 0
     }

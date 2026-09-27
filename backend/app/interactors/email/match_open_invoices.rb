@@ -31,8 +31,8 @@ class Email::MatchOpenInvoices
     execute_log_and_return_open_struct do
       raise_string_error("Organization is required") if organization.blank?
 
-      qbo = organization.integrations.accounting.connected.find_by(provider: "qbo")
-      raise_string_error("Import invoices before matching") if qbo&.last_synced_at.blank?
+      books = organization.integrations.accounting.connected.where(provider: %w[qbo xero])
+      raise_string_error("Import invoices before matching") if books.none? { |row| row.last_synced_at.present? }
 
       mailboxes = organization.integrations.mailbox.connected.to_a
       raise_string_error("Connect Gmail or Outlook first") if mailboxes.empty?

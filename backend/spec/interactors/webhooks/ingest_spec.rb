@@ -128,4 +128,67 @@ RSpec.describe Webhooks::Ingest do
     expect(result.errors).to match(/signature/)
     expect(WebhookEvent.count).to eq(0)
   end
+
+  describe "Xero" do
+    let(:xero_key) { "xero-webhook-key" }
+
+    def xero_sign(body)
+      Base64.strict_encode64(OpenSSL::HMAC.digest("SHA256", xero_key, body))
+    end
+
+    around do |example|
+      prior = ENV["XERO_WEBHOOK_KEY"]
+      ENV["XERO_WEBHOOK_KEY"] = xero_key
+      example.run
+      ENV["XERO_WEBHOOK_KEY"] = prior
+    end
+
+    it "persists an invoice event and enqueues process" do
+      organization.integrations.create!(
+        category: "accounting",
+        provider: "xero",
+        external_account_id: "tenant-1",
+        account_name: "Studio",
+        access_token: "at",
+        connection_status: "connected"
+      )
+      body = {
+        "events" => [
+          {
+            "resourceId" => "inv-95",
+            "eventDateUtc" => "2026-09-18T10:00:00.000Z",
+            "eventType" => "UPDATE",
+            "eventCategory" => "INVOICE",
+            "tenantId" => "tenant-1"
+          }
+        ]
+      }.to_json
+
+      result = nil
+      expect {
+        result = described_class.execute(provider: "xero", raw_body: body, signature: xero_sign(body))
+      }.to have_enqueued_job(Webhooks::ProcessEventJob)
+
+      expect(result.success?).to eq(true)
+      event = WebhookEvent.last
+      expect(event.provider).to eq("xero")
+      expect(event.payload["resourceId"]).to eq("inv-95")
+    end
+
+    it "accepts intent-to-receive with no events" do
+      body = { "events" => [], "firstEventSequence" => 0, "lastEventSequence" => 0 }.to_json
+      result = described_class.execute(provider: "xero", raw_body: body, signature: xero_sign(body))
+
+      expect(result.success?).to eq(true)
+      expect(result.data[:count]).to eq(0)
+      expect(WebhookEvent.count).to eq(0)
+    end
+
+    it "rejects a bad Xero HMAC" do
+      body = { "events" => [] }.to_json
+      result = described_class.execute(provider: "xero", raw_body: body, signature: "nope")
+      expect(result.success?).to eq(false)
+      expect(result.errors).to match(/signature/)
+    end
+  end
 end

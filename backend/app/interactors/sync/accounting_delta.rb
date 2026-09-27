@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Sync::AccountingDelta Interactor
-# Purpose: QBO invoices updated after last_synced_at. Same books upsert as import/webhooks.
+# Purpose: QBO/Xero invoices updated after last_synced_at. Same books upsert as import/webhooks.
 # Methods:
 # - execute
 
@@ -14,33 +14,65 @@ class Sync::AccountingDelta
 
   LOOKBACK = 2.hours
 
-  def self.execute(organization:, client: Quickbooks::QuickbookClient.new)
-    new(organization: organization, client: client).execute
+  def self.execute(organization:, client: Quickbooks::QuickbookClient.new, xero_client: Xero::XeroClient.new)
+    new(organization: organization, client: client, xero_client: xero_client).execute
   end
 
-  def initialize(organization:, client:)
+  def initialize(organization:, client:, xero_client: Xero::XeroClient.new)
     @organization = organization
     @client = client
+    @xero_client = xero_client
   end
 
   def execute
     execute_log_and_return_open_struct do
       raise_string_error("Organization is required") if organization.blank?
 
-      if integration.blank?
+      if integration.blank? && xero_integration.blank?
         { skipped: "not_connected", created: 0, updated: 0, paid: 0 }
       else
-        sync_updated_invoices!
+        merge_provider_counts(qbo_counts, xero_counts)
       end
     end
   end
 
   private
 
-  attr_reader :organization, :client
+  attr_reader :organization, :client, :xero_client
 
   def integration
     @integration ||= organization.integrations.accounting.connected.find_by(provider: "qbo")
+  end
+
+  def xero_integration
+    @xero_integration ||= organization.integrations.accounting.connected.find_by(provider: "xero")
+  end
+
+  def qbo_counts
+    integration.present? ? sync_updated_invoices! : empty_counts
+  end
+
+  def xero_counts
+    if xero_integration.blank?
+      empty_counts
+    else
+      validate_result(Xero::SyncDelta.execute(organization: organization, client: xero_client)).data
+    end
+  end
+
+  def empty_counts
+    { created: 0, updated: 0, merged: 0, fetched: 0, paid: 0, skipped: nil }
+  end
+
+  def merge_provider_counts(left, right)
+    {
+      fetched: left[:fetched].to_i + right[:fetched].to_i,
+      created: left[:created].to_i + right[:created].to_i,
+      updated: left[:updated].to_i + right[:updated].to_i,
+      merged: left[:merged].to_i + right[:merged].to_i,
+      paid: left[:paid].to_i + right[:paid].to_i,
+      skipped: nil
+    }
   end
 
   def sync_updated_invoices!

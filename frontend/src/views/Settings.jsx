@@ -33,6 +33,8 @@ import { SettingsSkeleton } from "@/components/PageSkeletons";
 import { useGmailConnection } from "@/hooks/useGmailConnection";
 import { useQboConnection } from "@/hooks/useQboConnection";
 import { QboConnectionPanel } from "@/components/QboConnectionPanel";
+import { useXeroConnection } from "@/hooks/useXeroConnection";
+import { XeroConnectionPanel } from "@/components/XeroConnectionPanel";
 
 const DEFAULT_REMINDERS = {
     before_due: { enabled: true, days: 3 },
@@ -78,6 +80,7 @@ export default function SettingsPage() {
     const { user, logout } = useAuth();
     const { status: gmailStatus } = useGmailConnection();
     const { status: qboStatus } = useQboConnection();
+    const { status: xeroStatus } = useXeroConnection();
     const [settings, setSettings] = useState(null);
     const [settingsReady, setSettingsReady] = useState(false);
     const [saving, setSaving] = useState(false);
@@ -198,13 +201,15 @@ export default function SettingsPage() {
                         Settings
                     </h1>
                     <p className="type-body mt-2 text-sm">
-                        Mailbox, QuickBooks, and when Friendly reminders send.
+                        Mailbox, QuickBooks or Xero, and when Friendly reminders send.
                     </p>
                 </div>
 
                 <GmailAccountSection status={gmailStatus} />
 
                 <QboAccountSection status={qboStatus} />
+
+                <XeroAccountSection status={xeroStatus} />
 
                 <ChasingTimingSection
                     settings={settings}
@@ -258,10 +263,23 @@ function QboAccountSection({ status }) {
         <section data-testid="settings-qbo-account">
             <h2 className="type-title text-xl">QuickBooks Online</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-                Required — invoices are imported from QuickBooks. Status and chasing stay in Scotive; your mailbox matches client replies.
+                Import open invoices from QuickBooks. Status and chasing stay in Scotive; your mailbox matches client replies.
             </p>
             <Separator className="my-4" />
             <QboConnectionPanel status={status} />
+        </section>
+    );
+}
+
+function XeroAccountSection({ status }) {
+    return (
+        <section data-testid="settings-xero-account">
+            <h2 className="type-title text-xl">Xero</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+                Import open invoices from Xero. Same chase layer as QuickBooks — books still win when the balance hits $0.
+            </p>
+            <Separator className="my-4" />
+            <XeroConnectionPanel status={status} />
         </section>
     );
 }

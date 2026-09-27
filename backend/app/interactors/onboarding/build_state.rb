@@ -22,8 +22,9 @@ class Onboarding::BuildState
       raise_string_error("Organization is required") if organization.blank?
 
       qbo = validate_result(Quickbooks::ConnectionStatus.execute(organization: organization)).data
+      xero = validate_result(Xero::ConnectionStatus.execute(organization: organization)).data
       mail = validate_result(Email::ConnectionStatus.execute(organization: organization)).data
-      imported = qbo[:last_invoice_import_at].present?
+      imported = qbo[:last_invoice_import_at].present? || xero[:last_invoice_import_at].present?
       matched = organization.integrations.mailbox.connected.where.not(sync_cursor: [ nil, "" ]).exists?
       phase = imported && mail[:connected] && matched ? "watching" : "connections"
       pipeline = matched ? { status: "complete", phase: "matching" } : nil
@@ -31,10 +32,12 @@ class Onboarding::BuildState
       {
         phase: phase,
         qbo_connected: qbo[:connected],
+        xero_connected: xero[:connected],
         gmail_connected: mail[:connected],
         mail_provider: mail[:provider],
-        last_invoice_import_at: qbo[:last_invoice_import_at],
+        last_invoice_import_at: qbo[:last_invoice_import_at] || xero[:last_invoice_import_at],
         qbo_import_progress: qbo[:import_progress],
+        xero_import_progress: xero[:import_progress],
         qbo_pipeline: pipeline,
         onboarding_modal_dismissed: organization.onboarding_modal_dismissed
       }

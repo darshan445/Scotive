@@ -25,6 +25,8 @@ import { useGmailConnection } from "@/hooks/useGmailConnection";
 import { useGmailCallbackToast } from "@/hooks/useGmailCallbackToast";
 import { useQboConnection } from "@/hooks/useQboConnection";
 import { useQboCallbackToast } from "@/hooks/useQboCallbackToast";
+import { useXeroConnection } from "@/hooks/useXeroConnection";
+import { useXeroCallbackToast } from "@/hooks/useXeroCallbackToast";
 import { useLedger } from "@/hooks/useScan";
 import { useOnboarding } from "@/hooks/useOnboarding";
 import { useLiveDetection } from "@/hooks/useLiveDetection";
@@ -33,6 +35,7 @@ import { historyLedgerInvoices, outstandingBalance } from "@/lib/ledgerInvoices"
 import { autoReminderInvoices, needsYouInvoices, openChaseInvoices, stoppedInvoices, watchingInvoices } from "@/lib/chase";
 import { needsReconnect } from "@/lib/connectionStatus";
 import { ConnectQboButton } from "@/components/ConnectQboButton";
+import { ConnectXeroButton } from "@/components/ConnectXeroButton";
 
 function GmailIssueBanner({ status }) {
     const revoked = needsReconnect(status?.status);
@@ -101,9 +104,32 @@ function QboIssueBanner({ status }) {
     );
 }
 
+function XeroIssueBanner({ status }) {
+    if (!needsReconnect(status?.status)) return null;
+    return (
+        <div
+            className="rounded-xl border border-amber-200 bg-amber-50 p-4 flex flex-col sm:flex-row sm:items-center gap-3"
+            data-testid="xero-dashboard-reauth"
+        >
+            <div className="flex items-start gap-3 flex-1 min-w-0">
+                <AlertTriangle className="w-5 h-5 text-amber-700 mt-0.5 flex-shrink-0" />
+                <div className="min-w-0">
+                    <div className="font-heading font-semibold text-amber-900">Xero needs to be reconnected</div>
+                    <div className="text-sm text-amber-800 mt-1">
+                        Invoice sync is paused until you reconnect
+                        {status.company_name ? <> {status.company_name}</> : null}.
+                    </div>
+                </div>
+            </div>
+            <ConnectXeroButton label="Reconnect Xero" testId="reconnect-xero-dashboard" />
+        </div>
+    );
+}
+
 export default function DashboardPage() {
     const { status, refresh } = useGmailConnection();
     const { status: qboStatus, refresh: refreshQbo } = useQboConnection();
+    const { status: xeroStatus, refresh: refreshXero } = useXeroConnection();
     const gmailConnected = Boolean(status?.connected);
     const {
         state: onboarding,
@@ -199,32 +225,44 @@ export default function DashboardPage() {
         }, [refreshQbo, refreshOnboarding]),
     );
 
+    useXeroCallbackToast(
+        useCallback(async (result) => {
+            await refreshXero();
+            if (result === "connected") {
+                await refreshOnboarding();
+            }
+        }, [refreshXero, refreshOnboarding]),
+    );
+
     useEffect(() => {
         refreshOnboarding();
-    }, [status?.connected, qboStatus?.connected, refreshOnboarding]);
+    }, [status?.connected, qboStatus?.connected, xeroStatus?.connected, refreshOnboarding]);
 
     const handleConnectionsChange = useCallback(() => {
         void refresh();
         void refreshQbo();
+        void refreshXero();
         void refreshOnboarding();
-    }, [refresh, refreshQbo, refreshOnboarding]);
+    }, [refresh, refreshQbo, refreshXero, refreshOnboarding]);
 
     const handleQboImported = useCallback(() => {
         void refreshQbo();
+        void refreshXero();
         void refreshOnboarding();
-    }, [refreshQbo, refreshOnboarding]);
+    }, [refreshQbo, refreshXero, refreshOnboarding]);
 
     async function handleConnectionsContinue(data) {
         await refreshOnboarding();
         if (data?.next === "dashboard") {
             await refreshAll();
             toast.success("You're set", {
-                description: "QuickBooks invoices are on your ledger.",
+                description: "Invoices are on your ledger.",
             });
         }
     }
 
     const qboIsConnected = Boolean(qboStatus?.connected || onboarding?.qbo_connected);
+    const xeroIsConnected = Boolean(xeroStatus?.connected || onboarding?.xero_connected);
     const showCadenceIntro =
         pastOnboarding &&
         onboarding?.onboarding_modal_dismissed === false &&
@@ -261,9 +299,11 @@ export default function DashboardPage() {
                     <OnboardingConnections
                         gmailConnected={gmailConnected || Boolean(onboarding?.gmail_connected)}
                         qboConnected={qboIsConnected}
+                        xeroConnected={xeroIsConnected}
                         mailProvider={status?.provider || null}
                         connections={status?.connections || []}
                         qboStatus={qboStatus}
+                        xeroStatus={xeroStatus}
                         onboarding={onboarding}
                         onContinue={handleConnectionsContinue}
                         onConnectionsChange={handleConnectionsChange}
@@ -276,6 +316,7 @@ export default function DashboardPage() {
                         <GmailIssueBanner status={status} />
                     ) : null}
                     {pastOnboarding ? <QboIssueBanner status={qboStatus} /> : null}
+                    {pastOnboarding ? <XeroIssueBanner status={xeroStatus} /> : null}
 
                     {pastOnboarding ? (
                         ledger == null ? (

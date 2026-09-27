@@ -11,6 +11,9 @@ Rails.application.routes.draw do
   # Intuit app redirect URI is registered at /api/qbo/oauth/callback (see QBO_REDIRECT_URI).
   get "/api/qbo/oauth/callback", to: "api/v1/qbo/oauth#callback"
   post "/api/qbo/webhooks", to: "api/qbo/webhooks#create"
+  # Xero app redirect URI is registered at /api/xero/oauth/callback (see XERO_REDIRECT_URI).
+  get "/api/xero/oauth/callback", to: "api/v1/xero/oauth#callback"
+  post "/api/xero/webhooks", to: "api/xero/webhooks#create"
 
   namespace :api do
     namespace :v1 do
@@ -49,6 +52,14 @@ Rails.application.routes.draw do
         post "import", to: "imports#create"
         get "pipeline-status", to: "pipelines#show"
         post "match-conversations", to: "pipelines#match"
+      end
+
+      namespace :xero do
+        get "oauth/start", to: "oauth#start"
+        get "oauth/callback", to: "oauth#callback"
+        get "status", to: "connections#show"
+        post "disconnect", to: "connections#destroy"
+        post "import", to: "imports#create"
       end
 
       namespace :gmail do
